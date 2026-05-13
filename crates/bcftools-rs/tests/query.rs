@@ -660,3 +660,17 @@ fn query_line_token_matches_upstream_fixture() {
     assert_eq!(code, 0, "query -f %LINE failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_slash_prefix_forces_record_namespace_in_sample_loop() {
+    let path = fixture_path("query.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.3.3.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[ %/CHROM] \\t [ %/POS] \\t [ %/ID] \\t [ %/REF] \\t [ %/ALT] \\t [ %/QUAL] \\t [ %/FILTER]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %/TAG failed: {err}");
+    assert_eq!(out, expected);
+}

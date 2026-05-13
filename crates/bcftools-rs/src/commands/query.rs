@@ -1098,6 +1098,7 @@ fn render_segment(
 }
 
 fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {
+    let force_record_namespace = token.starts_with('/');
     let token = token.strip_prefix('/').unwrap_or(token);
     if token == "SAMPLE" {
         return sample_index
@@ -1120,7 +1121,7 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
             .map(|i| record.format_value(i, key))
             .unwrap_or_else(|| ".".into());
     }
-    if let Some(i) = sample_index {
+    if !force_record_namespace && let Some(i) = sample_index {
         let value = record.format_value(i, token);
         if value != "." {
             return value;
