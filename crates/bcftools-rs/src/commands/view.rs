@@ -27,6 +27,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use htslib_rs::core::Position;
+use htslib_rs::expr::{Filter, Value};
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::variant::{VariantType, classify_variant};
 use htslib_rs::variant_io_compat::RegionOverlap;
@@ -45,6 +46,8 @@ Output options:\n\
     -G, --drop-genotypes              drop individual genotype information\n\
     -f, --apply-filters LIST          require at least one listed FILTER string\n\
     -g, --genotype [^]hom|het|miss    require or exclude genotype class\n\
+    -i, --include EXPR                include only records matching expression\n\
+    -e, --exclude EXPR                exclude records matching expression\n\
     -h, --header-only                 print only the header in VCF output\n\
     -H, --no-header                   suppress the header in VCF output\n\
     -l, --compression-level INT       compression level: 0 uncompressed, 1 best speed, 9 best compression [-1]\n\
@@ -107,6 +110,7 @@ struct RunOptions<'a> {
     targets_exclude: bool,
     targets_overlap: RegionOverlap,
     apply_filters: Option<Vec<String>>,
+    expression_filter: Option<ExpressionFilterSpec>,
     type_filter: Option<TypeFilter>,
     type_filter_exclude: bool,
     min_ac: Option<AlleleCountFilter>,
@@ -134,6 +138,12 @@ struct TypeFilter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GenotypeFilter {
     class: GenotypeClass,
+    exclude: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExpressionFilterSpec {
+    raw: String,
     exclude: bool,
 }
 
@@ -497,6 +507,49 @@ fn parse_apply_filters(raw: &str) -> io::Result<Vec<String>> {
     }
 }
 
+fn normalize_filter_expr(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    let mut in_string = false;
+    let mut prev_non_ws = None;
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            in_string = !in_string;
+            out.push(ch);
+            prev_non_ws = Some(ch);
+            continue;
+        }
+        if in_string {
+            out.push(ch);
+            continue;
+        }
+        let next = chars.peek().copied();
+        match ch {
+            '=' if !matches!(next, Some('=') | Some('~'))
+                && !matches!(prev_non_ws, Some('!' | '<' | '>' | '=')) =>
+            {
+                out.push_str("==")
+            }
+            '&' if next == Some('&') => {
+                out.push_str("&&");
+                chars.next();
+            }
+            '&' => out.push_str("&&"),
+            '|' if next == Some('|') => {
+                out.push_str("||");
+                chars.next();
+            }
+            '|' => out.push_str("||"),
+            '~' if !matches!(prev_non_ws, Some('!' | '=')) => out.push_str("=~"),
+            _ => out.push(ch),
+        }
+        if !ch.is_whitespace() {
+            prev_non_ws = Some(ch);
+        }
+    }
+    out
+}
+
 impl OutputKind {
     fn parse(s: &str) -> Option<(Self, Option<u32>)> {
         if s.is_empty() {
@@ -530,6 +583,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
         LongOpt::new("apply-filters", HasArg::Required, b'f' as i32),
         LongOpt::new("genotype", HasArg::Required, b'g' as i32),
+        LongOpt::new("include", HasArg::Required, b'i' as i32),
+        LongOpt::new("exclude", HasArg::Required, b'e' as i32),
         LongOpt::new("known", HasArg::None, b'k' as i32),
         LongOpt::new("min-ac", HasArg::Required, b'c' as i32),
         LongOpt::new("max-ac", HasArg::Required, b'C' as i32),
@@ -572,6 +627,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
     let mut apply_filters = None;
+    let mut expression_filter = None;
     let mut type_filter = None;
     let mut type_filter_exclude = false;
     let mut min_ac = None;
@@ -590,7 +646,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut target_files = Vec::new();
 
     let mut g = Getopt::new(
-        "o:O:l:f:g:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGv:V:",
+        "o:O:l:f:g:i:e:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGv:V:",
         &long_opts,
         argv,
     );
@@ -694,6 +750,22 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                             return ExitCode::FAILURE;
                         }
                     }
+                }
+                v if v == b'i' as i32 || v == b'e' as i32 => {
+                    if expression_filter.is_some() {
+                        eprintln!(
+                            "{}",
+                            fmt_etag(
+                                "main_vcfview",
+                                "Error: only one -i or -e expression can be given, and they cannot be combined"
+                            )
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    expression_filter = Some(ExpressionFilterSpec {
+                        raw: m.value.unwrap_or_default(),
+                        exclude: v == b'e' as i32,
+                    });
                 }
                 v if v == b'k' as i32 || v == b'n' as i32 => {
                     let include_known = v == b'k' as i32;
@@ -948,6 +1020,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         targets_exclude,
         targets_overlap,
         apply_filters,
+        expression_filter,
         type_filter,
         type_filter_exclude,
         min_ac,
@@ -989,6 +1062,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
     let has_line_filters = options.type_filter.is_some()
         || options.apply_filters.is_some()
+        || options.expression_filter.is_some()
         || options.min_ac.is_some()
         || options.max_ac.is_some()
         || options.min_af.is_some()
@@ -1010,7 +1084,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "allele/type filtering currently requires text VCF output with --no-version or sample projection",
+            "allele/type/expression filtering currently requires text VCF output with --no-version or sample projection",
         ));
     }
     let filters = RecordFilters {
@@ -1123,6 +1197,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 && options.targets.is_empty()
                 && options.type_filter.is_none()
                 && options.apply_filters.is_none()
+                && options.expression_filter.is_none()
                 && options.min_ac.is_none()
                 && options.max_ac.is_none()
                 && options.min_af.is_none()
@@ -1293,6 +1368,7 @@ fn write_sample_subset_bcf<W: Write>(
         targets_exclude: options.targets_exclude,
         targets_overlap: options.targets_overlap,
         apply_filters: options.apply_filters.clone(),
+        expression_filter: options.expression_filter.clone(),
         type_filter: options.type_filter,
         type_filter_exclude: options.type_filter_exclude,
         min_ac: options.min_ac,
@@ -1476,6 +1552,7 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         pos,
         fields,
     ) && filter_line_matches(fields, options.apply_filters.as_deref())
+        && expression_line_matches(fields, options.expression_filter.as_ref())
         && allele_frequency_count_line_matches(
             fields,
             options.min_ac,
@@ -1511,6 +1588,96 @@ fn filter_field_contains(value: &str, wanted: &str) -> bool {
         return false;
     }
     value.split(';').any(|item| item == wanted)
+}
+
+fn expression_line_matches(fields: &[&str], spec: Option<&ExpressionFilterSpec>) -> bool {
+    let Some(spec) = spec else {
+        return true;
+    };
+    let filter = Filter::new(normalize_filter_expr(&spec.raw));
+    let Ok(value) = filter.eval_with(|src| lookup_expression_symbol(src, fields)) else {
+        return false;
+    };
+    let matched = value.truth();
+    if spec.exclude { !matched } else { matched }
+}
+
+fn lookup_expression_symbol(src: &str, fields: &[&str]) -> Option<(Value, usize)> {
+    let token_src = src.strip_prefix('%').unwrap_or(src);
+    let had_percent = token_src.len() != src.len();
+    let len = token_src
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/'))
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .last()?;
+    if token_src[len..].starts_with('(') {
+        return None;
+    }
+    let token = &token_src[..len];
+    Some((
+        expression_token_value(token, fields),
+        len + usize::from(had_percent),
+    ))
+}
+
+fn expression_token_value(token: &str, fields: &[&str]) -> Value {
+    let key = token
+        .strip_prefix("INFO/")
+        .or_else(|| token.strip_prefix("Info/"))
+        .or_else(|| token.strip_prefix("info/"))
+        .unwrap_or(token);
+    let raw = match key {
+        "CHROM" => fields.first().copied().unwrap_or(".").to_string(),
+        "POS" => fields.get(1).copied().unwrap_or(".").to_string(),
+        "ID" => fields.get(2).copied().unwrap_or(".").to_string(),
+        "REF" => fields.get(3).copied().unwrap_or(".").to_string(),
+        "ALT" => fields.get(4).copied().unwrap_or(".").to_string(),
+        "QUAL" => fields.get(5).copied().unwrap_or(".").to_string(),
+        "FILTER" => fields.get(6).copied().unwrap_or(".").to_string(),
+        "INFO" => fields.get(7).copied().unwrap_or(".").to_string(),
+        "FORMAT" => fields.get(8).copied().unwrap_or(".").to_string(),
+        "TYPE" => variant_type_label(variant_type_from_fields(fields)).to_string(),
+        key => info_value(fields, key),
+    };
+    expression_value(raw)
+}
+
+fn info_value(fields: &[&str], key: &str) -> String {
+    let Some(info) = fields.get(7) else {
+        return ".".into();
+    };
+    for item in info.split(';') {
+        let (name, value) = item.split_once('=').unwrap_or((item, "1"));
+        if name == key {
+            return value.to_string();
+        }
+    }
+    ".".into()
+}
+
+fn expression_value(raw: String) -> Value {
+    if raw == "." {
+        return Value::undefined();
+    }
+    raw.parse::<f64>()
+        .map(Value::number)
+        .unwrap_or_else(|_| Value::string(raw))
+}
+
+fn variant_type_label(variant_type: VariantType) -> &'static str {
+    if variant_type.bits() == VariantType::REF.bits() {
+        "REF"
+    } else if variant_type.contains(VariantType::SNP) {
+        "SNP"
+    } else if variant_type.contains(VariantType::MNP) {
+        "MNP"
+    } else if variant_type.contains(VariantType::INDEL) {
+        "INDEL"
+    } else if variant_type.contains(VariantType::BND) {
+        "BND"
+    } else {
+        "OTHER"
+    }
 }
 
 fn allele_frequency_count_line_matches(

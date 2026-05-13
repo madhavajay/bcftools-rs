@@ -669,6 +669,66 @@ fn view_apply_filters_selects_semicolon_delimited_filter_tags() {
 }
 
 #[test]
+fn view_include_expression_filters_core_and_info_fields() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-i",
+        "QUAL==999 && (FS<20 || FS>=41.02) && ICF>-0.1 && HWE*2>1.2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -i expression failed: {err}");
+    let positions = out
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(positions, ["X:2942109", "X:3048719"]);
+}
+
+#[test]
+fn view_exclude_expression_filters_info_fields() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-e",
+        "FS<20",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -e expression failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:2343543",
+            "11:5464562",
+            "20:76962",
+            "20:126310",
+            "20:138125",
+            "20:138148",
+            "20:271225",
+            "20:304568",
+            "20:326891",
+            "X:2942109",
+            "X:3048719",
+            "Y:10011673",
+        ]
+    );
+}
+
+#[test]
 fn view_novel_filter_selects_records_without_ids() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-n", path.to_str().unwrap()]);
