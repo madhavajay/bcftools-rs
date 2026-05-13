@@ -1,0 +1,7 @@
+[submodule "bcftools"]
+	path = bcftools
+	url = git@github.com:madhavajay/bcftools.git
+[submodule "htslib-rs"]
+	path = htslib-rs
+	url = git@github.com:madhavajay/htslib-rs.git
+	branch = main

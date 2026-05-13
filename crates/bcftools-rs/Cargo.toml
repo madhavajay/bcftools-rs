@@ -1,0 +1,18 @@
+[package]
+name = "bcftools-rs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+htslib-rs.workspace = true
+anyhow.workspace = true
+bstr.workspace = true
+flate2.workspace = true
+memchr.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+htslib-rs.workspace = true
+tempfile = "3.10"

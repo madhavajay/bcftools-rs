@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - madhava/port
+
+jobs:
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy -p bcftools-rs -p bcftools-rs-cli --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test -p bcftools-rs -p bcftools-rs-cli
+
+  bcftools-c-tests:
+    name: bcftools C tests (parity reference)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-suggests --no-install-recommends \
+            autoconf \
+            automake \
+            gcc \
+            libbz2-dev \
+            libcurl4-gnutls-dev \
+            libdeflate-dev \
+            libgsl-dev \
+            liblzma-dev \
+            libperl-dev \
+            libssl-dev \
+            make \
+            perl \
+            zlib1g-dev
+
+      - name: Clone HTSlib (sibling to bcftools)
+        run: |
+          git clone --recurse-submodules --depth 1 \
+            https://github.com/samtools/htslib.git htslib
+
+      - name: Configure HTSlib
+        working-directory: htslib
+        run: |
+          autoreconf -i
+          ./configure --enable-plugins --with-libdeflate
+
+      - name: Build HTSlib
+        working-directory: htslib
+        run: make -j"$(nproc)"
+
+      - name: Build bcftools
+        working-directory: bcftools
+        run: |
+          make -j"$(nproc)" HTSDIR=../htslib
+
+      - name: bcftools C tests (test.pl harness)
+        working-directory: bcftools
+        run: make test HTSDIR=../htslib
