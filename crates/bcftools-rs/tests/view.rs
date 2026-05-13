@@ -165,6 +165,58 @@ fn view_region_filters_bcf_input() {
 }
 
 #[test]
+fn view_samples_list_subsets_vcf_columns() {
+    let path = fixture_path("query.smpl.vcf");
+    let (out, err, code) = run(&["view", "--no-version", "-s", "11", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -s failed: {err}");
+    assert_eq!(
+        out,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=chr1>\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t11\n\
+chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t1/1\n"
+    );
+}
+
+#[test]
+fn view_samples_file_exclusion_subsets_bcf_input() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("query.smpl.vcf");
+    let bcf = tmp.path().join("query.smpl.bcf");
+    let samples = fixture_path("query.smpl.11.txt");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob failed: {err}");
+
+    let excluded = format!("^{}", samples.display());
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-S",
+        &excluded,
+        bcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -S ^file BCF failed: {err}");
+    let chrom = out
+        .lines()
+        .find(|line| line.starts_with("#CHROM"))
+        .expect("#CHROM line");
+    assert_eq!(
+        chrom,
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t00"
+    );
+    assert!(out.contains("chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\n"));
+}
+
+#[test]
 fn view_threads_writes_bgzf_vcf_output() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");

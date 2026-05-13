@@ -14,9 +14,9 @@
 //!   lines (other code paths inject them; here we honor the flag).
 //! - `-h, --header-only` and `-H, --no-header` for header-vs-records dispatch.
 //!
-//! Filtering and sample subsetting are NOT yet implemented and yield an
-//! explicit error if requested. Positional region arguments support the common
-//! `CHROM` and `CHROM:START-END` forms by streaming and filtering records.
+//! Filtering is NOT yet implemented and yields an explicit error if requested.
+//! Positional region arguments support the common `CHROM` and `CHROM:START-END`
+//! forms by streaming and filtering records.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -46,6 +46,8 @@ Output options:\n\
         --no-version                  do not append version and command line to the header\n\
     -o, --output FILE                 output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
+    -s, --samples LIST                comma-separated sample list, optionally prefixed with ^\n\
+    -S, --samples-file FILE           file of samples, optionally prefixed with ^\n\
 \n";
 
 const OPT_NO_VERSION: i32 = 200;
@@ -74,6 +76,8 @@ struct RunOptions<'a> {
     no_version: bool,
     regions: &'a [Region],
     thread_count: Option<NonZero<usize>>,
+    sample_list: Option<&'a str>,
+    sample_list_is_file: bool,
 }
 
 impl Region {
@@ -169,6 +173,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
         LongOpt::new("header-only", HasArg::None, b'h' as i32),
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
+        LongOpt::new("samples", HasArg::Required, b's' as i32),
+        LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
         LongOpt::new("threads", HasArg::Required, OPT_THREADS),
     ];
@@ -180,8 +186,10 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut no_header = false;
     let mut no_version = false;
     let mut thread_count = None;
+    let mut sample_list: Option<String> = None;
+    let mut sample_list_is_file = false;
 
-    let mut g = Getopt::new("o:O:l:hH", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:hHs:S:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -225,6 +233,14 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                 }
                 v if v == b'h' as i32 => header_only = true,
                 v if v == b'H' as i32 => no_header = true,
+                v if v == b's' as i32 => {
+                    sample_list = m.value;
+                    sample_list_is_file = false;
+                }
+                v if v == b'S' as i32 => {
+                    sample_list = m.value;
+                    sample_list_is_file = true;
+                }
                 v if v == OPT_NO_VERSION => no_version = true,
                 v if v == OPT_THREADS => {
                     let raw = m.value.as_deref().unwrap_or("");
@@ -284,6 +300,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         no_version,
         regions: &regions,
         thread_count,
+        sample_list: sample_list.as_deref(),
+        sample_list_is_file,
     };
 
     match run(path, &options, argv) {
@@ -307,6 +325,10 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     }
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
+
+    if options.sample_list.is_some() {
+        return run_sample_subset(path, in_fmt, options, argv);
+    }
 
     let mut header = read_header(path, in_fmt)?;
 
@@ -455,6 +477,217 @@ fn stdin_tmp_path() -> PathBuf {
         ".bcftools-rs-view-{}-{nanos}.tmp",
         std::process::id()
     ))
+}
+
+fn run_sample_subset(
+    path: &Path,
+    in_fmt: format::Format,
+    options: &RunOptions<'_>,
+    argv: &[OsString],
+) -> io::Result<()> {
+    if matches!(
+        options.output_kind,
+        OutputKind::BcfUncompressed | OutputKind::BcfCompressed
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sample subsetting with BCF output is not yet supported",
+        ));
+    }
+
+    let version_lines = if options.no_version {
+        None
+    } else {
+        let mut prog_argv: Vec<OsString> = vec!["bcftools".into()];
+        prog_argv.extend(argv.iter().cloned());
+        Some(build_lines("bcftools_view", &prog_argv, command_time()))
+    };
+
+    match options.output_kind {
+        OutputKind::VcfText => match options.output_file {
+            Some("-") | None => write_sample_subset_vcf(
+                path,
+                in_fmt,
+                options,
+                version_lines.as_ref(),
+                io::stdout().lock(),
+            ),
+            Some(p) => write_sample_subset_vcf(
+                path,
+                in_fmt,
+                options,
+                version_lines.as_ref(),
+                File::create(p)?,
+            ),
+        },
+        OutputKind::VcfGz => match (options.output_file, options.thread_count) {
+            (Some(p), Some(thread_count)) if p != "-" => {
+                let bgzf = htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(
+                    thread_count,
+                    File::create(p)?,
+                );
+                write_sample_subset_vcf(path, in_fmt, options, version_lines.as_ref(), bgzf)
+            }
+            (Some(p), _) if p != "-" => {
+                let bgzf = htslib_rs::bgzf::io::Writer::new(File::create(p)?);
+                write_sample_subset_vcf(path, in_fmt, options, version_lines.as_ref(), bgzf)
+            }
+            _ => {
+                let bgzf = htslib_rs::bgzf::io::Writer::new(io::stdout().lock());
+                write_sample_subset_vcf(path, in_fmt, options, version_lines.as_ref(), bgzf)
+            }
+        },
+        OutputKind::BcfUncompressed | OutputKind::BcfCompressed => unreachable!(),
+    }
+}
+
+fn write_sample_subset_vcf<W: Write>(
+    path: &Path,
+    fmt: format::Format,
+    options: &RunOptions<'_>,
+    version_lines: Option<&crate::header_version::HeaderVersionLines>,
+    mut out: W,
+) -> io::Result<()> {
+    let text = vcf_text_from_path(path, fmt)?;
+    write_sample_subset_vcf_text(&text, options, version_lines, &mut out)
+}
+
+fn vcf_text_from_path(path: &Path, fmt: format::Format) -> io::Result<String> {
+    if fmt.exact == Exact::Bcf {
+        return htslib_rs::variant_io_compat::view_bcf_as_vcf_text_from_path_with_limit(path, None);
+    }
+    if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
+        let f = File::open(path)?;
+        let mut dec = flate2::read::MultiGzDecoder::new(f);
+        let mut text = String::new();
+        dec.read_to_string(&mut text)?;
+        return Ok(text);
+    }
+    fs::read_to_string(path)
+}
+
+fn write_sample_subset_vcf_text<W: Write>(
+    text: &str,
+    options: &RunOptions<'_>,
+    version_lines: Option<&crate::header_version::HeaderVersionLines>,
+    out: &mut W,
+) -> io::Result<()> {
+    let mut selected_samples: Option<Vec<usize>> = None;
+    let mut inserted_version = false;
+
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("##") {
+            if !options.no_header {
+                out.write_all(line.as_bytes())?;
+            }
+            continue;
+        }
+
+        if line.starts_with("#CHROM\t") {
+            if !options.no_header {
+                if let Some(lines) = version_lines
+                    && !inserted_version
+                {
+                    writeln!(out, "{}", lines.version_line)?;
+                    writeln!(out, "{}", lines.command_line)?;
+                    inserted_version = true;
+                }
+                let fields = line_fields(line);
+                let sample_names = fields[9..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>();
+                let selected = crate::smpl_ilist::init(
+                    &sample_names,
+                    options.sample_list,
+                    options.sample_list_is_file,
+                    crate::smpl_ilist::SMPL_STRICT,
+                )?
+                .idx;
+                write_projected_vcf_line(&fields, &selected, out)?;
+                selected_samples = Some(selected);
+            } else {
+                let fields = line_fields(line);
+                let sample_names = fields[9..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>();
+                selected_samples = Some(
+                    crate::smpl_ilist::init(
+                        &sample_names,
+                        options.sample_list,
+                        options.sample_list_is_file,
+                        crate::smpl_ilist::SMPL_STRICT,
+                    )?
+                    .idx,
+                );
+            }
+            continue;
+        }
+
+        if line.starts_with('#') {
+            if !options.no_header {
+                out.write_all(line.as_bytes())?;
+            }
+            continue;
+        }
+
+        if options.header_only {
+            break;
+        }
+        let fields = line_fields(line);
+        if !record_line_matches_regions(&fields, options.regions) {
+            continue;
+        }
+        let selected = selected_samples.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "VCF header is missing the #CHROM sample line",
+            )
+        })?;
+        write_projected_vcf_line(&fields, selected, out)?;
+    }
+
+    Ok(())
+}
+
+fn line_fields(line: &str) -> Vec<&str> {
+    line.trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .split('\t')
+        .collect()
+}
+
+fn write_projected_vcf_line<W: Write>(
+    fields: &[&str],
+    selected_samples: &[usize],
+    out: &mut W,
+) -> io::Result<()> {
+    let fixed_end = fields.len().min(9);
+    let mut projected = fields[..fixed_end].to_vec();
+    for &sample_idx in selected_samples {
+        if let Some(value) = fields.get(9 + sample_idx) {
+            projected.push(value);
+        }
+    }
+    writeln!(out, "{}", projected.join("\t"))
+}
+
+fn record_line_matches_regions(fields: &[&str], regions: &[Region]) -> bool {
+    if regions.is_empty() {
+        return true;
+    }
+    let Some(contig) = fields.first() else {
+        return false;
+    };
+    let Some(pos) = fields.get(1).and_then(|pos| pos.parse::<usize>().ok()) else {
+        return false;
+    };
+    regions.iter().any(|region| {
+        region.contig == *contig
+            && region.start.is_none_or(|start| pos >= start)
+            && region.end.is_none_or(|end| pos <= end)
+    })
 }
 
 fn write_vcf_gz(
