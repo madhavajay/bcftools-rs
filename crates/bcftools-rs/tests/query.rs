@@ -177,7 +177,7 @@ fn query_print_header_twice_omits_column_indices() {
     assert_eq!(
         out,
         "#CHROM POS C:SAMPLE D:SAMPLE C:DP D:DP C:GT D:GT\n\
-4 3258449 C D 1 0 1/1 0/0"
+4 3258449 C D 1 0 1/1 0/0\n"
     );
 }
 
@@ -662,13 +662,41 @@ fn query_line_token_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_info_namespace_tokens_match_upstream_fixture() {
+    let path = fixture_path("query.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.3.1.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS %ID %REF %ALT %QUAL %FILTER \\t %INFO/CHROM %INFO/POS %INFO/ID %INFO/REF %INFO/ALT %INFO/QUAL %INFO/FILTER",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f INFO/TAG failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_sample_loop_prefers_format_namespace_for_bare_tags() {
+    let path = fixture_path("query.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.3.2.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[ %CHROM] \\t [ %POS] \\t [ %ID] \\t [ %REF] \\t [ %ALT] \\t [ %QUAL] \\t [ %FILTER]",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f sample-loop bare TAG failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_slash_prefix_forces_record_namespace_in_sample_loop() {
     let path = fixture_path("query.3.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.3.3.out")).unwrap();
     let (out, err, code) = run(&[
         "query",
         "-f",
-        "[ %/CHROM] \\t [ %/POS] \\t [ %/ID] \\t [ %/REF] \\t [ %/ALT] \\t [ %/QUAL] \\t [ %/FILTER]\\n",
+        "[ %/CHROM] \\t [ %/POS] \\t [ %/ID] \\t [ %/REF] \\t [ %/ALT] \\t [ %/QUAL] \\t [ %/FILTER]",
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -f %/TAG failed: {err}");

@@ -392,6 +392,9 @@ fn query_format_text<W: Write>(
         }
         let rendered = render_format(format, &record);
         out.write_all(rendered.as_bytes())?;
+        if !rendered.ends_with('\n') {
+            out.write_all(b"\n")?;
+        }
     }
     if options.header_level > 0 && !wrote_header {
         out.write_all(render_format_header(format, &[], &[], options.header_level).as_bytes())?;
