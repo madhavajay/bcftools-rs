@@ -760,3 +760,47 @@ fn query_n_pass_filter_counts_gt_class_predicates() {
     assert_eq!(code, 0, "query -e N_PASS(GT=alt) failed: {err}");
     assert_eq!(out, exclude_expected);
 }
+
+#[test]
+fn query_count_filter_counts_info_vector_values() {
+    let path = fixture_path("query.filter.10.vcf");
+    let numeric_expected = std::fs::read_to_string(fixture_path("query.73.out")).unwrap();
+    let string_expected = std::fs::read_to_string(fixture_path("query.74.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS  %NUM_TAG\\n",
+        "-i",
+        "COUNT(INFO/NUM_TAG)=2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i COUNT(INFO/NUM_TAG) failed: {err}");
+    assert_eq!(out, numeric_expected);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS  %STR_TAG\\n",
+        "-i",
+        "COUNT(INFO/STR_TAG)=2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i COUNT(INFO/STR_TAG) failed: {err}");
+    assert_eq!(out, string_expected);
+}
+
+#[test]
+fn query_count_filter_counts_gt_class_predicates() {
+    let path = fixture_path("query.filter.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.53.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS[\\t%GT]\\n",
+        "-i",
+        "COUNT(GT=\"het\")=1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i COUNT(GT=het) failed: {err}");
+    assert_eq!(out, expected);
+}

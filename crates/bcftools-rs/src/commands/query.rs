@@ -544,6 +544,11 @@ enum QueryFilterKind {
         op: PredicateOp,
         rhs: f64,
     },
+    CountComparison {
+        expression: String,
+        op: PredicateOp,
+        rhs: f64,
+    },
     PredicateGroups(Vec<Vec<SimplePredicate>>),
 }
 
@@ -581,6 +586,15 @@ impl QueryFilter {
                 })
             })
             .or_else(|| {
+                parse_count_comparison(&spec.raw).map(|(expression, op, rhs)| {
+                    QueryFilterKind::CountComparison {
+                        expression,
+                        op,
+                        rhs,
+                    }
+                })
+            })
+            .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
             .unwrap_or_else(|| {
@@ -608,6 +622,11 @@ impl QueryFilter {
                 op,
                 rhs,
             } => compare_number(n_pass(expression, record) as f64, *op, *rhs),
+            QueryFilterKind::CountComparison {
+                expression,
+                op,
+                rhs,
+            } => compare_number(count_values(expression, record) as f64, *op, *rhs),
             QueryFilterKind::PredicateGroups(groups) => groups
                 .iter()
                 .any(|predicates| predicates.iter().all(|predicate| predicate.matches(record))),
@@ -733,9 +752,17 @@ fn parse_filter_id_match(raw: &str) -> Option<(String, bool)> {
 }
 
 fn parse_n_pass_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
+    parse_function_count_comparison(raw, "N_PASS")
+}
+
+fn parse_count_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
+    parse_function_count_comparison(raw, "COUNT")
+}
+
+fn parse_function_count_comparison(raw: &str, name: &str) -> Option<(String, PredicateOp, f64)> {
     let raw = raw.trim();
-    let args_start = "N_PASS".len();
-    if !raw.starts_with("N_PASS") {
+    let args_start = name.len();
+    if !raw.starts_with(name) {
         return None;
     }
     let args_end = find_function_end(raw, args_start)?;
@@ -1184,6 +1211,20 @@ fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
 fn n_pass(expression: &str, record: &TextRecord<'_>) -> usize {
     (0..record.sample_indices.len())
         .filter(|&sample_index| sample_expression_matches(expression, record, sample_index))
+        .count()
+}
+
+fn count_values(expression: &str, record: &TextRecord<'_>) -> usize {
+    if split_sample_predicate(expression).is_some() {
+        return n_pass(expression, record);
+    }
+    let value = render_token(expression, record, None);
+    if value == "." {
+        return 0;
+    }
+    value
+        .split(',')
+        .filter(|value| !value.is_empty() && *value != ".")
         .count()
 }
 
