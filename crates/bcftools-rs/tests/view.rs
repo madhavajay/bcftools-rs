@@ -573,6 +573,50 @@ fn view_novel_filter_selects_records_without_ids() {
 }
 
 #[test]
+fn view_uncalled_filter_selects_records_without_called_gt() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&["view", "--no-version", "-H", "-u", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -u failed: {err}");
+    assert_eq!(
+        out,
+        "11\t5464562\t.\tC\tT\t999\tPASS\tDP=0\tGT:PL:DP:GQ\t./.:0,0,0:.:.\t./.:0,0,0:.:.\t./.:0,0,0:.:.\n"
+    );
+}
+
+#[test]
+fn view_exclude_uncalled_filter_drops_records_without_called_gt() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&["view", "--no-version", "-H", "-U", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -U failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:2343543",
+            "20:76962",
+            "20:126310",
+            "20:138125",
+            "20:138148",
+            "20:271225",
+            "20:304568",
+            "20:326891",
+            "X:2928329",
+            "X:2933066",
+            "X:2942109",
+            "X:3048719",
+            "Y:8657215",
+            "Y:10011673",
+        ]
+    );
+}
+
+#[test]
 fn view_phased_filter_selects_all_phased_records() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-p", path.to_str().unwrap()]);

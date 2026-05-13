@@ -63,6 +63,8 @@ Output options:\n\
     -t, --targets REG                 restrict to comma-separated targets\n\
     -T, --targets-file FILE           restrict to targets listed in a file\n\
         --targets-overlap 0|1|2       target overlap mode: 0=POS, 1=record, 2=variant [0]\n\
+    -u, --uncalled                    select sites without a called genotype\n\
+    -U, --exclude-uncalled            exclude sites without a called genotype\n\
     -v, --types LIST                  select variant types: snps,indels,mnps,other,bnd,overlap,ref\n\
     -V, --exclude-types LIST          exclude variant types\n\
 \n";
@@ -104,6 +106,7 @@ struct RunOptions<'a> {
     max_alleles: Option<usize>,
     phased_filter: Option<bool>,
     known_filter: Option<bool>,
+    uncalled_filter: Option<bool>,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -409,6 +412,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
         LongOpt::new("targets", HasArg::Required, b't' as i32),
         LongOpt::new("targets-file", HasArg::Required, b'T' as i32),
+        LongOpt::new("uncalled", HasArg::None, b'u' as i32),
+        LongOpt::new("exclude-uncalled", HasArg::None, b'U' as i32),
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
         LongOpt::new("types", HasArg::Required, b'v' as i32),
         LongOpt::new("exclude-types", HasArg::Required, b'V' as i32),
@@ -435,12 +440,13 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut max_alleles = None;
     let mut phased_filter = None;
     let mut known_filter = None;
+    let mut uncalled_filter = None;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:km:M:npPhHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -523,6 +529,17 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                     phased_filter = Some(include);
+                }
+                v if v == b'u' as i32 || v == b'U' as i32 => {
+                    let include = v == b'u' as i32;
+                    if uncalled_filter.is_some_and(|existing| existing != include) {
+                        eprintln!(
+                            "{}",
+                            fmt_etag("main_vcfview", "Only one of -u or -U can be given.")
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    uncalled_filter = Some(include);
                 }
                 v if v == b'h' as i32 => header_only = true,
                 v if v == b'H' as i32 => no_header = true,
@@ -729,6 +746,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         max_alleles,
         phased_filter,
         known_filter,
+        uncalled_filter,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -760,7 +778,8 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
         || options.min_alleles.is_some()
         || options.max_alleles.is_some()
         || options.phased_filter.is_some()
-        || options.known_filter.is_some();
+        || options.known_filter.is_some()
+        || options.uncalled_filter.is_some();
     let has_text_filters =
         !options.regions.is_empty() || !options.targets.is_empty() || has_line_filters;
     if has_line_filters
@@ -1049,6 +1068,7 @@ fn write_sample_subset_bcf<W: Write>(
         max_alleles: options.max_alleles,
         phased_filter: options.phased_filter,
         known_filter: options.known_filter,
+        uncalled_filter: options.uncalled_filter,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -1222,7 +1242,40 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
     ) && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
         && known_line_matches(fields, options.known_filter)
         && phased_line_matches(fields, options.phased_filter)
+        && uncalled_line_matches(fields, options.uncalled_filter)
         && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn uncalled_line_matches(fields: &[&str], uncalled_filter: Option<bool>) -> bool {
+    let Some(include_uncalled) = uncalled_filter else {
+        return true;
+    };
+    let uncalled = !record_has_called_genotype(fields);
+    if include_uncalled {
+        uncalled
+    } else {
+        !uncalled
+    }
+}
+
+fn record_has_called_genotype(fields: &[&str]) -> bool {
+    let Some(format) = fields.get(8) else {
+        return false;
+    };
+    let Some(gt_index) = format.split(':').position(|key| key == "GT") else {
+        return false;
+    };
+    fields[9..].iter().any(|sample| {
+        sample
+            .split(':')
+            .nth(gt_index)
+            .is_some_and(genotype_has_called_allele)
+    })
+}
+
+fn genotype_has_called_allele(gt: &str) -> bool {
+    gt.split(['/', '|'])
+        .any(|allele| !allele.is_empty() && allele != ".")
 }
 
 fn known_line_matches(fields: &[&str], known_filter: Option<bool>) -> bool {
