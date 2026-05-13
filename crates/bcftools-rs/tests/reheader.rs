@@ -169,6 +169,42 @@ fn reheader_bgzf_vcf_writes_bgzf_output() {
 }
 
 #[test]
+fn reheader_threads_writes_bgzf_vcf_output() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = write_vcf(&dir);
+    let compressed = dir.path().join("input.vcf.gz");
+    let output = dir.path().join("renamed.vcf.gz");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Oz",
+        "-o",
+        compressed.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Oz failed: {err}");
+
+    let (_out, err, code) = run(&[
+        "reheader",
+        "--threads",
+        "2",
+        "-n",
+        "X,Y",
+        "-o",
+        output.to_str().unwrap(),
+        compressed.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "reheader --threads .vcf.gz failed: {err}");
+
+    let mut decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(output).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    assert!(decoded.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tX\tY\n"));
+    assert!(decoded.ends_with("1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t0/0\n"));
+}
+
+#[test]
 fn reheader_bcf_samples_file_rewrites_bcf_header() {
     let dir = TempDir::new().expect("tempdir");
     let input = write_vcf(&dir);
@@ -203,6 +239,42 @@ fn reheader_bcf_samples_file_rewrites_bcf_header() {
 }
 
 #[test]
+fn reheader_threads_writes_bcf_output() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = write_vcf(&dir);
+    let bcf = dir.path().join("input.bcf");
+    let output = dir.path().join("renamed.bcf");
+    let samples = dir.path().join("samples.txt");
+    std::fs::write(&samples, "X\nY\n").unwrap();
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob failed: {err}");
+
+    let (_out, err, code) = run(&[
+        "reheader",
+        "--threads",
+        "2",
+        "-s",
+        samples.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        bcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "reheader --threads BCF failed: {err}");
+
+    let (out, err, code) = run(&["query", "-l", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "query -l threaded renamed BCF failed: {err}");
+    assert_eq!(out, "X\nY\n");
+}
+
+#[test]
 fn reheader_bcf_in_place_rewrites_same_file() {
     let dir = TempDir::new().expect("tempdir");
     let input = write_vcf(&dir);
@@ -232,6 +304,23 @@ fn reheader_bcf_in_place_rewrites_same_file() {
     let (out, err, code) = run(&["query", "-l", bcf.to_str().unwrap()]);
     assert_eq!(code, 0, "query -l in-place BCF failed: {err}");
     assert_eq!(out, "X\nY\n");
+}
+
+#[test]
+fn reheader_threads_rejects_non_integer_argument() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = write_vcf(&dir);
+
+    let (_out, err, code) = run(&[
+        "reheader",
+        "--threads",
+        "abc",
+        "-n",
+        "X,Y",
+        input.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("Could not parse argument: --threads abc"));
 }
 
 #[test]

@@ -135,7 +135,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
 - [ ] `merge` (`vcfmerge.c`, 155k — largest single file in bcftools) — multi-sample merge across files, `-m none/snps/indels/both/all/id`, `--info-rules`, `-l`, `--regions`. Covered by `test_vcf_merge`, `test_vcf_merge_big`.
 - [ ] `reheader` (`reheader.c`, 27k) — header replacement, sample rename, FAI-driven contig fill, `--in-place` for BCF. Covered by `test_vcf_reheader`, `test_rename_chrs`.
-  - [x] Snapshot coverage: VCF/BGZF VCF header replacement, sample rename via file/list, FAI contig updates with upstream-style attribute ordering, stdin handling, BCF output, and BCF `--in-place`.
+  - [x] Snapshot coverage: VCF/BGZF VCF header replacement, sample rename via file/list, FAI contig updates with upstream-style attribute ordering, stdin handling, BCF output, BCF `--in-place`, and threaded BGZF/BCF output.
   - [ ] Remaining: BCF header serialization order/quoting parity and `test_rename_chrs` dependencies on `annotate`/full `query`.
 - [ ] `convert` (`vcfconvert.c`, 76k) — VCF ↔ {HAP/LEGEND/SAMPLE, GEN, HAPS-SAMPLE, TSV, gVCF, 23andMe}. Plus `--tsv2vcf`. Covered by `test_vcf_convert*`.
 

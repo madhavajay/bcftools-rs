@@ -1,12 +1,13 @@
 //! Partial port of `bcftools reheader` (upstream `reheader.c`).
 //!
 //! This implements sample renaming, header replacement, and FAI-driven contig
-//! updates for VCF text/BGZF input. BCF in-place reheadering and threaded BCF
-//! output remain explicitly unsupported.
+//! updates for VCF text/BGZF input. BCF in-place reheadering is supported for
+//! the current snapshot.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr as _;
@@ -44,6 +45,7 @@ struct Args {
     output: Option<PathBuf>,
     in_place: bool,
     input: PathBuf,
+    thread_count: Option<NonZero<usize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +100,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut fai = None;
     let mut output = None;
     let mut in_place = false;
+    let mut thread_count = None;
 
     let mut g = Getopt::new("s:h:o:f:T:v:N:n:", &long_opts, argv);
     loop {
@@ -131,11 +134,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 v if v == b'f' as i32 => {
                     fai = Some(PathBuf::from(m.value.as_deref().unwrap_or_default()));
                 }
-                1 => {
-                    return Err(ParseOutcome::Error(
-                        "reheader --threads is not yet implemented for BCF output".into(),
-                    ));
-                }
+                1 => thread_count = parse_threads(m.value.as_deref().unwrap_or(""))?,
                 2 => in_place = true,
                 _ => return Err(ParseOutcome::Usage),
             },
@@ -166,7 +165,14 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output,
         in_place,
         input,
+        thread_count,
     })
+}
+
+fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, ParseOutcome> {
+    raw.parse::<usize>()
+        .map(NonZero::new)
+        .map_err(|_| ParseOutcome::Error(format!("Could not parse argument: --threads {raw}")))
 }
 
 fn run(args: &Args) -> io::Result<()> {
@@ -219,24 +225,56 @@ fn run(args: &Args) -> io::Result<()> {
         match &args.output {
             Some(path) => {
                 let output = File::create(path)?;
-                let bgzf = htslib_rs::bgzf::io::Writer::new(output);
-                reheader_vcf(
-                    BufReader::new(decoder),
-                    bgzf,
-                    sample_specs.as_deref(),
-                    replacement_header.as_deref(),
-                    fai.as_deref(),
-                )
+                if let Some(thread_count) = args.thread_count {
+                    let mut bgzf = htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(
+                        thread_count,
+                        output,
+                    );
+                    reheader_vcf(
+                        BufReader::new(decoder),
+                        &mut bgzf,
+                        sample_specs.as_deref(),
+                        replacement_header.as_deref(),
+                        fai.as_deref(),
+                    )?;
+                    let _output = bgzf.finish()?;
+                    Ok(())
+                } else {
+                    let bgzf = htslib_rs::bgzf::io::Writer::new(output);
+                    reheader_vcf(
+                        BufReader::new(decoder),
+                        bgzf,
+                        sample_specs.as_deref(),
+                        replacement_header.as_deref(),
+                        fai.as_deref(),
+                    )
+                }
             }
             None => {
-                let bgzf = htslib_rs::bgzf::io::Writer::new(io::stdout().lock());
-                reheader_vcf(
-                    BufReader::new(decoder),
-                    bgzf,
-                    sample_specs.as_deref(),
-                    replacement_header.as_deref(),
-                    fai.as_deref(),
-                )
+                if let Some(thread_count) = args.thread_count {
+                    let mut bgzf = htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(
+                        thread_count,
+                        io::stdout(),
+                    );
+                    reheader_vcf(
+                        BufReader::new(decoder),
+                        &mut bgzf,
+                        sample_specs.as_deref(),
+                        replacement_header.as_deref(),
+                        fai.as_deref(),
+                    )?;
+                    let _stdout = bgzf.finish()?;
+                    Ok(())
+                } else {
+                    let bgzf = htslib_rs::bgzf::io::Writer::new(io::stdout().lock());
+                    reheader_vcf(
+                        BufReader::new(decoder),
+                        bgzf,
+                        sample_specs.as_deref(),
+                        replacement_header.as_deref(),
+                        fai.as_deref(),
+                    )
+                }
             }
         }
     } else {
@@ -302,7 +340,17 @@ fn reheader_bcf(
         let tmp = in_place_temp_path(&args.input);
         let result = (|| {
             let output = File::create(&tmp)?;
-            write_bcf_records(reader, &source_header, &rewritten_header, output)?;
+            if let Some(thread_count) = args.thread_count {
+                write_bcf_records_mt(
+                    reader,
+                    &source_header,
+                    &rewritten_header,
+                    output,
+                    thread_count,
+                )?;
+            } else {
+                write_bcf_records(reader, &source_header, &rewritten_header, output)?;
+            }
             fs::rename(&tmp, &args.input)
         })();
         if result.is_err() {
@@ -314,14 +362,36 @@ fn reheader_bcf(
     match &args.output {
         Some(path) => {
             let output = File::create(path)?;
-            write_bcf_records(reader, &source_header, &rewritten_header, output)
+            if let Some(thread_count) = args.thread_count {
+                write_bcf_records_mt(
+                    reader,
+                    &source_header,
+                    &rewritten_header,
+                    output,
+                    thread_count,
+                )
+            } else {
+                write_bcf_records(reader, &source_header, &rewritten_header, output)
+            }
         }
-        None => write_bcf_records(
-            reader,
-            &source_header,
-            &rewritten_header,
-            io::stdout().lock(),
-        ),
+        None => {
+            if let Some(thread_count) = args.thread_count {
+                write_bcf_records_mt(
+                    reader,
+                    &source_header,
+                    &rewritten_header,
+                    io::stdout(),
+                    thread_count,
+                )
+            } else {
+                write_bcf_records(
+                    reader,
+                    &source_header,
+                    &rewritten_header,
+                    io::stdout().lock(),
+                )
+            }
+        }
     }
 }
 
@@ -356,6 +426,31 @@ where
         writer.write_variant_record(rewritten_header, &record)?;
     }
     writer.try_finish()
+}
+
+fn write_bcf_records_mt<R, W>(
+    mut reader: bcf::io::Reader<R>,
+    source_header: &vcf::Header,
+    rewritten_header: &vcf::Header,
+    output: W,
+    thread_count: NonZero<usize>,
+) -> io::Result<()>
+where
+    R: io::Read,
+    W: Write + Send + 'static,
+{
+    use htslib_rs::vcf::variant::io::Write as _;
+
+    let bgzf = htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(thread_count, output);
+    let mut writer = bcf::io::Writer::from(bgzf);
+    writer.write_variant_header(rewritten_header)?;
+    for result in reader.record_bufs(source_header) {
+        let record = result?;
+        writer.write_variant_record(rewritten_header, &record)?;
+    }
+    let mut bgzf = writer.into_inner();
+    let _output = bgzf.finish()?;
+    Ok(())
 }
 
 fn read_header_file(path: &PathBuf) -> io::Result<String> {
