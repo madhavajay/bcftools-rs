@@ -551,6 +551,10 @@ struct SimplePredicate {
 enum PredicateOp {
     Eq,
     Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
     Regex,
     NotRegex,
 }
@@ -602,6 +606,7 @@ impl SimplePredicate {
             PredicateOp::NotRegex => values
                 .iter()
                 .all(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
+            PredicateOp::Gt | PredicateOp::Ge | PredicateOp::Lt | PredicateOp::Le => false,
         }
     }
 }
@@ -1093,11 +1098,158 @@ fn render_segment(
                     }
                 }
                 let token = &segment[token_start..token_end];
-                out.push_str(&render_token(token, record, sample_index));
+                if token == "N_PASS"
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let expression = &segment[token_end + 1..function_end];
+                    out.push_str(&n_pass(expression, record).to_string());
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    out.push_str(&render_token(token, record, sample_index));
+                }
             }
             _ => out.push(ch),
         }
     }
+}
+
+fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
+    if segment.as_bytes().get(open_idx).copied() != Some(b'(') {
+        return None;
+    }
+    let mut in_string = false;
+    for (idx, ch) in segment[open_idx + 1..].char_indices() {
+        match ch {
+            '"' => in_string = !in_string,
+            ')' if !in_string => return Some(open_idx + 1 + idx),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn n_pass(expression: &str, record: &TextRecord<'_>) -> usize {
+    (0..record.sample_indices.len())
+        .filter(|&sample_index| sample_expression_matches(expression, record, sample_index))
+        .count()
+}
+
+fn sample_expression_matches(
+    expression: &str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> bool {
+    split_simple_or(expression).into_iter().any(|term| {
+        split_simple_and(term)
+            .into_iter()
+            .all(|predicate| sample_predicate_matches(predicate, record, sample_index))
+    })
+}
+
+fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: usize) -> bool {
+    let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
+        return false;
+    };
+    let lhs = lhs
+        .trim()
+        .strip_prefix("FMT/")
+        .or_else(|| lhs.trim().strip_prefix("FORMAT/"))
+        .unwrap_or_else(|| lhs.trim());
+    let value = render_token(lhs, record, Some(sample_index));
+    if lhs == "GT" {
+        return compare_gt(&value, op, rhs);
+    }
+    compare_sample_value(&value, op, rhs)
+}
+
+fn split_sample_predicate(raw: &str) -> Option<(&str, PredicateOp, &str)> {
+    for (needle, op) in [
+        (">=", PredicateOp::Ge),
+        ("<=", PredicateOp::Le),
+        ("!=", PredicateOp::Ne),
+        ("==", PredicateOp::Eq),
+        ("=", PredicateOp::Eq),
+        (">", PredicateOp::Gt),
+        ("<", PredicateOp::Lt),
+    ] {
+        if let Some((lhs, rhs)) = raw.split_once(needle) {
+            return Some((lhs, op, rhs));
+        }
+    }
+    None
+}
+
+fn compare_gt(value: &str, op: PredicateOp, rhs: &str) -> bool {
+    let rhs = rhs.trim().trim_matches('"');
+    let matched = match rhs {
+        "alt" => gt_has_alt(value),
+        "ref" => gt_is_ref(value),
+        "mis" => gt_is_missing(value),
+        "het" => gt_is_het(value),
+        "hom" => gt_is_hom(value),
+        _ => value == rhs,
+    };
+    match op {
+        PredicateOp::Eq => matched,
+        PredicateOp::Ne => !matched,
+        _ => false,
+    }
+}
+
+fn compare_sample_value(value: &str, op: PredicateOp, rhs: &str) -> bool {
+    let rhs = rhs.trim().trim_matches('"');
+    if let (Ok(left), Ok(right)) = (value.parse::<f64>(), rhs.parse::<f64>()) {
+        return match op {
+            PredicateOp::Eq => left == right,
+            PredicateOp::Ne => left != right,
+            PredicateOp::Gt => left > right,
+            PredicateOp::Ge => left >= right,
+            PredicateOp::Lt => left < right,
+            PredicateOp::Le => left <= right,
+            PredicateOp::Regex | PredicateOp::NotRegex => false,
+        };
+    }
+    match op {
+        PredicateOp::Eq => value == rhs,
+        PredicateOp::Ne => value != rhs,
+        _ => false,
+    }
+}
+
+fn gt_alleles(value: &str) -> impl Iterator<Item = &str> {
+    value.split(['/', '|'])
+}
+
+fn gt_has_alt(value: &str) -> bool {
+    gt_alleles(value).any(|allele| allele != "." && allele != "0")
+}
+
+fn gt_is_ref(value: &str) -> bool {
+    !value.is_empty() && gt_alleles(value).all(|allele| allele == "0")
+}
+
+fn gt_is_missing(value: &str) -> bool {
+    gt_alleles(value).any(|allele| allele == ".")
+}
+
+fn gt_is_het(value: &str) -> bool {
+    let alleles = gt_alleles(value).collect::<Vec<_>>();
+    alleles
+        .first()
+        .is_some_and(|first| *first != "." && alleles.iter().any(|allele| allele != first))
+}
+
+fn gt_is_hom(value: &str) -> bool {
+    let alleles = gt_alleles(value).collect::<Vec<_>>();
+    alleles
+        .first()
+        .is_some_and(|first| *first != "." && alleles.iter().all(|allele| allele == first))
 }
 
 fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {

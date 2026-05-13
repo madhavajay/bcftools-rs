@@ -702,3 +702,17 @@ fn query_slash_prefix_forces_record_namespace_in_sample_loop() {
     assert_eq!(code, 0, "query -f %/TAG failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_n_pass_formatter_counts_selected_samples_matching_predicate() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.75.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM:%POS\\t%N_PASS(GT=\"alt\" & GQ>110)\\t[\\t%GT]\\t[\\t%GQ]\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %N_PASS failed: {err}");
+    assert_eq!(out, expected);
+}
