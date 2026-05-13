@@ -520,6 +520,59 @@ fn view_min_max_alleles_filters_biallelic_records() {
 }
 
 #[test]
+fn view_known_filter_selects_records_with_ids() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&["view", "--no-version", "-H", "-k", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -k failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "20:76962",
+            "20:138125",
+            "20:138148",
+            "X:2928329",
+            "X:2933066",
+            "X:2942109",
+            "Y:10011673",
+        ]
+    );
+}
+
+#[test]
+fn view_novel_filter_selects_records_without_ids() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&["view", "--no-version", "-H", "-n", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -n failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:2343543",
+            "11:5464562",
+            "20:126310",
+            "20:271225",
+            "20:304568",
+            "20:326891",
+            "X:3048719",
+            "Y:8657215",
+        ]
+    );
+}
+
+#[test]
 fn view_phased_filter_selects_all_phased_records() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-p", path.to_str().unwrap()]);
