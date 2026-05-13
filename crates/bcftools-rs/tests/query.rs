@@ -144,3 +144,39 @@ fn query_samples_file_exclusion_filters_format_loops() {
     assert_eq!(code, 0, "query -f -S ^ failed: {err}");
     assert_eq!(out, "00 0/0\n");
 }
+
+#[test]
+fn query_print_header_adds_indexed_column_names() {
+    let path = fixture_path("query.header.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-H",
+        "-f",
+        "%CHROM %POS[ %SAMPLE %DP %GT]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -H failed: {err}");
+    assert_eq!(
+        out,
+        "#[1]CHROM [2]POS [3]C:SAMPLE [4]C:DP [5]C:GT [6]D:SAMPLE [7]D:DP [8]D:GT\n\
+4 3258449 C 1 1/1 D 0 0/0\n"
+    );
+}
+
+#[test]
+fn query_print_header_twice_omits_column_indices() {
+    let path = fixture_path("query.header.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-HH",
+        "-f",
+        "%CHROM %POS[ %SAMPLE][ %DP][ %GT]",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -HH failed: {err}");
+    assert_eq!(
+        out,
+        "#CHROM POS C:SAMPLE D:SAMPLE C:DP D:DP C:GT D:GT\n\
+4 3258449 C D 1 0 1/1 0/0"
+    );
+}
