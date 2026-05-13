@@ -546,6 +546,66 @@ fn view_known_filter_selects_records_with_ids() {
 }
 
 #[test]
+fn view_apply_filters_selects_pass_records() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-f",
+        "PASS",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -f PASS failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:2343543",
+            "11:5464562",
+            "20:76962",
+            "20:138125",
+            "20:138148",
+            "20:304568",
+            "20:326891",
+            "X:2928329",
+            "X:2933066",
+            "X:2942109",
+            "X:3048719",
+            "Y:8657215",
+        ]
+    );
+}
+
+#[test]
+fn view_apply_filters_selects_semicolon_delimited_filter_tags() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-f",
+        "StrandBias",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -f StrandBias failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(positions, ["20:126310", "20:271225"]);
+}
+
+#[test]
 fn view_novel_filter_selects_records_without_ids() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-n", path.to_str().unwrap()]);

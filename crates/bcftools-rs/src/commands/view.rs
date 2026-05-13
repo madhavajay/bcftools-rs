@@ -43,6 +43,7 @@ Usage:   bcftools view [OPTIONS] <in.vcf.gz>|<in.bcf> [REGION...]\n\
 \n\
 Output options:\n\
     -G, --drop-genotypes              drop individual genotype information\n\
+    -f, --apply-filters LIST          require at least one listed FILTER string\n\
     -g, --genotype [^]hom|het|miss    require or exclude genotype class\n\
     -h, --header-only                 print only the header in VCF output\n\
     -H, --no-header                   suppress the header in VCF output\n\
@@ -101,6 +102,7 @@ struct RunOptions<'a> {
     targets: &'a [Region],
     targets_exclude: bool,
     targets_overlap: RegionOverlap,
+    apply_filters: Option<Vec<String>>,
     type_filter: Option<TypeFilter>,
     type_filter_exclude: bool,
     min_alleles: Option<usize>,
@@ -401,6 +403,23 @@ fn parse_genotype_filter(raw: &str) -> io::Result<GenotypeFilter> {
     Ok(GenotypeFilter { class, exclude })
 }
 
+fn parse_apply_filters(raw: &str) -> io::Result<Vec<String>> {
+    let filters = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if filters.is_empty() {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing FILTER value",
+        ))
+    } else {
+        Ok(filters)
+    }
+}
+
 impl OutputKind {
     fn parse(s: &str) -> Option<(Self, Option<u32>)> {
         if s.is_empty() {
@@ -432,6 +451,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("output-file", HasArg::Required, b'o' as i32),
         LongOpt::new("output-type", HasArg::Required, b'O' as i32),
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
+        LongOpt::new("apply-filters", HasArg::Required, b'f' as i32),
         LongOpt::new("genotype", HasArg::Required, b'g' as i32),
         LongOpt::new("known", HasArg::None, b'k' as i32),
         LongOpt::new("min-alleles", HasArg::Required, b'm' as i32),
@@ -470,6 +490,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
+    let mut apply_filters = None;
     let mut type_filter = None;
     let mut type_filter_exclude = false;
     let mut min_alleles = None;
@@ -483,7 +504,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:g:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:f:g:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -521,6 +542,16 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                                     &format!("invalid compression level \"{raw}\"")
                                 )
                             );
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'f' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_apply_filters(raw) {
+                        Ok(filters) => apply_filters = Some(filters),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
                             return ExitCode::FAILURE;
                         }
                     }
@@ -787,6 +818,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         targets: &targets,
         targets_exclude,
         targets_overlap,
+        apply_filters,
         type_filter,
         type_filter_exclude,
         min_alleles,
@@ -823,6 +855,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
     let has_line_filters = options.type_filter.is_some()
+        || options.apply_filters.is_some()
         || options.min_alleles.is_some()
         || options.max_alleles.is_some()
         || options.phased_filter.is_some()
@@ -1111,6 +1144,7 @@ fn write_sample_subset_bcf<W: Write>(
         targets: options.targets,
         targets_exclude: options.targets_exclude,
         targets_overlap: options.targets_overlap,
+        apply_filters: options.apply_filters.clone(),
         type_filter: options.type_filter,
         type_filter_exclude: options.type_filter_exclude,
         min_alleles: options.min_alleles,
@@ -1289,12 +1323,35 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         contig,
         pos,
         fields,
-    ) && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
+    ) && filter_line_matches(fields, options.apply_filters.as_deref())
+        && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
         && known_line_matches(fields, options.known_filter)
         && phased_line_matches(fields, options.phased_filter)
         && uncalled_line_matches(fields, options.uncalled_filter)
         && genotype_line_matches(fields, options.genotype_filter)
         && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn filter_line_matches(fields: &[&str], apply_filters: Option<&[String]>) -> bool {
+    let Some(filters) = apply_filters else {
+        return true;
+    };
+    let Some(value) = fields.get(6) else {
+        return false;
+    };
+    filters
+        .iter()
+        .any(|filter| filter_field_contains(value, filter))
+}
+
+fn filter_field_contains(value: &str, wanted: &str) -> bool {
+    if value == wanted {
+        return true;
+    }
+    if value == "." || value == "PASS" {
+        return false;
+    }
+    value.split(';').any(|item| item == wanted)
 }
 
 fn genotype_line_matches(fields: &[&str], genotype_filter: Option<GenotypeFilter>) -> bool {
