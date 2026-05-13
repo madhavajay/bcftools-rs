@@ -1,7 +1,8 @@
 //! HTSlib write-mode and verbosity helpers.
 //!
 //! Ports of `version.c::hts_bcf_wmode`, `hts_bcf_wmode2`, `set_wmode`,
-//! `apply_verbosity`, `parse_overlap_option`, and `write_index_parse`.
+//! `init_index`, `init_index2`, `apply_verbosity`, `parse_overlap_option`,
+//! `write_index_parse`, and `reheader.c::init_tmp_prefix`.
 //!
 //! These are the mode-string conventions the rest of bcftools speaks:
 //!
@@ -11,6 +12,9 @@
 //! | `wz` | bgzf-compressed VCF      |
 //! | `wbu`| uncompressed BCF         |
 //! | `wb` | compressed BCF (default) |
+
+use std::env;
+use std::path::PathBuf;
 
 /// HTSlib file-type bits, mirroring `bcftools.h:44-50`.
 pub mod file_type {
@@ -43,6 +47,37 @@ pub const HTS_FMT_CSI: i32 = 0;
 /// HTSlib's `HTS_FMT_CSI` is 0, so callers cannot use the format value alone
 /// as a boolean flag — upstream layers an extra `128` bit on top.
 pub const WRITE_INDEX_ENABLED_BIT: i32 = 128;
+
+/// Variant output format needed for `init_index2`'s TBI-vs-CSI decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariantOutputFormat {
+    /// VCF text output, optionally bgzf-compressed.
+    Vcf,
+    /// BCF binary output.
+    Bcf,
+}
+
+/// Index initialization plan produced by [`init_index2`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexInit {
+    /// Path where the index should be written.
+    pub index_path: PathBuf,
+    /// Minimum interval shift. `0` selects TBI; `14` is bcftools' default CSI.
+    pub min_shift: u8,
+}
+
+/// Error returned when an index was requested but no output path can be
+/// associated with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitIndexError;
+
+impl std::fmt::Display for InitIndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("index requested for stdout or an empty output path")
+    }
+}
+
+impl std::error::Error for InitIndexError {}
 
 /// Port of `hts_bcf_wmode`.
 pub fn hts_bcf_wmode(file_type: i32) -> &'static str {
@@ -122,6 +157,70 @@ pub fn set_wmode(file_type: i32, fname: Option<&str>, clevel: i32) -> Result<Str
     }
 }
 
+/// Port of `init_tmp_prefix`.
+///
+/// The returned string is intended to be passed to a later mkstemp-style call,
+/// so it includes the literal `XXXXXX` suffix expected by upstream.
+pub fn init_tmp_prefix(tmp_prefix: Option<&str>) -> String {
+    match tmp_prefix {
+        Some(prefix) => format!("{prefix}XXXXXX"),
+        None => {
+            let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{tmpdir}/bcftools.XXXXXX")
+        }
+    }
+}
+
+/// Port of the bcftools-specific planning part of `init_index2`.
+///
+/// C bcftools immediately passes this plan to `bcf_idx_init`. In Rust, the
+/// low-level index writer is format-specific, so this helper centralizes the
+/// upstream filename and TBI/CSI decisions for callers to execute.
+pub fn init_index2(
+    fname: Option<&str>,
+    idx_fmt: i32,
+    output_format: VariantOutputFormat,
+) -> Result<Option<IndexInit>, InitIndexError> {
+    if idx_fmt == 0 {
+        return Ok(None);
+    }
+
+    let mut min_shift = if idx_fmt & 127 == HTS_FMT_TBI && output_format == VariantOutputFormat::Vcf
+    {
+        0
+    } else {
+        14
+    };
+    let idx_suffix = if min_shift == 0 { "tbi" } else { "csi" };
+
+    let fname = fname.ok_or(InitIndexError)?;
+    if fname.is_empty() || fname == "-" {
+        return Err(InitIndexError);
+    }
+
+    let index_path = if let Some((_, idx_path)) = fname.split_once(HTS_IDX_DELIM) {
+        if idx_path.ends_with(".tbi") {
+            min_shift = 0;
+        }
+        PathBuf::from(idx_path)
+    } else {
+        PathBuf::from(format!("{fname}.{idx_suffix}"))
+    };
+
+    Ok(Some(IndexInit {
+        index_path,
+        min_shift,
+    }))
+}
+
+/// Rust-facing default-CSI wrapper for [`init_index2`].
+pub fn init_index(
+    fname: Option<&str>,
+    output_format: VariantOutputFormat,
+) -> Result<Option<IndexInit>, InitIndexError> {
+    init_index2(fname, WRITE_INDEX_ENABLED_BIT | HTS_FMT_CSI, output_format)
+}
+
 /// Error returned by [`apply_verbosity`] when the input is not a non-negative
 /// integer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,11 +236,16 @@ impl std::error::Error for InvalidVerbosity {}
 
 /// Port of `apply_verbosity`.
 ///
-/// Returns `Ok(level)` on a valid non-negative integer string. Levels above 3
-/// are treated as a tracing dial in upstream; we round-trip the value so a
-/// future logging bridge can apply it.
+/// Returns `Ok(level)` on a valid non-negative integer string and forwards it
+/// to `htslib-rs::log_compat`, mirroring bcftools updating HTSlib's global
+/// `hts_verbose` setting.
 pub fn apply_verbosity(s: &str) -> Result<u32, InvalidVerbosity> {
-    s.parse::<u32>().map_err(|_| InvalidVerbosity)
+    let level = s.parse::<i32>().map_err(|_| InvalidVerbosity)?;
+    if level < 0 {
+        return Err(InvalidVerbosity);
+    }
+    htslib_rs::log_compat::set_hts_verbose(level);
+    Ok(level as u32)
 }
 
 /// Port of `parse_overlap_option`.
@@ -258,10 +362,93 @@ mod tests {
     }
 
     #[test]
+    fn init_tmp_prefix_matches_upstream_shapes() {
+        assert_eq!(init_tmp_prefix(Some("work/tmp.")), "work/tmp.XXXXXX");
+
+        unsafe {
+            env::set_var("TMPDIR", "/var/tmp/bcftools-rs-test");
+        }
+        assert_eq!(
+            init_tmp_prefix(None),
+            "/var/tmp/bcftools-rs-test/bcftools.XXXXXX"
+        );
+        unsafe {
+            env::remove_var("TMPDIR");
+        }
+    }
+
+    #[test]
+    fn init_index2_plans_default_csi() {
+        assert_eq!(
+            init_index(Some("out.bcf"), VariantOutputFormat::Bcf).unwrap(),
+            Some(IndexInit {
+                index_path: PathBuf::from("out.bcf.csi"),
+                min_shift: 14,
+            })
+        );
+        assert_eq!(
+            init_index2(Some("out.bcf"), 0, VariantOutputFormat::Bcf).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn init_index2_uses_tbi_only_for_vcf_output() {
+        let tbi = WRITE_INDEX_ENABLED_BIT | HTS_FMT_TBI;
+        assert_eq!(
+            init_index2(Some("out.vcf.gz"), tbi, VariantOutputFormat::Vcf).unwrap(),
+            Some(IndexInit {
+                index_path: PathBuf::from("out.vcf.gz.tbi"),
+                min_shift: 0,
+            })
+        );
+        assert_eq!(
+            init_index2(Some("out.bcf"), tbi, VariantOutputFormat::Bcf).unwrap(),
+            Some(IndexInit {
+                index_path: PathBuf::from("out.bcf.csi"),
+                min_shift: 14,
+            })
+        );
+    }
+
+    #[test]
+    fn init_index2_honors_explicit_index_suffix() {
+        let csi = WRITE_INDEX_ENABLED_BIT | HTS_FMT_CSI;
+        assert_eq!(
+            init_index2(
+                Some("out.vcf.gz##idx##custom/path/out.tbi"),
+                csi,
+                VariantOutputFormat::Vcf
+            )
+            .unwrap(),
+            Some(IndexInit {
+                index_path: PathBuf::from("custom/path/out.tbi"),
+                min_shift: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn init_index2_rejects_stdout_like_paths() {
+        let csi = WRITE_INDEX_ENABLED_BIT | HTS_FMT_CSI;
+        assert!(init_index2(None, csi, VariantOutputFormat::Vcf).is_err());
+        assert!(init_index2(Some(""), csi, VariantOutputFormat::Vcf).is_err());
+        assert!(init_index2(Some("-"), csi, VariantOutputFormat::Vcf).is_err());
+    }
+
+    #[test]
     fn apply_verbosity_accepts_nonneg_ints() {
         assert_eq!(apply_verbosity("0").unwrap(), 0);
         assert_eq!(apply_verbosity("4").unwrap(), 4);
         assert!(apply_verbosity("-1").is_err());
         assert!(apply_verbosity("abc").is_err());
+    }
+
+    #[test]
+    fn apply_verbosity_updates_htslib_rs_log_level() {
+        apply_verbosity("4").unwrap();
+        assert_eq!(htslib_rs::log_compat::hts_verbose(), 4);
+        apply_verbosity("3").unwrap();
+        assert_eq!(htslib_rs::log_compat::hts_verbose(), 3);
     }
 }

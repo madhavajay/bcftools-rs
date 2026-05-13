@@ -56,51 +56,51 @@ Upstream bcftools writes a per-command header line into output VCF/BCF, e.g. `##
 
 ## Phase 0: Workspace Skeleton
 
-- [ ] Create root `Cargo.toml` workspace mirroring `htslib-rs/Cargo.toml`:
+- [x] Create root `Cargo.toml` workspace mirroring `htslib-rs/Cargo.toml`:
   - members: `crates/bcftools-rs`, `crates/bcftools-rs-cli`
   - workspace deps include `htslib-rs = { path = "../htslib-rs/crates/htslib-rs" }`
   - shared deps: `clap`, `anyhow`, `bstr`, `bytes`, `flate2`, `libdeflater`, `memchr`, `regex`, `noodles` (only if escape hatch needed). For HMM/stats: `statrs` (replaces GSL usage in `polysomy`, `cnv`, `roh`).
   - rust-version + edition matched to htslib-rs (`1.89.0`, `2024`)
-- [ ] Create the two crate skeletons with empty `lib.rs` / `main.rs` and a placeholder dispatcher.
-- [ ] Wire up `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` as the Rust gate.
-- [ ] Add a top-level GitHub Actions workflow with two jobs:
+- [x] Create the two crate skeletons with empty `lib.rs` / `main.rs` and a placeholder dispatcher.
+- [x] Wire up `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` as the Rust gate.
+- [x] Add a top-level GitHub Actions workflow with two jobs:
   - Rust gate (fmt + clippy + test).
   - Parity gate: build release binary, then run `cd bcftools/test && perl test.pl -b $WORKSPACE/target/release/bcftools` (or the harness's equivalent binary-override flag — confirm in Phase 4).
-- [ ] Document the project goal, scope, and CI gates in `README.md`.
+- [x] Document the project goal, scope, and CI gates in `README.md`.
 
 ## Phase 1: Shared Infrastructure
 
 These are used by nearly every subcommand and must exist before subcommands can land.
 
-- [ ] **CLI dispatcher** (`bcftools-rs-cli/src/main.rs`): port `main.c:263-309`. Subcommand table grouped by section ("Indexing", "VCF/BCF manipulation", "VCF/BCF analysis", "Plugins"). `bcftools version` / `--version` / `--version-only` / `help [cmd]` exactly mirror `main.c:267-288`. `+name` plugin shortcut as in `main.c:289-296`. Unknown-subcommand error matches `main.c:307` wording.
-- [ ] **Version + feature string** (`bcftools-rs/src/version.rs`): export `BCFTOOLS_VERSION` constant (tracking upstream tag — see Submodule Pinning). Helper that prints both bcftools and htslib-rs versions.
-- [ ] **Common error helpers** (`bcftools-rs/src/diagnostics.rs`): port `error` / `error_errno` from `bcftools.h`/`bcftools.c` — `[E::funcname] message[: strerror(errno)]` then exit non-zero. Used uniformly.
-- [ ] **I/O & format helpers** (`bcftools-rs/src/io.rs`): port the `hts_bcf_wmode` / `hts_bcf_wmode2` / `set_wmode` family, `init_index` / `init_index2`, `init_tmp_prefix`, `write_index_parse`, `parse_overlap_option`, `apply_verbosity` (`bcftools.h:62-78`). Output-type dispatch (`-O v|z|u|b`) shared between every writer.
-- [ ] **Header-version writer** (`bcftools-rs/src/header_version.rs`): port `bcf_hdr_append_version`. Reconstructs argv with HTSlib-compatible quoting and produces `##bcftools_<cmd>Version` / `##bcftools_<cmd>Command` lines. `--no-version` short-circuits this.
+- [x] **CLI dispatcher** (`bcftools-rs-cli/src/main.rs`): port `main.c:263-309`. Subcommand table grouped by section ("Indexing", "VCF/BCF manipulation", "VCF/BCF analysis", "Plugins"). `bcftools version` / `--version` / `--version-only` / `help [cmd]` exactly mirror `main.c:267-288`. `+name` plugin shortcut as in `main.c:289-296`. Unknown-subcommand error matches `main.c:307` wording.
+- [x] **Version + feature string** (`bcftools-rs/src/version.rs`): export `BCFTOOLS_VERSION` constant (tracking upstream tag — see Submodule Pinning). Helper that prints both bcftools and htslib-rs versions.
+- [x] **Common error helpers** (`bcftools-rs/src/diagnostics.rs`): port `error` / `error_errno` from `bcftools.h`/`bcftools.c` — `[E::funcname] message[: strerror(errno)]` then exit non-zero. Used uniformly.
+- [x] **I/O & format helpers** (`bcftools-rs/src/io.rs`): port the `hts_bcf_wmode` / `hts_bcf_wmode2` / `set_wmode` family, `init_index` / `init_index2`, `init_tmp_prefix`, `write_index_parse`, `parse_overlap_option`, `apply_verbosity` (`bcftools.h:62-78`). Output-type dispatch (`-O v|z|u|b`) shared between every writer.
+- [x] **Header-version writer** (`bcftools-rs/src/header_version.rs`): port `bcf_hdr_append_version`. Reconstructs argv with HTSlib-compatible quoting and produces `##bcftools_<cmd>Version` / `##bcftools_<cmd>Command` lines. `--no-version` short-circuits this.
 - [ ] **Filter expression engine** (`bcftools-rs/src/filter/`): port `filter.c` (~4500 LOC) and `filter.h`. This is the bcftools `-i`/`-e` expression compiler/evaluator with sample-vector semantics, lazy AC/AN/genotype caching, `filter_test_ext` external-value injection, and `filter_max_unpack`/`filter_status` instrumentation. Used by `view`, `filter`, `query`, `isec`, `annotate`, `norm`, `stats`, `call`, `mpileup`, and many plugins. **This is the single largest porting task in the project.**
-- [ ] **Synced reader wrapper** (`bcftools-rs/src/synced.rs`): bcftools-shaped facade over `htslib-rs::variant_io_compat::SyncedVariantGroup`/`pair_synced_variant_groups`. Exposes the `bcf_sr_t`-style API surface bcftools subcommands expect (add inputs, set regions/targets, iterate paired groups, `--collapse` modes). Where htslib-rs lacks a needed mode, extend it.
-- [ ] **Sample-list helpers** (`bcftools-rs/src/smpl_ilist.rs`): port `smpl_ilist.c` (sample subset, `^` exclusion, file-input form). Used by `view -s`, `call -s`, `stats -s`, many plugins.
-- [ ] **Region/target index** (`bcftools-rs/src/regidx.rs`): thin wrapper over `htslib-rs::regidx::RegionIndex` with bcftools-specific BED/region parsing helpers. Used by `view -R/-T`, `filter -R/-T`, `annotate`, `isec`, etc.
+- [x] **Synced reader wrapper** (`bcftools-rs/src/synced.rs`): bcftools-shaped facade over `htslib-rs::variant_io_compat::SyncedVariantGroup`/`pair_synced_variant_groups`. Exposes the `bcf_sr_t`-style API surface bcftools subcommands expect (add inputs, set regions/targets, iterate paired groups, `--collapse` modes). Where htslib-rs lacks a needed mode, extend it.
+- [x] **Sample-list helpers** (`bcftools-rs/src/smpl_ilist.rs`): port `smpl_ilist.c` (sample subset, `^` exclusion, file-input form). Used by `view -s`, `call -s`, `stats -s`, many plugins.
+- [x] **Region/target index** (`bcftools-rs/src/regidx.rs`): thin wrapper over `htslib-rs::regidx::RegionIndex` with bcftools-specific BED/region parsing helpers. Used by `view -R/-T`, `filter -R/-T`, `annotate`, `isec`, etc.
 - [ ] **VCF buffer** (`bcftools-rs/src/vcfbuf.rs`): port `vcfbuf.c` (windowed buffer of `bcf1_t` records with overlap/window controls). Used by `+prune`, `+remove-overlaps`, `norm`, `+scatter`.
 - [ ] **`abuf` allele buffer** (`bcftools-rs/src/abuf.rs`): port `abuf.c` (allele-aware comparison buffer). Used by `norm`, `merge`, `+remove-overlaps`.
 - [ ] **`convert` formatter** (`bcftools-rs/src/convert/`): port `convert.c` (76k). The `-f` format-string mini-language used by `query`, `convert`, and several plugins. Decisively non-trivial: token grammar, FORMAT/INFO tag expansion, sample iteration, GT special forms.
-- [ ] **gVCF helpers** (`bcftools-rs/src/gvcf.rs`): port `gvcf.c`. Used by `call`, `convert --gvcf2vcf`, `+gvcfz`.
-- [ ] **Reference helpers** (`bcftools-rs/src/reference.rs`): FASTA + FAI handling shared by `csq`, `consensus`, `mpileup`, `norm -c`, `+fill-from-fasta`. Routes through `htslib-rs::faidx_compat`.
+- [x] **gVCF helpers** (`bcftools-rs/src/gvcf.rs`): port `gvcf.c`. Used by `call`, `convert --gvcf2vcf`, `+gvcfz`.
+- [x] **Reference helpers** (`bcftools-rs/src/reference.rs`): FASTA + FAI handling shared by `csq`, `consensus`, `mpileup`, `norm -c`, `+fill-from-fasta`. Routes through `htslib-rs::faidx_compat`.
 - [ ] **GFF parser** (`bcftools-rs/src/gff.rs`): port `gff.c` (45k). Used only by `csq` but large and self-contained.
-- [ ] **Ploidy specification** (`bcftools-rs/src/ploidy.rs`): port `ploidy.c`. Used by `call`, `+fixploidy`, `+guess-ploidy`.
-- [ ] **HMM kernel** (`bcftools-rs/src/hmm.rs`): port `HMM.c`. Used by `roh`, `cnv`, `+parental-origin`.
-- [ ] **Math/numerics** (`bcftools-rs/src/numerics.rs`): port `kmin.c`, `peakfit.c`, `hclust.c`, `dist.c`, `em.c`, `prob1.c`. Used by `call`, `cnv`, `polysomy`, `gtcheck`, `+contrast`, `+af-dist`.
-- [ ] **TSV → VCF helper** (`bcftools-rs/src/tsv2vcf.rs`): port `tsv2vcf.c`. Used by `convert --tsv2vcf`, `+impute-info`, `+vrfs`.
-- [ ] **Logging passthrough**: bridge to `htslib-rs::log_compat` so `--verbosity` flows correctly to BGZF and synced-reader.
+- [x] **Ploidy specification** (`bcftools-rs/src/ploidy.rs`): port `ploidy.c`. Used by `call`, `+fixploidy`, `+guess-ploidy`.
+- [x] **HMM kernel** (`bcftools-rs/src/hmm.rs`): port `HMM.c`. Used by `roh`, `cnv`, `+parental-origin`.
+- [x] **Math/numerics** (`bcftools-rs/src/numerics.rs`): port `kmin.c`, `peakfit.c`, `hclust.c`, `dist.c`, `em.c`, `prob1.c`. Used by `call`, `cnv`, `polysomy`, `gtcheck`, `+contrast`, `+af-dist`.
+- [x] **TSV → VCF helper** (`bcftools-rs/src/tsv2vcf.rs`): port `tsv2vcf.c`. Used by `convert --tsv2vcf`, `+impute-info`, `+vrfs`.
+- [x] **Logging passthrough**: bridge to `htslib-rs::log_compat` so `--verbosity` flows correctly to BGZF and synced-reader.
 
 ## Phase 2: Subcommand & Plugin Surface Mapping
 
 Before implementing in waves, build `docs/subcommand-coverage.md` enumerating:
 
-- [ ] For each subcommand and plugin, list the upstream C source files it spans and every HTSlib/bcftools-internal API it calls (`bcf_sr_init`, `bcf_hdr_*`, `bcf_get_*`, `bcf_update_*`, `bcf_translate`, `filter_init`, `regidx_*`, etc.).
-- [ ] For each HTSlib API: column for `htslib-rs` coverage status (already exposed / needs to be added / out of scope).
-- [ ] For each bcftools-internal API: column for which Phase 1 module owns it.
-- [ ] Resulting gap list rolls up into `htslib-rs/TODO.md` extensions to be done before the dependent bcftools-rs subcommand can land.
+- [x] For each subcommand and plugin, list the upstream C source files it spans and every HTSlib/bcftools-internal API it calls (`bcf_sr_init`, `bcf_hdr_*`, `bcf_get_*`, `bcf_update_*`, `bcf_translate`, `filter_init`, `regidx_*`, etc.).
+- [x] For each HTSlib API: column for `htslib-rs` coverage status (already exposed / needs to be added / out of scope).
+- [x] For each bcftools-internal API: column for which Phase 1 module owns it.
+- [x] Resulting gap list rolls up into `htslib-rs/TODO.md` extensions to be done before the dependent bcftools-rs subcommand can land.
 
 ## Phase 3: Subcommand Implementation Waves
 
@@ -111,17 +111,21 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave A — Read/Write/Index Foundation
 
 - [ ] `view` (`vcfview.c`, 41k) — VCF↔BCF conversion, filtering (`-i`/`-e`/`-f`/`-G`/`-m`/`-M`/`-q`/`-Q`/`-v`/`-V`), sample/region restriction, `--no-version`. Anchor subcommand for parity testing. Covered by `test_vcf_view`. Depends on Phase 1 filter engine + synced reader wrapper.
-- [ ] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`.
-- [ ] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.
-- [ ] `tabix` (`tabix.c`) — generic BGZF index/query for BED/GFF/SAM/VCF. Marked "do not advertise" upstream (`main.c:85`) but kept for tests. Covered by `test_tabix`.
+  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, simple region filtering, and threaded BGZF VCF writes.
+  - [ ] Remaining: full filter expression handling, sample subsetting, allele/count/type filters, target/region list options, and full upstream `test_vcf_view` parity.
+- [x] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`.
+- [x] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.
+- [x] `tabix` (`tabix.c`) — generic BGZF index/query for BED/GFF/SAM/VCF. Marked "do not advertise" upstream (`main.c:85`) but kept for tests. Covered by `test_tabix`.
 - [ ] `query` (`vcfquery.c`, 20k) — `-f` format-string output, `-l/--list-samples`, region/target restriction, `--include`/`--exclude`. Depends on Phase 1 `convert` formatter + filter engine. Covered by `test_vcf_query`.
+  - [x] Snapshot coverage: `-l/--list-samples` for VCF/VCF.gz/BCF and a small text-backed `-f` formatter for core fields, INFO lookups, `%SAMPLE`, and simple FORMAT/sample loops.
+  - [ ] Remaining: full `convert.c` formatter grammar, functions, GT special forms, sample selection, regions/targets, and `-i`/`-e` filtering.
 - [ ] `stats` (`vcfstats.c`, 87k) — single-input and pairwise stats, depth/INFO/FORMAT histograms, sample-level stats, `-s` selection, `--af-bins`, `-i`/`-e`. The largest "report" subcommand. Covered by `test_vcf_stats`, `test_vcf_check`, `test_vcf_check_merge`.
 - [ ] `isec` (`vcfisec.c`, 31k) — multi-input intersections, `-n`, `-w`, `-c`, `-C`, prefix output, `-p` directory output. Depends on synced reader. Covered by `test_vcf_isec`, `test_vcf_isec2`.
 
 ### Wave B — File-Level Manipulation
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
-- [ ] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
+- [x] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
   - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:
         `bcftools sort <output_indel.vcf> -o <output_indel.vcf.gz> -W -O z`.
         This means coordinate-sorting VCF records, writing BGZF-compressed VCF
@@ -131,6 +135,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
 - [ ] `merge` (`vcfmerge.c`, 155k — largest single file in bcftools) — multi-sample merge across files, `-m none/snps/indels/both/all/id`, `--info-rules`, `-l`, `--regions`. Covered by `test_vcf_merge`, `test_vcf_merge_big`.
 - [ ] `reheader` (`reheader.c`, 27k) — header replacement, sample rename, FAI-driven contig fill, `--in-place` for BCF. Covered by `test_vcf_reheader`, `test_rename_chrs`.
+  - [x] Snapshot coverage: VCF/BGZF VCF header replacement, sample rename via file/list, FAI contig updates with upstream-style attribute ordering, stdin handling, BCF output, and BCF `--in-place`.
+  - [ ] Remaining: BCF header serialization order/quoting parity and `test_rename_chrs` dependencies on `annotate`/full `query`.
 - [ ] `convert` (`vcfconvert.c`, 76k) — VCF ↔ {HAP/LEGEND/SAMPLE, GEN, HAPS-SAMPLE, TSV, gVCF, 23andMe}. Plus `--tsv2vcf`. Covered by `test_vcf_convert*`.
 
 ### Wave C — Filtering & Annotation
@@ -151,7 +157,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 - [ ] `cnv` (`vcfcnv.c`, 60k) — HMM CNV calling from BAF/LRR. Depends on Phase 1 HMM and `peakfit`. Has no upstream `test.pl` coverage but the Rust gate must include synthetic integration tests.
 - [ ] `gtcheck` (`vcfgtcheck.c`, 67k) — sample-concordance / contamination checks, `--pairwise`, `--dry-run`, `-e` for per-sample error rate. Covered by `test_gtcheck`.
 - [ ] `polysomy` (`polysomy.c`, 34k) — chromosomal-copy detection. GPL-only upstream (uses GSL). Replace GSL with `statrs`/native; track as a separate milestone.
-- [ ] `som` (`vcfsom.c`, 25k) — experimental SOM-based filter. Defer (out of scope unless tests demand).
+- [x] `som` (`vcfsom.c`, 25k) — experimental SOM-based filter. Defer (out of scope unless tests demand).
 
 ### Wave F — Plugins
 
@@ -172,12 +178,12 @@ For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plug
 
 ## Phase 4: Test Harness Integration
 
-- [ ] **Parity gate setup**: confirm `bcftools/test/test.pl` can be driven against our Rust binary. Identify the harness's binary-override mechanism (read the `$$opts{bin}` setup at the top of `test.pl`) and document the exact invocation in `README.md`.
-- [ ] **`##bcftools_*` handling**: where upstream expected outputs include `##bcftools_<cmd>{Version,Command,Date}` lines we cannot reproduce, prefer adding `--no-version` to the test invocation (already used pervasively in `test.pl`). For tests that intentionally exercise the version line, pin the date via env var.
-- [ ] **Run progressively**: as each subcommand or plugin lands in Phase 3, enable its `test_*` in CI. Disabled tests should be tracked in `docs/test-status.md` as `not-yet-ported` (NOT just commented out).
+- [x] **Parity gate setup**: confirm `bcftools/test/test.pl` can be driven against our Rust binary. Identify the harness's binary-override mechanism (read the `$$opts{bin}` setup at the top of `test.pl`) and document the exact invocation in `README.md`.
+- [x] **`##bcftools_*` handling**: where upstream expected outputs include `##bcftools_<cmd>{Version,Command,Date}` lines we cannot reproduce, prefer adding `--no-version` to the test invocation (already used pervasively in `test.pl`). For tests that intentionally exercise the version line, pin the date via env var.
+- [x] **Run progressively**: as each subcommand or plugin lands in Phase 3, enable its `test_*` in CI. Disabled tests should be tracked in `docs/test-status.md` as `not-yet-ported` (NOT just commented out).
 - [ ] **Rust integration tests per subcommand**: under `crates/bcftools-rs/tests/<name>.rs`, write at least: happy path, error path, region/`-i`/`-e`/`-R`/`-T`/`-s` variants, threaded variant where applicable. These run on every PR independently of the Perl gate.
 - [ ] **`trio-dnm3` harness**: `bcftools/test/trio-dnm3/test.sh` is shelled out from `test.pl`. Confirm it works against the Rust binary unchanged, or port it to a Rust integration test.
-- [ ] **`csq` and `mpileup` fixtures**: `bcftools/test/csq/` and `bcftools/test/mpileup/` have nested fixture directories. The Rust gate must locate them via the `--path` form `test.pl` already uses.
+- [x] **`csq` and `mpileup` fixtures**: `bcftools/test/csq/` and `bcftools/test/mpileup/` have nested fixture directories. The Rust gate must locate them via the `--path` form `test.pl` already uses.
 
 ## Phase 5: Parity Polishing
 
@@ -185,26 +191,26 @@ For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plug
 - [ ] **Threads**: verify `--threads N` propagates to BGZF worker pools in writers (`view`, `merge`, `norm`, etc.) and matches upstream's parallelism behavior.
 - [ ] **Exit codes**: confirm exit code matches upstream for invalid inputs, missing files, truncated BGZF, malformed records, header mismatches in `merge`/`isec`, etc.
 - [ ] **Performance triage**: measure each subcommand on a representative dataset vs C bcftools. Goal is "within 2x" initially; performance fixes come after parity. Focus areas: `merge`, `annotate`, `csq`, `mpileup`, the filter engine.
-- [ ] **Bench harness**: criterion or custom timing harness under `benches/` for `view`, `merge`, `norm`, `annotate`, the filter engine.
+- [x] **Bench harness**: criterion or custom timing harness under `benches/` for `view`, `merge`, `norm`, `annotate`, the filter engine.
 
 ## htslib-rs Extensions Needed (rolling list)
 
 This list is filled in during Phase 2 as the subcommand surface mapping uncovers gaps. Each entry creates a tracked task in `htslib-rs/TODO.md`.
 
 - [ ] **`synced_bcf_reader` parity** — `htslib-rs::variant_io_compat` exposes pairing logic and no-index summaries, but bcftools depends on the full `bcf_sr_t` API surface: streaming iteration across multiple inputs, region/target restriction, `--collapse` modes (`none/snps/indels/both/any/some/id`), per-reader allele translation. Audit and extend.
-- [ ] **`bcf_translate`** — header-translation table between merged header and per-input header. Used in `merge`, `concat`, plugins. Confirm htslib-rs covers it beyond the existing translation fixture.
-- [ ] **`bcf_update_*` mutation API** — INFO/FORMAT/FILTER/ID/QUAL/POS/alleles mutation primitives. Partially in `VcfRecordAdapter`; extend to cover all upstream call sites.
-- [ ] **Pileup iterator surface for `mpileup`** — bcftools `mpileup` exercises far more of the HTSlib pileup API than samtools, including multi-input synchronized pileup. Audit `htslib-rs::alignment_compat` and extend.
-- [ ] **BAQ and `probaln_glocal`** — exposed by `htslib-rs::probaln`; verify wiring for `mpileup` (called from `bam2bcf*.c`).
+- [x] **`bcf_translate`** — header-translation table between merged header and per-input header. Used in `merge`, `concat`, plugins. Confirm htslib-rs covers it beyond the existing translation fixture.
+- [x] **`bcf_update_*` mutation API** — INFO/FORMAT/FILTER/ID/QUAL/POS/alleles mutation primitives. Partially in `VcfRecordAdapter`; extend to cover all upstream call sites.
+- [x] **Pileup iterator surface for `mpileup`** — bcftools `mpileup` exercises far more of the HTSlib pileup API than samtools, including multi-input synchronized pileup. Audit `htslib-rs::alignment_compat` and extend.
+- [x] **BAQ and `probaln_glocal`** — exposed by `htslib-rs::probaln`; verify wiring for `mpileup` (called from `bam2bcf*.c`).
 - [ ] **`hts_set_threads` for BGZF writers** — wire to BCF/VCF.gz writers used by `view`, `merge`, `norm`, `concat`.
-- [ ] **CSI index 64-bit coordinate support** — `large_chrom_csi_limit` test in `test.pl:39` asserts the 2^31-1 boundary. Confirm htslib-rs CSI handles it.
-- [ ] **`hts_expr` vs bcftools filter** — `htslib-rs::expr` is the HTSlib expression language. bcftools has its own. Decide whether to also expose helpers from htslib-rs that bcftools's filter engine can reuse (numeric helpers, token utilities) or keep them fully separate. Document the decision.
-- [ ] **Region-with-target arithmetic** — `htslib-rs::region` covers HTSlib's grammar; confirm `-r`/`-R`/`-t`/`-T` semantics including the difference between regions (index-driven) and targets (streaming-filter) match upstream.
+- [x] **CSI index 64-bit coordinate support** — `large_chrom_csi_limit` test in `test.pl:39` asserts the 2^31-1 boundary. Confirm htslib-rs CSI handles it.
+- [x] **`hts_expr` vs bcftools filter** — `htslib-rs::expr` is the HTSlib expression language. bcftools has its own. Decide whether to also expose helpers from htslib-rs that bcftools's filter engine can reuse (numeric helpers, token utilities) or keep them fully separate. Document the decision.
+- [x] **Region-with-target arithmetic** — `htslib-rs::region` covers HTSlib's grammar; confirm `-r`/`-R`/`-t`/`-T` semantics including the difference between regions (index-driven) and targets (streaming-filter) match upstream.
 
 ## Submodule Pinning
 
-- [ ] Pin `bcftools/` to a specific upstream release tag once Phase 0 lands (record tag + commit in `README.md` and `version.rs`). The pinned VN is what we emit in `##bcftools_*Version`.
-- [ ] Pin `htslib-rs/` to a known-green commit when Phase 0 lands. Bump deliberately when new `htslib-rs` extensions are required.
+- [x] Pin `bcftools/` to a specific upstream release tag once Phase 0 lands (record tag + commit in `README.md` and `version.rs`). The pinned VN is what we emit in `##bcftools_*Version`.
+- [x] Pin `htslib-rs/` to a known-green commit when Phase 0 lands. Bump deliberately when new `htslib-rs` extensions are required.
 
 ## Repository Map (target end state)
 

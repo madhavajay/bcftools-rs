@@ -26,9 +26,9 @@ subcommands:
 
 | Subcommand | Coverage |
 | --- | --- |
-| `bcftools head` | Full upstream surface: `-h N`, `-n N`, `-s N`, `-v N`. VCF + VCF.gz + BCF input. |
-| `bcftools index` | BCF→CSI and VCF.gz→CSI/TBI. `-c`/`-t`/`-m`/`-o`/`-f`/`-v`. `--stats`/`--nrecords` deferred. |
-| `bcftools view` | I/O backbone: `-O v\|z\|u\|b`, `-o`, `-h` (header-only), `-H` (no-header), `--no-version`. Filtering, sample subsetting, region restriction not yet wired. |
+| `bcftools head` | Full upstream surface: `-h N`, `-n N`, `-s N`, `-v N`. VCF + VCF.gz + BCF input, including stdin. |
+| `bcftools index` | BCF→CSI and VCF.gz→CSI/TBI. `-c`/`-t`/`-m`/`-o`/`-f`/`-v`, plus `--stats`/`--nrecords` from existing CSI/TBI metadata. |
+| `bcftools view` | I/O backbone: `-O v\|z\|u\|b`, `-o`, `-h` (header-only), `-H` (no-header), `--no-version`, positional `CHROM` / `CHROM:START-END` region filtering. Filtering expressions and sample subsetting not yet wired. |
 
 Subcommand parity beyond Wave A is tracked in [`TODO.md`](TODO.md).
 
@@ -50,6 +50,26 @@ cargo test -p bcftools-rs -p bcftools-rs-cli
 
 This produces a `bcftools` binary at `target/debug/bcftools` (or `target/release/bcftools`).
 
+Run selected upstream Perl parity tests against the Rust binary:
+
+```sh
+cargo build --release -p bcftools-rs-cli
+scripts/run-bcftools-test-pl.sh -f '^test_vcf_head$'
+```
+
+The upstream harness does not expose a direct `--bin` option for `bcftools`
+itself. It derives `$$opts{bin}` from the parent of `bcftools/test`, so the
+wrapper stages the expected layout with a real `test/` directory containing
+symlinked upstream fixtures and `bcftools` symlinked to the Rust binary. Pass
+`-f` with one or more `test.pl` function names or regular expressions to run
+only the subcommands currently ported; anchor names when needed because the
+harness matches function names as regexes.
+
+Rust integration tests locate upstream fixtures relative to
+`CARGO_MANIFEST_DIR` at `../../bcftools/test/<name>`, including nested fixture
+sets such as `csq/` and `mpileup/`. This mirrors `test.pl`'s `$$opts{path}`
+substitution for arguments containing `{PATH}`.
+
 ## CI
 
 Two jobs run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)),
@@ -58,17 +78,19 @@ mirroring the split used by `htslib-rs`:
 - **Rust gate** — `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   and `cargo test --workspace`. Includes integration tests that run the built
   `bcftools` binary as a subprocess against fixtures from `bcftools/test/`.
-- **bcftools C tests** — builds the upstream bcftools (and HTSlib it depends
-  on) and runs `make test`. This is the parity reference used to regenerate
-  expected fixtures locally; the same fixture corpus is what the Rust binary
-  is diffed against in the future Perl-driven parity gate.
+- **bcftools Perl parity tests** — builds the Rust release binary and runs the
+  enabled upstream `bcftools/test/test.pl` slices through
+  `scripts/run-bcftools-test-pl.sh`. Enabled and disabled Perl functions are
+  tracked in [`docs/test-status.md`](docs/test-status.md).
 
 ## Submodule pinning
 
-- **`bcftools/`** tracks upstream tag `1.23.1` (the version emitted in
-  `##bcftools_<cmd>Version=...+htslib-...` header lines).
-- **`htslib-rs/`** tracks the `main` branch. The two consumer-driven
-  extensions added for bcftools-rs are merged upstream:
+- **`bcftools/`** is pinned at upstream tag `1.23.1`, commit
+  `ff1604d4622dc715a921f8e21e0e5d88438d10d1`. This is the version emitted in
+  `##bcftools_<cmd>Version=...+htslib-...` header lines.
+- **`htslib-rs/`** is pinned at commit
+  `56ddf62df73efe96a3a906081ca50fbc3a350b70` on `main`. The two
+  consumer-driven extensions added for bcftools-rs are merged upstream:
   - `index_compat::build_vcf_csi_from_path` /
     `build_vcf_csi_from_path_with_min_shift` /
     `build_vcf_tbi_from_path` — index existing BGZF-compressed VCFs without
@@ -99,6 +121,8 @@ These are decided and shape every subcommand and plugin:
 - **`--no-version`** suppresses the `##bcftools_<cmd>{Version,Command}` lines
   exactly like upstream — `bcftools/test/test.pl` uses this pervasively, so
   the suppression path is a hard requirement.
+- Tests that intentionally keep `##bcftools_<cmd>Command` lines can pin the
+  generated `Date=` field with `BCFTOOLS_RS_FIXED_TIME=<unix-seconds>`.
 
 ## License
 

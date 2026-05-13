@@ -6,7 +6,7 @@
 //! cargo test harness over stdout.
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn fixture_path(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -33,15 +33,16 @@ fn bin_path() -> PathBuf {
 }
 
 fn ensure_binary_built() {
-    let p = bin_path();
-    if !p.exists() {
-        let status = Command::new(env!("CARGO"))
-            .args(["build", "-p", "bcftools-rs-cli"])
-            .status()
-            .expect("cargo build");
-        assert!(status.success(), "failed to build bcftools-rs-cli");
-        assert!(p.exists(), "binary not at expected path: {}", p.display());
-    }
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "-p", "bcftools-rs-cli"])
+        .status()
+        .expect("cargo build");
+    assert!(status.success(), "failed to build bcftools-rs-cli");
+    assert!(
+        bin_path().exists(),
+        "binary not at expected path: {}",
+        bin_path().display()
+    );
 }
 
 fn run(args: &[&str]) -> (String, String, i32) {
@@ -50,6 +51,30 @@ fn run(args: &[&str]) -> (String, String, i32) {
         .args(args)
         .output()
         .expect("spawn bcftools");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
+fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
+    ensure_binary_built();
+    let mut child = Command::new(bin_path())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bcftools");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input)
+            .expect("write stdin");
+    }
+    let out = child.wait_with_output().expect("wait bcftools");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     (stdout, stderr, out.status.code().unwrap_or(-1))
@@ -111,6 +136,46 @@ fn head_with_s_emits_chrom_line_then_records() {
 }
 
 #[test]
+fn head_reads_plain_vcf_from_stdin_without_filename() {
+    let input = std::fs::read(fixture_path("mpileup.2.vcf")).unwrap();
+    let (out, err, code) = run_with_stdin(&["head", "-s2", "-h2"], &input);
+    assert_eq!(code, 0, "head stdin failed: {err}");
+    assert!(out.starts_with("##fileformat=VCFv4.2\n"));
+    assert!(
+        out.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsample1\tsample2\n")
+    );
+    let records: Vec<_> = out
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert!(records[0].starts_with("chr1\t212740\t"));
+}
+
+#[test]
+fn head_reads_bcf_from_stdin_pipe() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("mpileup.2.vcf");
+    let bcf = tmp.path().join("mpileup.2.bcf");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob failed: {err}");
+
+    let data = std::fs::read(&bcf).unwrap();
+    let (out, err, code) = run_with_stdin(&["head", "-s1"], &data);
+    assert_eq!(code, 0, "head BCF stdin failed: {err}");
+    let expected = std::fs::read_to_string(fixture_path("head.2.out")).unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn version_flag_prints_block() {
     let (out, _err, code) = run(&["--version"]);
     assert_eq!(code, 0);
@@ -124,6 +189,28 @@ fn version_only_one_line() {
     assert_eq!(code, 0);
     assert!(out.contains("+htslib-"));
     assert_eq!(out.lines().count(), 1);
+}
+
+#[test]
+fn help_lists_upstream_dispatch_sections() {
+    let (out, _err, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains(" -- Indexing"));
+    assert!(out.contains(" -- VCF/BCF manipulation"));
+    assert!(out.contains(" -- VCF/BCF analysis"));
+    assert!(out.contains(" -- Plugins"));
+    assert!(out.contains("    annotate"));
+    assert!(out.contains("    mpileup"));
+    assert!(out.contains("    plugin"));
+    assert!(!out.contains("    tabix"));
+    assert!(!out.contains("    som"));
+}
+
+#[test]
+fn plugin_shortcut_routes_to_plugin_command() {
+    let (_out, err, code) = run(&["+fill-tags", "--help"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("command 'plugin' is not yet implemented"));
 }
 
 #[test]

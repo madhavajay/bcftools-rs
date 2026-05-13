@@ -107,3 +107,83 @@ fn sort_supports_vntyper_compressed_write_index_command_shape() {
         Some("2\t25\t.\tA\tT\t100\tPASS\t.")
     );
 }
+
+#[test]
+fn sort_threads_writes_bgzf_vcf_output() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    let output = dir.path().join("threaded.vcf.gz");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (_out, err, code) = run(&[
+        "sort",
+        "--threads",
+        "2",
+        "-O",
+        "z",
+        "-o",
+        output.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "sort --threads -O z failed: {err}");
+
+    let mut decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(&output).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    let records: Vec<_> = decoded
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(records[0], "1\t10\t.\tA\tC\t100\tPASS\t.");
+    assert_eq!(
+        records.last().copied(),
+        Some("2\t25\t.\tA\tT\t100\tPASS\t.")
+    );
+}
+
+#[test]
+fn sort_threads_rejects_non_integer_argument() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (_out, err, code) = run(&["sort", "--threads", "abc", input.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(err.contains("Could not parse argument: --threads abc"));
+}
+
+#[test]
+fn sort_spills_to_temp_dir_when_max_mem_is_small() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    let temp = dir.path().join("sort-tmp");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (out, err, code) = run(&[
+        "sort",
+        "-m",
+        "1",
+        "-T",
+        temp.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "sort external path failed: {err}");
+
+    let records: Vec<_> = out
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(
+        records,
+        [
+            "1\t10\t.\tA\tC\t100\tPASS\t.",
+            "1\t10\t.\tA\tG\t100\tPASS\t.",
+            "1\t20\t.\tC\tT\t100\tPASS\t.",
+            "2\t15\t.\tT\tA\t100\tPASS\t.",
+            "2\t25\t.\tA\tT\t100\tPASS\t.",
+        ]
+    );
+    assert!(temp.exists(), "temp directory was not created");
+    let leftovers = std::fs::read_dir(&temp).unwrap().count();
+    assert_eq!(leftovers, 0, "temporary chunk files were not cleaned up");
+}

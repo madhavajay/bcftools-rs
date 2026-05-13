@@ -1,7 +1,8 @@
 //! End-to-end tests for `bcftools_rs::commands::view`.
 
+use std::io::Read as _;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn fixture_path(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -24,14 +25,11 @@ fn bin_path() -> PathBuf {
 }
 
 fn ensure_binary_built() {
-    let p = bin_path();
-    if !p.exists() {
-        let status = Command::new(env!("CARGO"))
-            .args(["build", "-p", "bcftools-rs-cli"])
-            .status()
-            .expect("cargo build");
-        assert!(status.success(), "failed to build bcftools-rs-cli");
-    }
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "-p", "bcftools-rs-cli"])
+        .status()
+        .expect("cargo build");
+    assert!(status.success(), "failed to build bcftools-rs-cli");
 }
 
 fn run(args: &[&str]) -> (String, String, i32) {
@@ -40,6 +38,30 @@ fn run(args: &[&str]) -> (String, String, i32) {
         .args(args)
         .output()
         .expect("spawn bcftools");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
+fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
+    ensure_binary_built();
+    let mut child = Command::new(bin_path())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bcftools");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input)
+            .expect("write stdin");
+    }
+    let out = child.wait_with_output().expect("wait bcftools");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     (stdout, stderr, out.status.code().unwrap_or(-1))
@@ -58,6 +80,18 @@ fn view_text_round_trip_emits_all_records() {
     assert_eq!(record_lines.len(), 21);
     // First record is `1\t105\t.\tTAAACCCTA\t...`
     assert!(record_lines[0].starts_with("1\t105\t"));
+}
+
+#[test]
+fn view_reads_plain_vcf_from_stdin_without_filename() {
+    let input = std::fs::read(fixture_path("aa.vcf")).unwrap();
+    let (out, err, code) = run_with_stdin(&["view", "--no-version"], &input);
+    assert_eq!(code, 0, "view stdin failed: {err}");
+    let record_lines: Vec<_> = out
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(record_lines.len(), 21);
 }
 
 #[test]
@@ -82,6 +116,88 @@ fn view_no_header_drops_header() {
     assert!(header_lines.is_empty(), "header leaked: {header_lines:?}");
     let record_lines: Vec<_> = out.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(record_lines.len(), 21);
+}
+
+#[test]
+fn view_region_filters_by_chrom_and_position_interval() {
+    let path = fixture_path("aa.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        path.to_str().unwrap(),
+        "20:80-95",
+    ]);
+    assert_eq!(code, 0, "view region failed: {err}");
+    let records: Vec<_> = out.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        records,
+        [
+            "20\t81\t.\tA\tC\t999\tPASS\t.",
+            "20\t84\t.\tG\tT\t999\tPASS\t.",
+            "20\t95\t.\tT\tA\t999\tPASS\t.",
+            "20\t95\t.\tTCACCG\tAAAAAA\t999\tPASS\t.",
+        ]
+    );
+}
+
+#[test]
+fn view_region_filters_bcf_input() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("aa.vcf");
+    let bcf = tmp.path().join("aa.bcf");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob failed: {err}");
+
+    let (out, err, code) = run(&["view", "--no-version", "-H", bcf.to_str().unwrap(), "20"]);
+    assert_eq!(code, 0, "view BCF region failed: {err}");
+    let records: Vec<_> = out.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(records.len(), 12);
+    assert!(records.iter().all(|line| line.starts_with("20\t")));
+}
+
+#[test]
+fn view_threads_writes_bgzf_vcf_output() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("aa.vcf");
+    let output = tmp.path().join("aa.vcf.gz");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "--threads",
+        "2",
+        "-Oz",
+        "-o",
+        output.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view --threads -Oz failed: {err}");
+
+    let mut decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(output).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    let records = decoded
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .count();
+    assert_eq!(records, 21);
+}
+
+#[test]
+fn view_threads_rejects_non_integer_argument() {
+    let path = fixture_path("aa.vcf");
+    let (_out, err, code) = run(&["view", "--threads", "abc", path.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(err.contains("Could not parse argument: --threads abc"));
 }
 
 #[test]

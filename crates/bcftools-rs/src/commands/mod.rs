@@ -12,5 +12,8 @@
 
 pub mod head;
 pub mod index;
+pub mod query;
+pub mod reheader;
 pub mod sort;
+pub mod tabix;
 pub mod view;

@@ -13,6 +13,15 @@ use std::process::ExitCode;
 use bcftools_rs::commands;
 use bcftools_rs::version::{version_block, version_only_string};
 
+fn unsupported(argv: &[OsString]) -> ExitCode {
+    let name = argv
+        .first()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_else(|| "<unknown>".into());
+    eprintln!("[E::main] command '{name}' is not yet implemented");
+    ExitCode::FAILURE
+}
+
 struct Cmd {
     func: Option<fn(&[OsString]) -> ExitCode>,
     alias: &'static str,
@@ -31,9 +40,29 @@ const CMDS: &[Cmd] = &[
         help: "index VCF/BCF files",
     },
     Cmd {
+        func: Some(commands::tabix::main),
+        alias: "tabix",
+        help: "-tabix for BGZF'd BED, GFF, SAM, VCF and more",
+    },
+    Cmd {
         func: None,
         alias: "VCF/BCF manipulation",
         help: "",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "annotate",
+        help: "annotate and edit VCF/BCF files",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "concat",
+        help: "concatenate VCF/BCF files from the same set of samples",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "convert",
+        help: "convert VCF/BCF files to different formats and back",
     },
     Cmd {
         func: Some(commands::head::main),
@@ -41,14 +70,104 @@ const CMDS: &[Cmd] = &[
         help: "view VCF/BCF file headers",
     },
     Cmd {
+        func: Some(unsupported),
+        alias: "isec",
+        help: "intersections of VCF/BCF files",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "merge",
+        help: "merge VCF/BCF files files from non-overlapping sample sets",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "norm",
+        help: "left-align and normalize indels",
+    },
+    Cmd {
+        func: Some(commands::query::main),
+        alias: "query",
+        help: "transform VCF/BCF into user-defined formats",
+    },
+    Cmd {
+        func: Some(commands::reheader::main),
+        alias: "reheader",
+        help: "modify VCF/BCF header, change sample names",
+    },
+    Cmd {
         func: Some(commands::sort::main),
         alias: "sort",
-        help: "sort VCF/BCF files",
+        help: "sort VCF/BCF file",
     },
     Cmd {
         func: Some(commands::view::main),
         alias: "view",
         help: "VCF/BCF conversion, view, subset and filter VCF/BCF files",
+    },
+    Cmd {
+        func: None,
+        alias: "VCF/BCF analysis",
+        help: "",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "call",
+        help: "SNP/indel calling",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "consensus",
+        help: "create consensus sequence by applying VCF variants",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "cnv",
+        help: "HMM CNV calling",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "csq",
+        help: "call variation consequences",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "filter",
+        help: "filter VCF/BCF files using fixed thresholds",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "gtcheck",
+        help: "check sample concordance, detect sample swaps and contamination",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "mpileup",
+        help: "multi-way pileup producing genotype likelihoods",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "roh",
+        help: "identify runs of autozygosity (HMM)",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "stats",
+        help: "produce VCF/BCF stats",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "som",
+        help: "-filter using Self-Organized Maps (experimental)",
+    },
+    Cmd {
+        func: None,
+        alias: "Plugins",
+        help: "",
+    },
+    Cmd {
+        func: Some(unsupported),
+        alias: "plugin",
+        help: "user-defined plugins",
     },
 ];
 
@@ -60,7 +179,7 @@ fn usage<W: Write>(out: &mut W) -> std::io::Result<()> {
     )?;
     writeln!(
         out,
-        "Version: {} (using htslib-rs {})",
+        "Version: {} (using htslib {})",
         bcftools_rs::version::BCFTOOLS_VERSION,
         bcftools_rs::version::HTSLIB_RS_VERSION
     )?;
@@ -88,7 +207,15 @@ fn usage<W: Write>(out: &mut W) -> std::io::Result<()> {
         out,
         " Most commands accept VCF, bgzipped VCF, and BCF with the file type detected"
     )?;
-    writeln!(out, " automatically even when streaming from a pipe.")?;
+    writeln!(
+        out,
+        " automatically even when streaming from a pipe. Indexed VCF and BCF will work"
+    )?;
+    writeln!(
+        out,
+        " in all situations. Un-indexed VCF and BCF and streams will work in most but"
+    )?;
+    writeln!(out, " not all situations.")?;
     writeln!(out)?;
     Ok(())
 }
@@ -126,12 +253,11 @@ fn main() -> ExitCode {
         }
         _ if arg1.starts_with('+') => {
             // `bcftools +name ...` → `bcftools plugin name ...`
-            // Plugin support is deferred; emit a clear unsupported message.
-            eprintln!(
-                "[E::main] plugin dispatch '+{}' is not yet implemented",
-                &arg1[1..]
-            );
-            return ExitCode::FAILURE;
+            let mut sub_argv = Vec::with_capacity(argv.len() + 1);
+            sub_argv.push(OsString::from("plugin"));
+            sub_argv.push(OsString::from(&arg1[1..]));
+            sub_argv.extend(argv.iter().skip(2).cloned());
+            return dispatch(&sub_argv);
         }
         _ => {}
     }
