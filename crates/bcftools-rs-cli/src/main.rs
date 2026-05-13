@@ -41,6 +41,11 @@ const CMDS: &[Cmd] = &[
         help: "view VCF/BCF file headers",
     },
     Cmd {
+        func: Some(commands::sort::main),
+        alias: "sort",
+        help: "sort VCF/BCF files",
+    },
+    Cmd {
         func: Some(commands::view::main),
         alias: "view",
         help: "VCF/BCF conversion, view, subset and filter VCF/BCF files",

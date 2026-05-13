@@ -122,6 +122,12 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
 - [ ] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
+  - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:
+        `bcftools sort <output_indel.vcf> -o <output_indel.vcf.gz> -W -O z`.
+        This means coordinate-sorting VCF records, writing BGZF-compressed VCF
+        output for `-O z`, and honoring `-W` by creating the matching VCF index.
+        Full external-sort parity can come later, but this small-file path
+        unblocks the BioScript VNtyper port.
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
 - [ ] `merge` (`vcfmerge.c`, 155k — largest single file in bcftools) — multi-sample merge across files, `-m none/snps/indels/both/all/id`, `--info-rules`, `-l`, `--regions`. Covered by `test_vcf_merge`, `test_vcf_merge_big`.
 - [ ] `reheader` (`reheader.c`, 27k) — header replacement, sample rename, FAI-driven contig fill, `--in-place` for BCF. Covered by `test_vcf_reheader`, `test_rename_chrs`.
