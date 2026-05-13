@@ -111,8 +111,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave A — Read/Write/Index Foundation
 
 - [ ] `view` (`vcfview.c`, 41k) — VCF↔BCF conversion, filtering (`-i`/`-e`/`-f`/`-G`/`-m`/`-M`/`-q`/`-Q`/`-v`/`-V`), sample/region restriction, `--no-version`. Anchor subcommand for parity testing. Covered by `test_vcf_view`. Depends on Phase 1 filter engine + synced reader wrapper.
-  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, simple region filtering, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, text VCF `-G` genotype-column dropping, and threaded BGZF VCF writes.
-  - [ ] Remaining: full filter expression handling, BCF-output sample subsetting, allele/count/type filters, target/region list options, and full upstream `test_vcf_view` parity.
+  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, simple positional region filtering including `-r`/`-R`, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, text VCF `-G` genotype-column dropping, and threaded BGZF VCF writes.
+  - [ ] Remaining: full filter expression handling, BCF-output sample subsetting, allele/count/type filters, target options, overlap-aware indexed region semantics, and full upstream `test_vcf_view` parity.
 - [x] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`.
 - [x] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.
 - [x] `tabix` (`tabix.c`) — generic BGZF index/query for BED/GFF/SAM/VCF. Marked "do not advertise" upstream (`main.c:85`) but kept for tests. Covered by `test_tabix`.

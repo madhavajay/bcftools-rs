@@ -20,7 +20,7 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, BufReader, Read as _, Write};
+use std::io::{self, BufRead as _, BufReader, Read as _, Write};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -46,6 +46,8 @@ Output options:\n\
         --no-version                  do not append version and command line to the header\n\
     -o, --output FILE                 output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
+    -r, --regions REG                 restrict to comma-separated regions\n\
+    -R, --regions-file FILE           restrict to regions listed in a file\n\
     -s, --samples LIST                comma-separated sample list, optionally prefixed with ^\n\
     -S, --samples-file FILE           file of samples, optionally prefixed with ^\n\
 \n";
@@ -99,16 +101,19 @@ impl Region {
             });
         }
 
-        let (start, end) = interval.split_once('-').unwrap_or((interval, ""));
+        let (start, end) = interval
+            .split_once('-')
+            .map(|(start, end)| (start, Some(end)))
+            .unwrap_or((interval, None));
         let start = if start.is_empty() {
             None
         } else {
             Some(parse_region_pos(start, raw)?)
         };
-        let end = if end.is_empty() {
-            None
-        } else {
-            Some(parse_region_pos(end, raw)?)
+        let end = match end {
+            Some("") => None,
+            Some(end) => Some(parse_region_pos(end, raw)?),
+            None => start,
         };
 
         Ok(Self {
@@ -134,6 +139,65 @@ fn parse_region_pos(s: &str, raw_region: &str) -> io::Result<usize> {
             format!("Could not parse region \"{raw_region}\""),
         )
     })
+}
+
+fn extend_regions_from_list(regions: &mut Vec<Region>, raw: &str) -> io::Result<()> {
+    for item in raw.split(',') {
+        let item = item.trim();
+        if !item.is_empty() {
+            regions.push(Region::parse(item)?);
+        }
+    }
+    Ok(())
+}
+
+fn extend_regions_from_file(regions: &mut Vec<Region>, path: &Path) -> io::Result<()> {
+    use crate::regidx::{Parser, parse_bed, parse_tab, parser_for_path};
+
+    let parser = parser_for_path(path);
+    let reader: Box<dyn io::BufRead> = if path
+        .as_os_str()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .ends_with(".gz")
+    {
+        Box::new(io::BufReader::new(flate2::read::MultiGzDecoder::new(
+            File::open(path)?,
+        )))
+    } else {
+        Box::new(io::BufReader::new(File::open(path)?))
+    };
+
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let record = match parser {
+            Parser::Bed => parse_bed(line),
+            _ => parse_tab(line),
+        }
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to parse region line: {e:?}"),
+            )
+        })?;
+        if let Some(record) = record {
+            regions.push(Region {
+                contig: record.seq,
+                start: Some((record.start + 1).try_into().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "region start is out of range")
+                })?),
+                end: Some((record.end + 1).try_into().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "region end is out of range")
+                })?),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, std::num::ParseIntError> {
@@ -174,6 +238,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
         LongOpt::new("header-only", HasArg::None, b'h' as i32),
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
+        LongOpt::new("regions", HasArg::Required, b'r' as i32),
+        LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
         LongOpt::new("samples", HasArg::Required, b's' as i32),
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
@@ -191,8 +257,10 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
+    let mut region_specs = Vec::new();
+    let mut region_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:hHs:S:G", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:hHr:R:s:S:G", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -236,6 +304,16 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                 }
                 v if v == b'h' as i32 => header_only = true,
                 v if v == b'H' as i32 => no_header = true,
+                v if v == b'r' as i32 => {
+                    if let Some(value) = m.value {
+                        region_specs.push(value);
+                    }
+                }
+                v if v == b'R' as i32 => {
+                    if let Some(value) = m.value {
+                        region_files.push(value);
+                    }
+                }
                 v if v == b's' as i32 => {
                     sample_list = m.value;
                     sample_list_is_file = false;
@@ -280,18 +358,31 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         .first()
         .cloned()
         .unwrap_or_else(|| OsString::from("-"));
-    let regions = match positional
+    let mut regions = Vec::new();
+    let parsed_regions = region_specs
+        .iter()
+        .try_for_each(|raw| extend_regions_from_list(&mut regions, raw));
+    if let Err(e) = parsed_regions {
+        eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+        return ExitCode::FAILURE;
+    }
+    for file in &region_files {
+        match extend_regions_from_file(&mut regions, Path::new(file)) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let parsed_positionals = positional
         .iter()
         .skip(1)
-        .map(|raw| Region::parse(&raw.to_string_lossy()))
-        .collect::<io::Result<Vec<_>>>()
-    {
-        Ok(regions) => regions,
-        Err(e) => {
-            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
-            return ExitCode::FAILURE;
-        }
-    };
+        .try_for_each(|raw| extend_regions_from_list(&mut regions, &raw.to_string_lossy()));
+    if let Err(e) = parsed_positionals {
+        eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+        return ExitCode::FAILURE;
+    }
 
     let path = Path::new(&fname);
     let _ = compression_level; // consumed by future writers

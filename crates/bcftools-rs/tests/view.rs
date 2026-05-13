@@ -142,6 +142,56 @@ fn view_region_filters_by_chrom_and_position_interval() {
 }
 
 #[test]
+fn view_regions_option_filters_comma_separated_regions() {
+    let path = fixture_path("regions.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-r",
+        "1:3062915,2:3199815",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -r failed: {err}");
+    let records: Vec<_> = out.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        records,
+        [
+            "1\t3062915\t.\tGTT\tG\t1806\tq10\tDP=35;DP4=1,2,3,4;AN=2;AC=1\tGT:GQ:DP:GL\t0/1:409:35:-20,-5,-20",
+            "1\t3062915\t.\tG\tT\t1806\tq10\tDP=35;DP4=1,2,3,4;AN=2;AC=1\tGT:GQ:DP:GL\t0/1:409:35:-20,-5,-20",
+            "2\t3199815\t.\tC\tT\t481\tPASS\tDP=26;AN=2;AC=1\tGT:GQ:DP\t1/2:322:26",
+        ]
+    );
+}
+
+#[test]
+fn view_regions_file_filters_tab_regions() {
+    let path = fixture_path("regions.vcf");
+    let regions = fixture_path("regions.tab");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-R",
+        regions.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -R failed: {err}");
+    let projected = out
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{} {} {},{}", fields[0], fields[1], fields[3], fields[4])
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let expected = std::fs::read_to_string(fixture_path("regions.out")).unwrap();
+    assert_eq!(projected, expected);
+}
+
+#[test]
 fn view_region_filters_bcf_input() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
