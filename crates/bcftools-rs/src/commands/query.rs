@@ -831,7 +831,11 @@ impl<'a> TextRecord<'a> {
             "N_ALT" => self.n_alt().to_string(),
             "N_SAMPLES" => self.samples.len().to_string(),
             "TYPE" => self.variant_type_label(),
-            "LINE" => self.fields.join("\t"),
+            "LINE" => {
+                let mut line = self.fields.join("\t");
+                line.push('\n');
+                line
+            }
             _ => ".".to_string(),
         }
     }

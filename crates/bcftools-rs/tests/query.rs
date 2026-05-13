@@ -651,3 +651,12 @@ fn query_filter_exact_missing_fixture_matches_upstream() {
     assert_eq!(code, 0, "query -i FILTER=\"q11\" failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_line_token_matches_upstream_fixture() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.25.out")).unwrap();
+    let (out, err, code) = run(&["query", "-f", "%LINE", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "query -f %LINE failed: {err}");
+    assert_eq!(out, expected);
+}
