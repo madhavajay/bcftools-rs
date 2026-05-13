@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/bcftools-rs",
+    "crates/bcftools-rs-cli",
+]
+exclude = [
+    "bcftools",
+    "htslib-rs",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+
+[workspace.dependencies]
+bcftools-rs = { path = "crates/bcftools-rs" }
+htslib-rs = { path = "htslib-rs/crates/htslib-rs" }
+anyhow = "1.0"
+bstr = { version = "1.9", default-features = false, features = ["std"] }
+bytes = "1.10"
+clap = { version = "4.5", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+libdeflater = "1.19"
+memchr = "2.7"
+regex = "1.11"
