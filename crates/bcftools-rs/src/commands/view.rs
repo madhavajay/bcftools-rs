@@ -28,6 +28,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use htslib_rs::core::Position;
 use htslib_rs::format::{self, Compression, Exact};
+use htslib_rs::variant::{VariantType, classify_variant};
 use htslib_rs::variant_io_compat::RegionOverlap;
 use htslib_rs::vcf::variant::io::Write as _;
 
@@ -56,6 +57,8 @@ Output options:\n\
     -t, --targets REG                 restrict to comma-separated targets\n\
     -T, --targets-file FILE           restrict to targets listed in a file\n\
         --targets-overlap 0|1|2       target overlap mode: 0=POS, 1=record, 2=variant [0]\n\
+    -v, --types LIST                  select variant types: snps,indels,mnps,other,bnd,overlap,ref\n\
+    -V, --exclude-types LIST          exclude variant types\n\
 \n";
 
 const OPT_NO_VERSION: i32 = 200;
@@ -89,10 +92,18 @@ struct RunOptions<'a> {
     targets: &'a [Region],
     targets_exclude: bool,
     targets_overlap: RegionOverlap,
+    type_filter: Option<TypeFilter>,
+    type_filter_exclude: bool,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
     drop_genotypes: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TypeFilter {
+    mask: VariantType,
+    include_ref: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -294,6 +305,45 @@ fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, std::num::ParseInt
     Ok(NonZero::new(n))
 }
 
+fn parse_variant_type_filter(raw: &str) -> io::Result<TypeFilter> {
+    let mut mask = VariantType::REF;
+    let mut include_ref = false;
+    for item in raw.split(',') {
+        let item = item.trim().to_ascii_lowercase();
+        let variant_type = match item.as_str() {
+            "" => continue,
+            "snp" | "snps" => VariantType::SNP,
+            "mnp" | "mnps" => VariantType::MNP,
+            "indel" | "indels" => VariantType::INDEL,
+            "other" => VariantType::OTHER,
+            "bnd" => VariantType::BND,
+            "overlap" => VariantType::OVERLAP,
+            "ins" | "insertion" | "insertions" => VariantType::INS,
+            "del" | "deletion" | "deletions" => VariantType::DEL,
+            "ref" => {
+                include_ref = true;
+                continue;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("The type \"{item}\" not recognised"),
+                ));
+            }
+        };
+        mask |= variant_type;
+    }
+
+    if mask.bits() == 0 && !include_ref {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing variant type",
+        ));
+    }
+
+    Ok(TypeFilter { mask, include_ref })
+}
+
 impl OutputKind {
     fn parse(s: &str) -> Option<(Self, Option<u32>)> {
         if s.is_empty() {
@@ -335,6 +385,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("targets", HasArg::Required, b't' as i32),
         LongOpt::new("targets-file", HasArg::Required, b'T' as i32),
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
+        LongOpt::new("types", HasArg::Required, b'v' as i32),
+        LongOpt::new("exclude-types", HasArg::Required, b'V' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
         LongOpt::new("threads", HasArg::Required, OPT_THREADS),
         LongOpt::new("targets-overlap", HasArg::Required, OPT_TARGETS_OVERLAP),
@@ -352,12 +404,14 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
+    let mut type_filter = None;
+    let mut type_filter_exclude = false;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:hHr:R:s:S:t:T:G", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:hHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -430,6 +484,30 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                     }
                 }
                 v if v == b'G' as i32 => drop_genotypes = true,
+                v if v == b'v' as i32 || v == b'V' as i32 => {
+                    let exclude = v == b'V' as i32;
+                    if type_filter.is_some() && type_filter_exclude != exclude {
+                        eprintln!(
+                            "{}",
+                            fmt_etag(
+                                "main_vcfview",
+                                "cannot mix type inclusion and exclusion lists"
+                            )
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_variant_type_filter(raw) {
+                        Ok(filter) => {
+                            type_filter = Some(filter);
+                            type_filter_exclude = exclude;
+                        }
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
                 v if v == OPT_NO_VERSION => no_version = true,
                 v if v == OPT_THREADS => {
                     let raw = m.value.as_deref().unwrap_or("");
@@ -574,6 +652,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         targets: &targets,
         targets_exclude,
         targets_overlap,
+        type_filter,
+        type_filter_exclude,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -601,6 +681,20 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     }
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
+    let has_text_filters =
+        !options.regions.is_empty() || !options.targets.is_empty() || options.type_filter.is_some();
+    if options.type_filter.is_some()
+        && !(options.sample_list.is_some()
+            || options.drop_genotypes
+            || (options.output_kind == OutputKind::VcfText
+                && options.no_version
+                && in_fmt.exact != Exact::Bcf))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "type filtering currently requires text VCF output with --no-version or sample projection",
+        ));
+    }
     let filters = RecordFilters {
         regions: options.regions,
         targets: options.targets,
@@ -651,9 +745,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     match options.output_kind {
         OutputKind::VcfText => match options.output_file {
             Some("-") | None
-                if options.no_version
-                    && (!options.regions.is_empty() || !options.targets.is_empty())
-                    && in_fmt.exact != Exact::Bcf =>
+                if options.no_version && has_text_filters && in_fmt.exact != Exact::Bcf =>
             {
                 write_vcf_text_filtered_passthrough(path, in_fmt, options, io::stdout().lock())
             }
@@ -680,11 +772,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 filters,
                 io::stdout().lock(),
             ),
-            Some(p)
-                if options.no_version
-                    && (!options.regions.is_empty() || !options.targets.is_empty())
-                    && in_fmt.exact != Exact::Bcf =>
-            {
+            Some(p) if options.no_version && has_text_filters && in_fmt.exact != Exact::Bcf => {
                 write_vcf_text_filtered_passthrough(path, in_fmt, options, File::create(p)?)
             }
             Some(p)
@@ -715,6 +803,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
             if options.no_version
                 && options.regions.is_empty()
                 && options.targets.is_empty()
+                && options.type_filter.is_none()
                 && in_fmt.exact != Exact::Bcf =>
         {
             match options.output_file {
@@ -874,6 +963,8 @@ fn write_sample_subset_bcf<W: Write>(
         targets: options.targets,
         targets_exclude: options.targets_exclude,
         targets_overlap: options.targets_overlap,
+        type_filter: options.type_filter,
+        type_filter_exclude: options.type_filter_exclude,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -969,14 +1060,7 @@ fn write_sample_subset_vcf_text<W: Write>(
             break;
         }
         let fields = line_fields(line);
-        if !record_line_matches_filters(
-            &fields,
-            options.regions,
-            options.regions_overlap,
-            options.targets,
-            options.targets_exclude,
-            options.targets_overlap,
-        ) {
+        if !record_line_matches_filters(&fields, options) {
             continue;
         }
         let selected = selected_samples.as_ref().ok_or_else(|| {
@@ -1031,29 +1115,58 @@ fn write_projected_vcf_line<W: Write>(
     writeln!(out, "{}", projected.join("\t"))
 }
 
-fn record_line_matches_filters(
-    fields: &[&str],
-    regions: &[Region],
-    regions_overlap: RegionOverlap,
-    targets: &[Region],
-    targets_exclude: bool,
-    targets_overlap: RegionOverlap,
-) -> bool {
+fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> bool {
     let Some(contig) = fields.first() else {
         return false;
     };
     let Some(pos) = fields.get(1).and_then(|pos| pos.parse::<usize>().ok()) else {
         return false;
     };
-    region_line_matches(regions, regions_overlap, contig, pos, fields)
-        && target_line_matches(
-            targets,
-            targets_exclude,
-            targets_overlap,
-            contig,
-            pos,
-            fields,
-        )
+    region_line_matches(
+        options.regions,
+        options.regions_overlap,
+        contig,
+        pos,
+        fields,
+    ) && target_line_matches(
+        options.targets,
+        options.targets_exclude,
+        options.targets_overlap,
+        contig,
+        pos,
+        fields,
+    ) && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn variant_type_line_matches(
+    fields: &[&str],
+    type_filter: Option<TypeFilter>,
+    exclude: bool,
+) -> bool {
+    let Some(filter) = type_filter else {
+        return true;
+    };
+    let variant_type = variant_type_from_fields(fields);
+    let matches = if variant_type.bits() == VariantType::REF.bits() {
+        filter.include_ref
+    } else {
+        (variant_type & filter.mask).bits() != 0
+    };
+    if exclude { !matches } else { matches }
+}
+
+fn variant_type_from_fields(fields: &[&str]) -> VariantType {
+    let Some(ref_allele) = fields.get(3) else {
+        return VariantType::REF;
+    };
+    let Some(alts) = fields.get(4) else {
+        return VariantType::REF;
+    };
+    let mut variant_type = VariantType::REF;
+    for alt in alts.split(',') {
+        variant_type |= classify_variant(ref_allele, alt).variant_type;
+    }
+    variant_type
 }
 
 fn region_line_matches(
@@ -1263,14 +1376,7 @@ where
             break;
         }
         let fields = line_fields(&line);
-        if record_line_matches_filters(
-            &fields,
-            options.regions,
-            options.regions_overlap,
-            options.targets,
-            options.targets_exclude,
-            options.targets_overlap,
-        ) {
+        if record_line_matches_filters(&fields, options) {
             out.write_all(line.as_bytes())?;
         }
     }

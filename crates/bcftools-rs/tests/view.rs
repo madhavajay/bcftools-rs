@@ -447,6 +447,22 @@ fn view_drop_genotypes_matches_upstream_fixture() {
 }
 
 #[test]
+fn view_exclude_snps_matches_upstream_fixture() {
+    let path = fixture_path("view.vcf");
+    let expected = std::fs::read_to_string(fixture_path("view.9.out")).unwrap();
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-G",
+        "-V",
+        "snps",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -G -V snps failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn view_drop_genotypes_no_header_matches_upstream_fixture() {
     let path = fixture_path("view.omitgenotypes.vcf");
     let expected =
