@@ -20,7 +20,7 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, BufRead as _, BufReader, Read as _, Write};
+use std::io::{self, BufRead as _, BufReader, Cursor, Read as _, Write};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -676,16 +676,6 @@ fn run_sample_subset(
     options: &RunOptions<'_>,
     argv: &[OsString],
 ) -> io::Result<()> {
-    if matches!(
-        options.output_kind,
-        OutputKind::BcfUncompressed | OutputKind::BcfCompressed
-    ) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "sample projection with BCF output is not yet supported",
-        ));
-    }
-
     let version_lines = if options.no_version {
         None
     } else {
@@ -728,7 +718,18 @@ fn run_sample_subset(
                 write_sample_subset_vcf(path, in_fmt, options, version_lines.as_ref(), bgzf)
             }
         },
-        OutputKind::BcfUncompressed | OutputKind::BcfCompressed => unreachable!(),
+        OutputKind::BcfUncompressed | OutputKind::BcfCompressed => match options.output_file {
+            Some("-") | None => {
+                write_sample_subset_bcf(path, in_fmt, options, version_lines.as_ref(), io::stdout())
+            }
+            Some(p) => write_sample_subset_bcf(
+                path,
+                in_fmt,
+                options,
+                version_lines.as_ref(),
+                File::create(p)?,
+            ),
+        },
     }
 }
 
@@ -741,6 +742,46 @@ fn write_sample_subset_vcf<W: Write>(
 ) -> io::Result<()> {
     let text = vcf_text_from_path(path, fmt)?;
     write_sample_subset_vcf_text(&text, options, version_lines, &mut out)
+}
+
+fn write_sample_subset_bcf<W: Write>(
+    path: &Path,
+    fmt: format::Format,
+    options: &RunOptions<'_>,
+    version_lines: Option<&crate::header_version::HeaderVersionLines>,
+    out: W,
+) -> io::Result<()> {
+    let text = vcf_text_from_path(path, fmt)?;
+    let mut projected = Vec::new();
+    let bcf_options = RunOptions {
+        output_kind: options.output_kind,
+        output_file: options.output_file,
+        header_only: options.header_only,
+        no_header: false,
+        no_version: options.no_version,
+        regions: options.regions,
+        targets: options.targets,
+        thread_count: options.thread_count,
+        sample_list: options.sample_list,
+        sample_list_is_file: options.sample_list_is_file,
+        drop_genotypes: options.drop_genotypes,
+    };
+    write_sample_subset_vcf_text(&text, &bcf_options, version_lines, &mut projected)?;
+    write_bcf_from_vcf_text(&projected, out)
+}
+
+fn write_bcf_from_vcf_text<W: Write>(text: &[u8], out: W) -> io::Result<()> {
+    use htslib_rs::{bcf, vcf};
+
+    let mut reader = vcf::io::Reader::new(BufReader::new(Cursor::new(text)));
+    let header = reader.read_header()?;
+    let mut writer = bcf::io::Writer::new(out);
+    writer.write_variant_header(&header)?;
+    for result in reader.records() {
+        let record = result?;
+        writer.write_variant_record(&header, &record)?;
+    }
+    writer.try_finish()
 }
 
 fn vcf_text_from_path(path: &Path, fmt: format::Format) -> io::Result<String> {

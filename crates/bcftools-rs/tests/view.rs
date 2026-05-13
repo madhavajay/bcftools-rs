@@ -299,6 +299,32 @@ fn view_samples_file_exclusion_subsets_bcf_input() {
 }
 
 #[test]
+fn view_samples_list_subsets_bcf_output() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("query.smpl.vcf");
+    let bcf = tmp.path().join("query.smpl.11.bcf");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-s",
+        "11",
+        "-o",
+        bcf.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob -s failed: {err}");
+
+    let (out, err, code) = run(&["view", "--no-version", bcf.to_str().unwrap()]);
+    assert_eq!(code, 0, "view subset BCF failed: {err}");
+    assert!(out.contains("##contig=<ID=chr1>\n"));
+    assert!(out.contains("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"));
+    assert!(out.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t11\n"));
+    assert!(out.contains("chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t1/1\n"));
+}
+
+#[test]
 fn view_drop_genotypes_matches_upstream_fixture() {
     let path = fixture_path("view.omitgenotypes.vcf");
     let expected = std::fs::read_to_string(fixture_path("view.dropgenotypes.out")).unwrap();
