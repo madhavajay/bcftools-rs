@@ -217,6 +217,25 @@ fn view_samples_file_exclusion_subsets_bcf_input() {
 }
 
 #[test]
+fn view_drop_genotypes_matches_upstream_fixture() {
+    let path = fixture_path("view.omitgenotypes.vcf");
+    let expected = std::fs::read_to_string(fixture_path("view.dropgenotypes.out")).unwrap();
+    let (out, err, code) = run(&["view", "--no-version", "-G", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -G failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn view_drop_genotypes_no_header_matches_upstream_fixture() {
+    let path = fixture_path("view.omitgenotypes.vcf");
+    let expected =
+        std::fs::read_to_string(fixture_path("view.dropgenotypes.noheader.out")).unwrap();
+    let (out, err, code) = run(&["view", "--no-version", "-HG", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -HG failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn view_threads_writes_bgzf_vcf_output() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");

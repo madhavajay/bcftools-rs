@@ -39,7 +39,7 @@ About:   VCF/BCF conversion, view, subset and filter VCF/BCF files.\n\
 Usage:   bcftools view [OPTIONS] <in.vcf.gz>|<in.bcf> [REGION...]\n\
 \n\
 Output options:\n\
-    -G, --drop-genotypes              drop individual genotype information (NOT IMPLEMENTED)\n\
+    -G, --drop-genotypes              drop individual genotype information\n\
     -h, --header-only                 print only the header in VCF output\n\
     -H, --no-header                   suppress the header in VCF output\n\
     -l, --compression-level INT       compression level: 0 uncompressed, 1 best speed, 9 best compression [-1]\n\
@@ -78,6 +78,7 @@ struct RunOptions<'a> {
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
+    drop_genotypes: bool,
 }
 
 impl Region {
@@ -175,6 +176,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
         LongOpt::new("samples", HasArg::Required, b's' as i32),
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
+        LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
         LongOpt::new("threads", HasArg::Required, OPT_THREADS),
     ];
@@ -188,8 +190,9 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut thread_count = None;
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
+    let mut drop_genotypes = false;
 
-    let mut g = Getopt::new("o:O:l:hHs:S:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:hHs:S:G", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -241,6 +244,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                     sample_list = m.value;
                     sample_list_is_file = true;
                 }
+                v if v == b'G' as i32 => drop_genotypes = true,
                 v if v == OPT_NO_VERSION => no_version = true,
                 v if v == OPT_THREADS => {
                     let raw = m.value.as_deref().unwrap_or("");
@@ -302,6 +306,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
+        drop_genotypes,
     };
 
     match run(path, &options, argv) {
@@ -326,7 +331,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
 
-    if options.sample_list.is_some() {
+    if options.sample_list.is_some() || options.drop_genotypes {
         return run_sample_subset(path, in_fmt, options, argv);
     }
 
@@ -491,7 +496,7 @@ fn run_sample_subset(
     ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "sample subsetting with BCF output is not yet supported",
+            "sample projection with BCF output is not yet supported",
         ));
     }
 
@@ -574,11 +579,21 @@ fn write_sample_subset_vcf_text<W: Write>(
 ) -> io::Result<()> {
     let mut selected_samples: Option<Vec<usize>> = None;
     let mut inserted_version = false;
+    let needs_pass_filter = options.drop_genotypes
+        && !text
+            .lines()
+            .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
 
     for line in text.split_inclusive('\n') {
         if line.starts_with("##") {
+            if options.drop_genotypes && line.starts_with("##FORMAT=") {
+                continue;
+            }
             if !options.no_header {
                 out.write_all(line.as_bytes())?;
+                if needs_pass_filter && line.starts_with("##fileformat=") {
+                    writeln!(out, "##FILTER=<ID=PASS,Description=\"All filters passed\">")?;
+                }
             }
             continue;
         }
@@ -593,34 +608,12 @@ fn write_sample_subset_vcf_text<W: Write>(
                     inserted_version = true;
                 }
                 let fields = line_fields(line);
-                let sample_names = fields[9..]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>();
-                let selected = crate::smpl_ilist::init(
-                    &sample_names,
-                    options.sample_list,
-                    options.sample_list_is_file,
-                    crate::smpl_ilist::SMPL_STRICT,
-                )?
-                .idx;
-                write_projected_vcf_line(&fields, &selected, out)?;
+                let selected = selected_sample_indices(&fields, options)?;
+                write_projected_vcf_line(&fields, &selected, !options.drop_genotypes, out)?;
                 selected_samples = Some(selected);
             } else {
                 let fields = line_fields(line);
-                let sample_names = fields[9..]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>();
-                selected_samples = Some(
-                    crate::smpl_ilist::init(
-                        &sample_names,
-                        options.sample_list,
-                        options.sample_list_is_file,
-                        crate::smpl_ilist::SMPL_STRICT,
-                    )?
-                    .idx,
-                );
+                selected_samples = Some(selected_sample_indices(&fields, options)?);
             }
             continue;
         }
@@ -645,10 +638,27 @@ fn write_sample_subset_vcf_text<W: Write>(
                 "VCF header is missing the #CHROM sample line",
             )
         })?;
-        write_projected_vcf_line(&fields, selected, out)?;
+        write_projected_vcf_line(&fields, selected, !options.drop_genotypes, out)?;
     }
 
     Ok(())
+}
+
+fn selected_sample_indices(fields: &[&str], options: &RunOptions<'_>) -> io::Result<Vec<usize>> {
+    if options.drop_genotypes {
+        return Ok(Vec::new());
+    }
+    let sample_names = fields[9..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    Ok(crate::smpl_ilist::init(
+        &sample_names,
+        options.sample_list,
+        options.sample_list_is_file,
+        crate::smpl_ilist::SMPL_STRICT,
+    )?
+    .idx)
 }
 
 fn line_fields(line: &str) -> Vec<&str> {
@@ -661,9 +671,10 @@ fn line_fields(line: &str) -> Vec<&str> {
 fn write_projected_vcf_line<W: Write>(
     fields: &[&str],
     selected_samples: &[usize],
+    keep_format_column: bool,
     out: &mut W,
 ) -> io::Result<()> {
-    let fixed_end = fields.len().min(9);
+    let fixed_end = fields.len().min(if keep_format_column { 9 } else { 8 });
     let mut projected = fields[..fixed_end].to_vec();
     for &sample_idx in selected_samples {
         if let Some(value) = fields.get(9 + sample_idx) {
