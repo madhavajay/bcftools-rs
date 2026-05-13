@@ -1605,22 +1605,36 @@ fn expression_line_matches(fields: &[&str], spec: Option<&ExpressionFilterSpec>)
 fn lookup_expression_symbol(src: &str, fields: &[&str]) -> Option<(Value, usize)> {
     let token_src = src.strip_prefix('%').unwrap_or(src);
     let had_percent = token_src.len() != src.len();
-    let len = token_src
+    let token_len = token_src
         .char_indices()
         .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/'))
         .map(|(idx, ch)| idx + ch.len_utf8())
         .last()?;
-    if token_src[len..].starts_with('(') {
+    if token_src[token_len..].starts_with('(') {
         return None;
     }
-    let token = &token_src[..len];
+    let token = &token_src[..token_len];
+    let (index, extra_len) = parse_expression_index(&token_src[token_len..]);
     Some((
-        expression_token_value(token, fields),
-        len + usize::from(had_percent),
+        expression_token_value(token, index, fields),
+        token_len + extra_len + usize::from(had_percent),
     ))
 }
 
-fn expression_token_value(token: &str, fields: &[&str]) -> Value {
+fn parse_expression_index(src: &str) -> (Option<usize>, usize) {
+    let Some(rest) = src.strip_prefix('[') else {
+        return (None, 0);
+    };
+    let Some(end) = rest.find(']') else {
+        return (None, 0);
+    };
+    let Some(index) = rest[..end].parse::<usize>().ok() else {
+        return (None, 0);
+    };
+    (Some(index), end + 2)
+}
+
+fn expression_token_value(token: &str, index: Option<usize>, fields: &[&str]) -> Value {
     let key = token
         .strip_prefix("INFO/")
         .or_else(|| token.strip_prefix("Info/"))
@@ -1639,7 +1653,15 @@ fn expression_token_value(token: &str, fields: &[&str]) -> Value {
         "TYPE" => variant_type_label(variant_type_from_fields(fields)).to_string(),
         key => info_value(fields, key),
     };
-    expression_value(raw)
+    expression_value(select_expression_vector_value(&raw, index))
+}
+
+fn select_expression_vector_value(raw: &str, index: Option<usize>) -> String {
+    if let Some(index) = index {
+        raw.split(',').nth(index).unwrap_or(".").to_string()
+    } else {
+        raw.to_string()
+    }
 }
 
 fn info_value(fields: &[&str], key: &str) -> String {

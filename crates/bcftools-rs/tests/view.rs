@@ -729,6 +729,32 @@ fn view_exclude_expression_filters_info_fields() {
 }
 
 #[test]
+fn view_expression_filters_indexed_info_vectors() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-n",
+        "-e",
+        "INDEL=1 || PV4[0]<0.006",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -n -e indexed expression failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        ["11:2343543", "11:5464562", "X:3048719", "Y:8657215"]
+    );
+}
+
+#[test]
 fn view_novel_filter_selects_records_without_ids() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-n", path.to_str().unwrap()]);
