@@ -662,7 +662,7 @@ impl QueryFilter {
 
 impl SimplePredicate {
     fn matches(&self, record: &TextRecord<'_>) -> bool {
-        let values = record.filter_values(&self.lhs, self.vector_any);
+        let values = record.predicate_values(&self.lhs, self.vector_any);
         match self.op {
             PredicateOp::Eq => values.iter().any(|value| value == &self.rhs),
             PredicateOp::Ne if self.vector_any => values.iter().any(|value| value != &self.rhs),
@@ -1052,6 +1052,28 @@ impl<'a> TextRecord<'a> {
         } else {
             vec![value]
         }
+    }
+
+    fn predicate_values(&self, key: &str, vector_any: bool) -> Vec<String> {
+        self.format_values_for_filter(key)
+            .unwrap_or_else(|| self.filter_values(key, vector_any))
+    }
+
+    fn format_values_for_filter(&self, key: &str) -> Option<Vec<String>> {
+        let key = key
+            .strip_prefix("FMT/")
+            .or_else(|| key.strip_prefix("FORMAT/"))
+            .unwrap_or(key);
+        let format = self.fields.get(8).copied().unwrap_or(".");
+        let has_key = key == "GT" || format.split(':').any(|name| name == key);
+        if !has_key {
+            return None;
+        }
+        Some(
+            (0..self.sample_indices.len())
+                .map(|sample_index| self.format_value(sample_index, key))
+                .collect(),
+        )
     }
 
     fn numeric_values(&self, key: &str) -> Vec<f64> {

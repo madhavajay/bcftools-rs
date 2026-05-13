@@ -812,6 +812,42 @@ fn query_n_pass_filter_counts_gt_class_predicates() {
 }
 
 #[test]
+fn query_gt_sample_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.14.vcf");
+    let no_filter_expected =
+        std::fs::read_to_string(fixture_path("query.filter.14.1.out")).unwrap();
+    let missing_expected = std::fs::read_to_string(fixture_path("query.filter.14.2.out")).unwrap();
+    let phased_expected = std::fs::read_to_string(fixture_path("query.filter.14.3.out")).unwrap();
+    let format = "%CHROM:%POS [ %SAMPLE %GT]\n";
+
+    let (out, err, code) = run(&["query", "-f", format, path.to_str().unwrap()]);
+    assert_eq!(code, 0, "query -f GT sample loop failed: {err}");
+    assert_eq!(out, no_filter_expected);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        format,
+        "-i",
+        "GT=\".\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i GT=. failed: {err}");
+    assert_eq!(out, missing_expected);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        format,
+        "-i",
+        "GT=\"0|1\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i GT=0|1 failed: {err}");
+    assert_eq!(out, phased_expected);
+}
+
+#[test]
 fn query_count_filter_counts_info_vector_values() {
     let path = fixture_path("query.filter.10.vcf");
     let numeric_expected = std::fs::read_to_string(fixture_path("query.73.out")).unwrap();
