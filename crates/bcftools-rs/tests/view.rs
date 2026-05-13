@@ -208,6 +208,25 @@ fn view_targets_option_filters_contig_targets() {
 }
 
 #[test]
+fn view_targets_option_excludes_contig_targets() {
+    let path = fixture_path("view-t.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-t",
+        "^2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -t ^ failed: {err}");
+    assert_eq!(
+        out,
+        "1\t1\t.\tA\tC\t.\t.\t.\n\
+3\t2\t.\tA\tC\t.\t.\t.\n"
+    );
+}
+
+#[test]
 fn view_targets_file_filters_site_targets() {
     let path = fixture_path("view.sites.vcf");
     let targets = fixture_path("view.sites.txt");
@@ -221,6 +240,31 @@ fn view_targets_file_filters_site_targets() {
     ]);
     assert_eq!(code, 0, "view -T failed: {err}");
     assert_eq!(out, expected);
+}
+
+#[test]
+fn view_targets_file_excludes_site_targets() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = fixture_path("view.sites.vcf");
+    let targets = tmp.path().join("exclude-sites.txt");
+    std::fs::write(&targets, "1\t10002\n").unwrap();
+    let excluded = format!("^{}", targets.display());
+
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-T",
+        &excluded,
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -T ^file failed: {err}");
+    assert_eq!(
+        out,
+        "1\t10001\t.\tG\tC\t40\t.\t.\n\
+1\t10003\t.\tA\tG\t60\t.\t.\n\
+1\t10004\t.\tA\tT\t70\t.\t.\n"
+    );
 }
 
 #[test]

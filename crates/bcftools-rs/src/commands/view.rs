@@ -80,6 +80,7 @@ struct RunOptions<'a> {
     no_version: bool,
     regions: &'a [Region],
     targets: &'a [Region],
+    targets_exclude: bool,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -90,6 +91,7 @@ struct RunOptions<'a> {
 struct RecordFilters<'a> {
     regions: &'a [Region],
     targets: &'a [Region],
+    targets_exclude: bool,
 }
 
 impl Region {
@@ -157,6 +159,32 @@ fn extend_regions_from_list(regions: &mut Vec<Region>, raw: &str) -> io::Result<
             regions.push(Region::parse(item)?);
         }
     }
+    Ok(())
+}
+
+fn strip_exclusion_prefix<'a>(raw: &'a str, label: &str) -> io::Result<(bool, &'a str)> {
+    let trimmed = raw.trim();
+    if let Some(body) = trimmed.strip_prefix('^') {
+        if body.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{label} exclusion is missing a value"),
+            ));
+        }
+        Ok((true, body))
+    } else {
+        Ok((false, trimmed))
+    }
+}
+
+fn set_target_exclusion_mode(mode: &mut Option<bool>, exclude: bool) -> io::Result<()> {
+    if mode.is_some_and(|existing| existing != exclude) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot mix target inclusion and exclusion lists",
+        ));
+    }
+    *mode = Some(exclude);
     Ok(())
 }
 
@@ -451,22 +479,38 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut targets = Vec::new();
-    let parsed_targets = target_specs
-        .iter()
-        .try_for_each(|raw| extend_regions_from_list(&mut targets, raw));
-    if let Err(e) = parsed_targets {
-        eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
-        return ExitCode::FAILURE;
-    }
-    for file in &target_files {
-        match extend_targets_from_file(&mut targets, Path::new(file)) {
-            Ok(()) => {}
+    let mut target_exclusion_mode = None;
+    for raw in &target_specs {
+        let (exclude, body) = match strip_exclusion_prefix(raw, "target") {
+            Ok(value) => value,
             Err(e) => {
                 eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
                 return ExitCode::FAILURE;
             }
+        };
+        if let Err(e) = set_target_exclusion_mode(&mut target_exclusion_mode, exclude)
+            .and_then(|()| extend_regions_from_list(&mut targets, body))
+        {
+            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+            return ExitCode::FAILURE;
         }
     }
+    for file in &target_files {
+        let (exclude, path) = match strip_exclusion_prefix(file, "targets-file") {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Err(e) = set_target_exclusion_mode(&mut target_exclusion_mode, exclude)
+            .and_then(|()| extend_targets_from_file(&mut targets, Path::new(path)))
+        {
+            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+            return ExitCode::FAILURE;
+        }
+    }
+    let targets_exclude = target_exclusion_mode.unwrap_or(false);
 
     let path = Path::new(&fname);
     let _ = compression_level; // consumed by future writers
@@ -479,6 +523,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         no_version,
         regions: &regions,
         targets: &targets,
+        targets_exclude,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -509,6 +554,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     let filters = RecordFilters {
         regions: options.regions,
         targets: options.targets,
+        targets_exclude: options.targets_exclude,
     };
 
     if options.sample_list.is_some() || options.drop_genotypes {
@@ -761,6 +807,7 @@ fn write_sample_subset_bcf<W: Write>(
         no_version: options.no_version,
         regions: options.regions,
         targets: options.targets,
+        targets_exclude: options.targets_exclude,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -856,7 +903,12 @@ fn write_sample_subset_vcf_text<W: Write>(
             break;
         }
         let fields = line_fields(line);
-        if !record_line_matches_filters(&fields, options.regions, options.targets) {
+        if !record_line_matches_filters(
+            &fields,
+            options.regions,
+            options.targets,
+            options.targets_exclude,
+        ) {
             continue;
         }
         let selected = selected_samples.as_ref().ok_or_else(|| {
@@ -911,14 +963,20 @@ fn write_projected_vcf_line<W: Write>(
     writeln!(out, "{}", projected.join("\t"))
 }
 
-fn record_line_matches_filters(fields: &[&str], regions: &[Region], targets: &[Region]) -> bool {
+fn record_line_matches_filters(
+    fields: &[&str],
+    regions: &[Region],
+    targets: &[Region],
+    targets_exclude: bool,
+) -> bool {
     let Some(contig) = fields.first() else {
         return false;
     };
     let Some(pos) = fields.get(1).and_then(|pos| pos.parse::<usize>().ok()) else {
         return false;
     };
-    region_list_matches(regions, contig, pos) && region_list_matches(targets, contig, pos)
+    region_list_matches(regions, contig, pos)
+        && target_list_matches(targets, targets_exclude, contig, pos)
 }
 
 fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
@@ -928,6 +986,14 @@ fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
                 && region.start.is_none_or(|start| pos >= start)
                 && region.end.is_none_or(|end| pos <= end)
         })
+}
+
+fn target_list_matches(targets: &[Region], exclude: bool, contig: &str, pos: usize) -> bool {
+    if targets.is_empty() {
+        return true;
+    }
+    let matches = region_list_matches(targets, contig, pos);
+    if exclude { !matches } else { matches }
 }
 
 fn write_vcf_gz(
@@ -950,6 +1016,7 @@ fn write_vcf_gz(
                 RecordFilters {
                     regions: options.regions,
                     targets: options.targets,
+                    targets_exclude: options.targets_exclude,
                 },
                 bgzf,
             )
@@ -965,6 +1032,7 @@ fn write_vcf_gz(
                 RecordFilters {
                     regions: options.regions,
                     targets: options.targets,
+                    targets_exclude: options.targets_exclude,
                 },
                 bgzf,
             )
@@ -980,6 +1048,7 @@ fn write_vcf_gz(
                 RecordFilters {
                     regions: options.regions,
                     targets: options.targets,
+                    targets_exclude: options.targets_exclude,
                 },
                 bgzf,
             )
@@ -1227,13 +1296,22 @@ fn write_bcf<W: Write>(
 
 fn record_matches(filters: RecordFilters<'_>, contig: &str, pos: Option<Position>) -> bool {
     pos.map(|pos| {
-        region_matches(filters.regions, contig, pos) && region_matches(filters.targets, contig, pos)
+        region_matches(filters.regions, contig, pos)
+            && target_matches(filters.targets, filters.targets_exclude, contig, pos)
     })
     .unwrap_or(false)
 }
 
 fn region_matches(regions: &[Region], contig: &str, pos: Position) -> bool {
     regions.is_empty() || regions.iter().any(|region| region.contains(contig, pos))
+}
+
+fn target_matches(targets: &[Region], exclude: bool, contig: &str, pos: Position) -> bool {
+    if targets.is_empty() {
+        return true;
+    }
+    let matches = region_matches(targets, contig, pos);
+    if exclude { !matches } else { matches }
 }
 
 fn record_matches_result(
