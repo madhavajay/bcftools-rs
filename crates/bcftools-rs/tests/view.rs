@@ -192,6 +192,50 @@ fn view_regions_file_filters_tab_regions() {
 }
 
 #[test]
+fn view_regions_support_braced_contig_names_with_colons() {
+    let path = fixture_path("weird-chr-names.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-r",
+        "{1:1}:1,{1:1}:2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -r braced colon contig failed: {err}");
+    let records = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records, ["1:1:1", "1:1:2"]);
+}
+
+#[test]
+fn view_regions_support_braced_contig_names_with_intervals() {
+    let path = fixture_path("weird-chr-names.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-r",
+        "{1:1-1}:1-1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -r braced interval contig failed: {err}");
+    let records = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records, ["1:1-1:1"]);
+}
+
+#[test]
 fn view_targets_option_filters_contig_targets() {
     let path = fixture_path("view-t.vcf");
     let expected = std::fs::read_to_string(fixture_path("view-t.1.out")).unwrap();

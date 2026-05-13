@@ -190,7 +190,7 @@ struct RecordFilters<'a> {
 
 impl Region {
     fn parse(raw: &str) -> io::Result<Self> {
-        let (contig, interval) = raw.split_once(':').unwrap_or((raw, ""));
+        let (contig, interval) = split_region_contig_interval(raw)?;
         if contig.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -237,6 +237,30 @@ impl Region {
     }
 }
 
+fn split_region_contig_interval(raw: &str) -> io::Result<(&str, &str)> {
+    if let Some(rest) = raw.strip_prefix('{') {
+        let Some(end) = rest.find('}') else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Could not parse region \"{raw}\""),
+            ));
+        };
+        let contig = &rest[..end];
+        let suffix = &rest[end + 1..];
+        if suffix.is_empty() {
+            return Ok((contig, ""));
+        }
+        if let Some(interval) = suffix.strip_prefix(':') {
+            return Ok((contig, interval));
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse region \"{raw}\""),
+        ));
+    }
+    Ok(raw.split_once(':').unwrap_or((raw, "")))
+}
+
 fn parse_region_pos(s: &str, raw_region: &str) -> io::Result<usize> {
     s.replace(',', "").parse::<usize>().map_err(|_| {
         io::Error::new(
@@ -247,13 +271,32 @@ fn parse_region_pos(s: &str, raw_region: &str) -> io::Result<usize> {
 }
 
 fn extend_regions_from_list(regions: &mut Vec<Region>, raw: &str) -> io::Result<()> {
-    for item in raw.split(',') {
+    for item in split_region_list(raw) {
         let item = item.trim();
         if !item.is_empty() {
             regions.push(Region::parse(item)?);
         }
     }
     Ok(())
+}
+
+fn split_region_list(raw: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0usize;
+    let mut brace_depth = 0usize;
+    for (idx, ch) in raw.char_indices() {
+        match ch {
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            ',' if brace_depth == 0 => {
+                items.push(&raw[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(&raw[start..]);
+    items
 }
 
 fn strip_exclusion_prefix<'a>(raw: &'a str, label: &str) -> io::Result<(bool, &'a str)> {
