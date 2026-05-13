@@ -292,3 +292,51 @@ fn query_exclude_filters_string_info_fields() {
 865628\tcriteria_provided,_multiple_submitters,_no_conflicts\n"
     );
 }
+
+#[test]
+fn query_computed_n_alt_filter_matches_upstream_fixture() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.6.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %REF %ALT\\n",
+        "-i",
+        "N_ALT=2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i N_ALT failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_computed_n_samples_filter_matches_upstream_fixture() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.7.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %AN\\n",
+        "-i",
+        "AN!=2*N_SAMPLES",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i N_SAMPLES failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_format_token_respects_sample_reordering() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.64.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM\\t%POS\\t%INFO\\t%FORMAT\\n",
+        "-s",
+        "D,C",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query %FORMAT failed: {err}");
+    assert_eq!(out, expected);
+}

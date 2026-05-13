@@ -657,9 +657,30 @@ impl<'a> TextRecord<'a> {
             "QUAL" => self.fields.get(5).copied().unwrap_or(".").to_string(),
             "FILTER" => self.fields.get(6).copied().unwrap_or(".").to_string(),
             "INFO" => self.fields.get(7).copied().unwrap_or(".").to_string(),
+            "FORMAT" => self.fields.get(8).copied().unwrap_or(".").to_string(),
+            "N_ALT" => self.n_alt().to_string(),
+            "N_SAMPLES" => self.samples.len().to_string(),
             "LINE" => self.fields.join("\t"),
             _ => ".".to_string(),
         }
+    }
+
+    fn n_alt(&self) -> usize {
+        match self.fields.get(4).copied().unwrap_or(".") {
+            "." => 0,
+            alt => alt.split(',').filter(|allele| !allele.is_empty()).count(),
+        }
+    }
+
+    fn format_with_selected_samples(&self) -> String {
+        let mut out = self.fields.get(8).copied().unwrap_or(".").to_string();
+        for &sample_index in self.sample_indices {
+            if let Some(sample) = self.fields.get(9 + sample_index) {
+                out.push('\t');
+                out.push_str(sample);
+            }
+        }
+        out
     }
 
     fn info(&self, key: &str) -> String {
@@ -868,6 +889,9 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
     if let Some(key) = token.strip_prefix("INFO/") {
         return record.info(key);
     }
+    if token == "FORMAT" && sample_index.is_none() {
+        return record.format_with_selected_samples();
+    }
     if let Some(key) = token
         .strip_prefix("FMT/")
         .or_else(|| token.strip_prefix("FORMAT/"))
@@ -883,9 +907,8 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
         }
     }
     match token {
-        "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "LINE" => {
-            record.core(token)
-        }
+        "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "FORMAT"
+        | "N_ALT" | "N_SAMPLES" | "LINE" => record.core(token),
         _ => record.info(token),
     }
 }
