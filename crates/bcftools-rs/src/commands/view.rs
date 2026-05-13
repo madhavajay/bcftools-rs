@@ -28,11 +28,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use htslib_rs::core::Position;
 use htslib_rs::format::{self, Compression, Exact};
+use htslib_rs::variant_io_compat::RegionOverlap;
 use htslib_rs::vcf::variant::io::Write as _;
 
 use crate::diagnostics::fmt_etag;
 use crate::getopt::{Getopt, HasArg, LongOpt};
 use crate::header_version::{build_lines, command_time};
+use crate::io::parse_overlap_option;
 
 const USAGE: &str = "\n\
 About:   VCF/BCF conversion, view, subset and filter VCF/BCF files.\n\
@@ -52,10 +54,12 @@ Output options:\n\
     -S, --samples-file FILE           file of samples, optionally prefixed with ^\n\
     -t, --targets REG                 restrict to comma-separated targets\n\
     -T, --targets-file FILE           restrict to targets listed in a file\n\
+        --targets-overlap 0|1|2       target overlap mode: 0=POS, 1=record, 2=variant [0]\n\
 \n";
 
 const OPT_NO_VERSION: i32 = 200;
 const OPT_THREADS: i32 = 9;
+const OPT_TARGETS_OVERLAP: i32 = 201;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
@@ -81,6 +85,7 @@ struct RunOptions<'a> {
     regions: &'a [Region],
     targets: &'a [Region],
     targets_exclude: bool,
+    targets_overlap: RegionOverlap,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -328,6 +333,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
         LongOpt::new("threads", HasArg::Required, OPT_THREADS),
+        LongOpt::new("targets-overlap", HasArg::Required, OPT_TARGETS_OVERLAP),
     ];
 
     let mut output_kind = OutputKind::VcfText;
@@ -337,6 +343,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut no_header = false;
     let mut no_version = false;
     let mut thread_count = None;
+    let mut targets_overlap = RegionOverlap::Pos;
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
@@ -435,6 +442,24 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                         }
                     }
                 }
+                v if v == OPT_TARGETS_OVERLAP => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_overlap_option(raw)
+                        .and_then(|mode| RegionOverlap::try_from(mode).ok())
+                    {
+                        Some(mode) => targets_overlap = mode,
+                        None => {
+                            eprintln!(
+                                "{}",
+                                fmt_etag(
+                                    "main_vcfview",
+                                    &format!("The --targets-overlap mode \"{raw}\" not recognised")
+                                )
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
                 _ => {
                     eprint!("{USAGE}");
                     return ExitCode::FAILURE;
@@ -524,6 +549,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         regions: &regions,
         targets: &targets,
         targets_exclude,
+        targets_overlap,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -602,6 +628,13 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
         OutputKind::VcfText => match options.output_file {
             Some("-") | None
                 if options.no_version
+                    && (!options.regions.is_empty() || !options.targets.is_empty())
+                    && in_fmt.exact != Exact::Bcf =>
+            {
+                write_vcf_text_filtered_passthrough(path, in_fmt, options, io::stdout().lock())
+            }
+            Some("-") | None
+                if options.no_version
                     && options.regions.is_empty()
                     && options.targets.is_empty()
                     && in_fmt.exact != Exact::Bcf =>
@@ -623,6 +656,13 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 filters,
                 io::stdout().lock(),
             ),
+            Some(p)
+                if options.no_version
+                    && (!options.regions.is_empty() || !options.targets.is_empty())
+                    && in_fmt.exact != Exact::Bcf =>
+            {
+                write_vcf_text_filtered_passthrough(path, in_fmt, options, File::create(p)?)
+            }
             Some(p)
                 if options.no_version
                     && options.regions.is_empty()
@@ -808,6 +848,7 @@ fn write_sample_subset_bcf<W: Write>(
         regions: options.regions,
         targets: options.targets,
         targets_exclude: options.targets_exclude,
+        targets_overlap: options.targets_overlap,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -908,6 +949,7 @@ fn write_sample_subset_vcf_text<W: Write>(
             options.regions,
             options.targets,
             options.targets_exclude,
+            options.targets_overlap,
         ) {
             continue;
         }
@@ -968,6 +1010,7 @@ fn record_line_matches_filters(
     regions: &[Region],
     targets: &[Region],
     targets_exclude: bool,
+    targets_overlap: RegionOverlap,
 ) -> bool {
     let Some(contig) = fields.first() else {
         return false;
@@ -976,7 +1019,14 @@ fn record_line_matches_filters(
         return false;
     };
     region_list_matches(regions, contig, pos)
-        && target_list_matches(targets, targets_exclude, contig, pos)
+        && target_line_matches(
+            targets,
+            targets_exclude,
+            targets_overlap,
+            contig,
+            pos,
+            fields,
+        )
 }
 
 fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
@@ -988,12 +1038,81 @@ fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
         })
 }
 
-fn target_list_matches(targets: &[Region], exclude: bool, contig: &str, pos: usize) -> bool {
+fn target_line_matches(
+    targets: &[Region],
+    exclude: bool,
+    overlap: RegionOverlap,
+    contig: &str,
+    pos: usize,
+    fields: &[&str],
+) -> bool {
     if targets.is_empty() {
         return true;
     }
-    let matches = region_list_matches(targets, contig, pos);
+    let matches = targets.iter().any(|target| {
+        target.contig == contig && record_overlaps_target(pos, fields, target, overlap)
+    });
     if exclude { !matches } else { matches }
+}
+
+fn record_overlaps_target(
+    pos: usize,
+    fields: &[&str],
+    target: &Region,
+    overlap: RegionOverlap,
+) -> bool {
+    let start = target.start.unwrap_or(1);
+    let end = target.end.unwrap_or(usize::MAX);
+    match overlap {
+        RegionOverlap::Pos => pos >= start && pos <= end,
+        RegionOverlap::Record => {
+            let record_end = record_end_from_fields(pos, fields);
+            pos <= end && start <= record_end
+        }
+        RegionOverlap::Variant => variant_overlaps_target(pos, fields, start, end),
+    }
+}
+
+fn record_end_from_fields(pos: usize, fields: &[&str]) -> usize {
+    let ref_len = fields.get(3).map(|s| s.len().max(1)).unwrap_or(1);
+    fields
+        .get(7)
+        .and_then(|info| info.split(';').find_map(|field| field.strip_prefix("END=")))
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|end| end.max(pos))
+        .unwrap_or(pos + ref_len - 1)
+}
+
+fn variant_overlaps_target(
+    pos: usize,
+    fields: &[&str],
+    target_start: usize,
+    target_end: usize,
+) -> bool {
+    if let Some(end) = fields
+        .get(7)
+        .and_then(|info| info.split(';').find_map(|field| field.strip_prefix("END=")))
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        return pos <= target_end && target_start <= end;
+    }
+
+    let ref_len = fields.get(3).map(|s| s.len().max(1)).unwrap_or(1);
+    let Some(alts) = fields.get(4) else {
+        return false;
+    };
+    alts.split(',').any(|alt| {
+        let alt_len = alt.len().max(1);
+        if ref_len == alt_len {
+            pos >= target_start && pos <= target_end
+        } else if ref_len > alt_len {
+            let start = pos + alt_len;
+            let end = pos + ref_len - 1;
+            start <= target_end && target_start <= end
+        } else {
+            pos >= target_start && pos <= target_end && pos < target_end
+        }
+    })
 }
 
 fn write_vcf_gz(
@@ -1070,6 +1189,60 @@ fn write_vcf_text_passthrough<W: Write>(
     }
     let reader = File::open(path).map(BufReader::new)?;
     write_vcf_text_passthrough_reader(reader, header_only, no_header, out)
+}
+
+fn write_vcf_text_filtered_passthrough<W: Write>(
+    path: &Path,
+    fmt: format::Format,
+    options: &RunOptions<'_>,
+    out: W,
+) -> io::Result<()> {
+    if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
+        let f = File::open(path)?;
+        let dec = flate2::read::MultiGzDecoder::new(f);
+        return write_vcf_text_filtered_passthrough_reader(BufReader::new(dec), options, out);
+    }
+    let reader = File::open(path).map(BufReader::new)?;
+    write_vcf_text_filtered_passthrough_reader(reader, options, out)
+}
+
+fn write_vcf_text_filtered_passthrough_reader<R, W>(
+    mut reader: R,
+    options: &RunOptions<'_>,
+    mut out: W,
+) -> io::Result<()>
+where
+    R: io::BufRead,
+    W: Write,
+{
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        if line.starts_with('#') {
+            if !options.no_header {
+                out.write_all(line.as_bytes())?;
+            }
+            continue;
+        }
+        if options.header_only {
+            break;
+        }
+        let fields = line_fields(&line);
+        if record_line_matches_filters(
+            &fields,
+            options.regions,
+            options.targets,
+            options.targets_exclude,
+            options.targets_overlap,
+        ) {
+            out.write_all(line.as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 fn write_vcf_text_passthrough_reader<R, W>(

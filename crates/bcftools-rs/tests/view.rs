@@ -268,6 +268,48 @@ fn view_targets_file_excludes_site_targets() {
 }
 
 #[test]
+fn view_targets_overlap_modes_match_upstream_fixtures() {
+    let path = fixture_path("overlap.vcf");
+    for (mode, expected_name) in [
+        ("0", "overlap.0.out"),
+        ("1", "overlap.1.out"),
+        ("2", "overlap.2.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_name)).unwrap();
+        let (out, err, code) = run(&[
+            "view",
+            "--no-version",
+            "-H",
+            "-t",
+            "chr1:100-200",
+            "--targets-overlap",
+            mode,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "view --targets-overlap {mode} failed: {err}");
+        assert_eq!(out, expected, "unexpected overlap mode {mode} output");
+    }
+}
+
+#[test]
+fn view_targets_overlap_exclusion_matches_upstream_fixture() {
+    let path = fixture_path("overlap.vcf");
+    let expected = std::fs::read_to_string(fixture_path("overlap.neg2.out")).unwrap();
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-t",
+        "^chr1:100-200",
+        "--targets-overlap",
+        "2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view --targets-overlap exclusion failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn view_region_filters_bcf_input() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
