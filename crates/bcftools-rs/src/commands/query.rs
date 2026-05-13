@@ -665,10 +665,14 @@ impl SimplePredicate {
         let values = record.filter_values(&self.lhs, self.vector_any);
         match self.op {
             PredicateOp::Eq => values.iter().any(|value| value == &self.rhs),
+            PredicateOp::Ne if self.vector_any => values.iter().any(|value| value != &self.rhs),
             PredicateOp::Ne => values.iter().all(|value| value != &self.rhs),
             PredicateOp::Regex => values
                 .iter()
                 .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| re.is_match(value))),
+            PredicateOp::NotRegex if self.vector_any => values
+                .iter()
+                .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
             PredicateOp::NotRegex => values
                 .iter()
                 .all(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),

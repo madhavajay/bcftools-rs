@@ -342,6 +342,56 @@ fn query_alt_vector_regex_filter_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_vector_missing_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.15.vcf");
+    let expected_missing = std::fs::read_to_string(fixture_path("query.filter.15.1.out")).unwrap();
+    let expected_present = std::fs::read_to_string(fixture_path("query.filter.15.2.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%TAG",
+        "-i",
+        "TAG[*]=\".\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i TAG[*]=missing failed: {err}");
+    assert_eq!(out, expected_missing);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%TAG",
+        "-i",
+        "TAG[*]!=\".\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i TAG[*]!=missing failed: {err}");
+    assert_eq!(out, expected_present);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%TAG",
+        "-i",
+        "TAG[*]~\"\\.\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i TAG[*] regex missing failed: {err}");
+    assert_eq!(out, expected_missing);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%TAG",
+        "-i",
+        "TAG[*]!~\"\\.\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i TAG[*] not-regex missing failed: {err}");
+    assert_eq!(out, expected_present);
+}
+
+#[test]
 fn query_alt_scalar_filter_matches_any_alternate_allele() {
     let path = fixture_path("query.filter.4.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.55.out")).unwrap();
