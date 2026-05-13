@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use htslib_rs::expr::{Filter, Value};
 use htslib_rs::format::{self, Compression, Exact};
 
 use crate::diagnostics::fmt_etag;
@@ -23,6 +24,8 @@ Usage:   bcftools query [OPTIONS] <in.vcf.gz>|<in.bcf>\n\
 Options:\n\
     -f, --format STR                 format string\n\
     -H, --print-header               print output header, -HH omits column indices\n\
+    -i, --include EXPR               include only records matching expression\n\
+    -e, --exclude EXPR               exclude records matching expression\n\
     -l, --list-samples               print sample names and exit\n\
     -r, --regions LIST               comma-separated regions\n\
     -R, --regions-file FILE          restrict to regions in FILE\n\
@@ -40,6 +43,7 @@ struct Args {
     samples: Option<String>,
     samples_is_file: bool,
     regions: Option<RegionFilterSpec>,
+    filter: Option<FilterSpec>,
     input: String,
 }
 
@@ -47,6 +51,12 @@ struct Args {
 struct RegionFilterSpec {
     raw: String,
     is_file: bool,
+    exclude: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FilterSpec {
+    raw: String,
     exclude: bool,
 }
 
@@ -76,6 +86,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let long_opts = [
         LongOpt::new("format", HasArg::Required, b'f' as i32),
         LongOpt::new("print-header", HasArg::None, b'H' as i32),
+        LongOpt::new("include", HasArg::Required, b'i' as i32),
+        LongOpt::new("exclude", HasArg::Required, b'e' as i32),
         LongOpt::new("list-samples", HasArg::None, b'l' as i32),
         LongOpt::new("regions", HasArg::Required, b'r' as i32),
         LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
@@ -91,14 +103,31 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut samples = None;
     let mut samples_is_file = false;
     let mut regions = None;
+    let mut filter = None;
 
-    let mut g = Getopt::new("f:HlR:r:s:S:T:t:", &long_opts, argv);
+    let mut g = Getopt::new("e:f:Hi:lR:r:s:S:T:t:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
                 v if v == b'l' as i32 => list_samples = true,
+                v if v == b'e' as i32 => {
+                    if let Some(value) = m.value {
+                        filter = Some(FilterSpec {
+                            raw: value,
+                            exclude: true,
+                        });
+                    }
+                }
                 v if v == b'f' as i32 => format = m.value,
                 v if v == b'H' as i32 => header_level = header_level.saturating_add(1),
+                v if v == b'i' as i32 => {
+                    if let Some(value) = m.value {
+                        filter = Some(FilterSpec {
+                            raw: value,
+                            exclude: false,
+                        });
+                    }
+                }
                 v if v == b'r' as i32 => {
                     if let Some(value) = m.value {
                         regions = Some(RegionFilterSpec {
@@ -172,6 +201,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         samples,
         samples_is_file,
         regions,
+        filter,
         input,
     })
 }
@@ -192,15 +222,14 @@ fn run<W: Write>(args: &Args, mut out: W) -> io::Result<()> {
         }
     }
     if let Some(format) = &args.format {
-        query_format_from_path(
-            &input,
-            format,
-            args.samples.as_deref(),
-            args.samples_is_file,
-            args.header_level,
-            args.regions.as_ref(),
-            &mut out,
-        )?;
+        let options = QueryFormatOptions {
+            sample_list: args.samples.as_deref(),
+            sample_list_is_file: args.samples_is_file,
+            header_level: args.header_level,
+            region_spec: args.regions.as_ref(),
+            filter_spec: args.filter.as_ref(),
+        };
+        query_format_from_path(&input, format, &options, &mut out)?;
     }
     Ok(())
 }
@@ -277,25 +306,23 @@ where
         .collect())
 }
 
+#[derive(Debug, Clone, Copy)]
+struct QueryFormatOptions<'a> {
+    sample_list: Option<&'a str>,
+    sample_list_is_file: bool,
+    header_level: u8,
+    region_spec: Option<&'a RegionFilterSpec>,
+    filter_spec: Option<&'a FilterSpec>,
+}
+
 fn query_format_from_path<W: Write>(
     path: &Path,
     format: &str,
-    sample_list: Option<&str>,
-    sample_list_is_file: bool,
-    header_level: u8,
-    region_spec: Option<&RegionFilterSpec>,
+    options: &QueryFormatOptions<'_>,
     out: &mut W,
 ) -> io::Result<()> {
     let text = vcf_text_from_path(path)?;
-    query_format_text(
-        text.as_str(),
-        format,
-        sample_list,
-        sample_list_is_file,
-        header_level,
-        region_spec,
-        out,
-    )
+    query_format_text(text.as_str(), format, options, out)
 }
 
 fn vcf_text_from_path(path: &Path) -> io::Result<String> {
@@ -316,15 +343,16 @@ fn vcf_text_from_path(path: &Path) -> io::Result<String> {
 fn query_format_text<W: Write>(
     text: &str,
     format: &str,
-    sample_list: Option<&str>,
-    sample_list_is_file: bool,
-    header_level: u8,
-    region_spec: Option<&RegionFilterSpec>,
+    options: &QueryFormatOptions<'_>,
     out: &mut W,
 ) -> io::Result<()> {
     let mut samples = Vec::new();
     let mut sample_indices = Vec::new();
     let mut region_filter: Option<RegionFilter> = None;
+    let query_filter = options
+        .filter_spec
+        .map(QueryFilter::from_spec)
+        .transpose()?;
     let mut wrote_header = false;
     for line in text.lines() {
         if line.starts_with("##") {
@@ -332,11 +360,15 @@ fn query_format_text<W: Write>(
         }
         if line.starts_with("#CHROM\t") {
             samples = line.split('\t').skip(9).map(ToOwned::to_owned).collect();
-            sample_indices = query_sample_indices(&samples, sample_list, sample_list_is_file)?;
-            region_filter = region_spec.map(RegionFilter::from_spec).transpose()?;
-            if header_level > 0 {
+            sample_indices =
+                query_sample_indices(&samples, options.sample_list, options.sample_list_is_file)?;
+            region_filter = options
+                .region_spec
+                .map(RegionFilter::from_spec)
+                .transpose()?;
+            if options.header_level > 0 {
                 out.write_all(
-                    render_format_header(format, &samples, &sample_indices, header_level)
+                    render_format_header(format, &samples, &sample_indices, options.header_level)
                         .as_bytes(),
                 )?;
                 wrote_header = true;
@@ -352,11 +384,16 @@ fn query_format_text<W: Write>(
             continue;
         }
         let record = TextRecord::parse(line, &samples, &sample_indices);
+        if let Some(filter) = &query_filter
+            && !filter.matches(&record)?
+        {
+            continue;
+        }
         let rendered = render_format(format, &record);
         out.write_all(rendered.as_bytes())?;
     }
-    if header_level > 0 && !wrote_header {
-        out.write_all(render_format_header(format, &[], &[], header_level).as_bytes())?;
+    if options.header_level > 0 && !wrote_header {
+        out.write_all(render_format_header(format, &[], &[], options.header_level).as_bytes())?;
     }
     Ok(())
 }
@@ -483,6 +520,106 @@ fn parse_region_file_line(line: &str, is_bed: bool) -> io::Result<QueryRegion> {
         start: Some(start),
         end: Some(end),
     })
+}
+
+#[derive(Debug, Clone)]
+struct QueryFilter {
+    filter: Filter,
+    exclude: bool,
+}
+
+impl QueryFilter {
+    fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
+        Ok(Self {
+            filter: Filter::new(normalize_filter_expr(&spec.raw)),
+            exclude: spec.exclude,
+        })
+    }
+
+    fn matches(&self, record: &TextRecord<'_>) -> io::Result<bool> {
+        let value = self
+            .filter
+            .eval_with(|src| lookup_filter_symbol(src, record))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        Ok(value.truth() != self.exclude)
+    }
+}
+
+fn normalize_filter_expr(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    let mut in_string = false;
+    let mut prev_non_ws = None;
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            in_string = !in_string;
+            out.push(ch);
+            prev_non_ws = Some(ch);
+            continue;
+        }
+        if in_string {
+            out.push(ch);
+            continue;
+        }
+        let next = chars.peek().copied();
+        match ch {
+            '=' if !matches!(next, Some('=') | Some('~'))
+                && !matches!(prev_non_ws, Some('!') | Some('<') | Some('>')) =>
+            {
+                out.push_str("==")
+            }
+            '&' if next == Some('&') => {
+                out.push_str("&&");
+                chars.next();
+            }
+            '&' => {
+                out.push_str("&&");
+            }
+            '|' if next == Some('|') => {
+                out.push_str("||");
+                chars.next();
+            }
+            '|' => {
+                out.push_str("||");
+            }
+            _ => out.push(ch),
+        }
+        if !ch.is_whitespace() {
+            prev_non_ws = Some(ch);
+        }
+    }
+    out
+}
+
+fn lookup_filter_symbol(src: &str, record: &TextRecord<'_>) -> Option<(Value, usize)> {
+    let had_percent = src.starts_with('%');
+    let token_src = src.strip_prefix('%').unwrap_or(src);
+    let len = token_src
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/'))
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .last()?;
+    if token_src[len..].starts_with('(') {
+        return None;
+    }
+    let token = &token_src[..len];
+    let value = filter_token_value(token, record);
+    let consumed = len + usize::from(had_percent);
+    Some((value, consumed))
+}
+
+fn filter_token_value(token: &str, record: &TextRecord<'_>) -> Value {
+    let raw = render_token(token, record, None);
+    filter_value(raw)
+}
+
+fn filter_value(raw: String) -> Value {
+    if raw == "." {
+        return Value::string(raw);
+    }
+    raw.parse::<f64>()
+        .map(Value::number)
+        .unwrap_or_else(|_| Value::string(raw))
 }
 
 fn query_sample_indices(
@@ -757,6 +894,16 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
 mod tests {
     use super::*;
 
+    fn default_query_options<'a>() -> QueryFormatOptions<'a> {
+        QueryFormatOptions {
+            sample_list: None,
+            sample_list_is_file: false,
+            header_level: 0,
+            region_spec: None,
+            filter_spec: None,
+        }
+    }
+
     #[test]
     fn parses_list_samples_mode() {
         let argv = [
@@ -773,6 +920,7 @@ mod tests {
                 samples: None,
                 samples_is_file: false,
                 regions: None,
+                filter: None,
                 input: "in.vcf".into()
             }
         );
@@ -795,6 +943,7 @@ mod tests {
                 samples: None,
                 samples_is_file: false,
                 regions: None,
+                filter: None,
                 input: "in.vcf".into()
             }
         );
@@ -809,10 +958,7 @@ mod tests {
         query_format_text(
             text,
             "%CHROM\\t%POS\\t%DP[\\t%SAMPLE=%GT:%DP]\\n",
-            None,
-            false,
-            0,
-            None,
+            &default_query_options(),
             &mut out,
         )
         .unwrap();
@@ -828,16 +974,11 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t00\t11\n\
 chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\t1/1\n";
         let mut out = Vec::new();
-        query_format_text(
-            text,
-            "[%SAMPLE %GT\\n]",
-            Some("11,00"),
-            false,
-            0,
-            None,
-            &mut out,
-        )
-        .unwrap();
+        let options = QueryFormatOptions {
+            sample_list: Some("11,00"),
+            ..default_query_options()
+        };
+        query_format_text(text, "[%SAMPLE %GT\\n]", &options, &mut out).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "11 1/1\n00 0/0\n");
     }
 
@@ -874,5 +1015,36 @@ chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\t1/1\n";
         .unwrap();
         assert!(!filter.matches("1\t10\t.\tA\tC\t.\t.\t.").unwrap());
         assert!(filter.matches("1\t21\t.\tA\tC\t.\t.\t.").unwrap());
+    }
+
+    #[test]
+    fn query_filter_supports_core_info_and_exclusion() {
+        let text = "##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\trs1\tA\tC\t.\tPASS\tDP=7;STR=abc\n\
+1\t20\trs2\tG\tT\t.\tq10\tDP=2;STR=xyz\n";
+        let mut out = Vec::new();
+        let include_spec = FilterSpec {
+            raw: r#"DP>=7 && STR="abc""#.into(),
+            exclude: false,
+        };
+        let options = QueryFormatOptions {
+            filter_spec: Some(&include_spec),
+            ..default_query_options()
+        };
+        query_format_text(text, "%CHROM:%POS:%STR\\n", &options, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "1:10:abc\n");
+
+        let mut out = Vec::new();
+        let exclude_spec = FilterSpec {
+            raw: r#"FILTER="PASS""#.into(),
+            exclude: true,
+        };
+        let options = QueryFormatOptions {
+            filter_spec: Some(&exclude_spec),
+            ..default_query_options()
+        };
+        query_format_text(text, "%ID\\n", &options, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "rs2\n");
     }
 }

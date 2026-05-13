@@ -258,3 +258,37 @@ fn query_targets_exclusion_filters_records() {
 3 3212036 C,A\n"
     );
 }
+
+#[test]
+fn query_include_filters_core_and_info_fields() {
+    let path = fixture_path("annotate2.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %FILTER %IINT\\n",
+        "-i",
+        "IINT=11 && FILTER=\"PASS\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i failed: {err}");
+    assert_eq!(out, "3000001 PASS 11\n");
+}
+
+#[test]
+fn query_exclude_filters_string_info_fields() {
+    let path = fixture_path("query.string.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%CLNREVSTAT\\n",
+        "-e",
+        "CLNREVSTAT=\"criteria_provided,_single_submitter\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -e failed: {err}");
+    assert_eq!(
+        out,
+        "865568\tcriteria_provided,_conflicting_interpretations\n\
+865628\tcriteria_provided,_multiple_submitters,_no_conflicts\n"
+    );
+}
