@@ -342,6 +342,22 @@ fn query_alt_vector_regex_filter_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_alt_scalar_filter_matches_any_alternate_allele() {
+    let path = fixture_path("query.filter.4.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.55.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT[\\t%GT]\\n",
+        "-e",
+        "TYPE!=\"snp\" || ALT=\"*\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -e ALT=\"*\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_format_token_respects_sample_reordering() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.64.out")).unwrap();

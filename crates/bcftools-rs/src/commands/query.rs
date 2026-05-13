@@ -533,7 +533,7 @@ struct QueryFilter {
 enum QueryFilterKind {
     Expr(Filter),
     FilterIdMatch { id: String, negate: bool },
-    PredicateAll(Vec<SimplePredicate>),
+    PredicateGroups(Vec<Vec<SimplePredicate>>),
 }
 
 #[derive(Debug, Clone)]
@@ -556,7 +556,9 @@ impl QueryFilter {
     fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
         let kind = parse_filter_id_match(&spec.raw)
             .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
-            .or_else(|| parse_simple_predicate_all(&spec.raw).map(QueryFilterKind::PredicateAll))
+            .or_else(|| {
+                parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
+            })
             .unwrap_or_else(|| {
                 QueryFilterKind::Expr(Filter::new(normalize_filter_expr(&spec.raw)))
             });
@@ -577,9 +579,9 @@ impl QueryFilter {
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
-            QueryFilterKind::PredicateAll(predicates) => {
-                predicates.iter().all(|predicate| predicate.matches(record))
-            }
+            QueryFilterKind::PredicateGroups(groups) => groups
+                .iter()
+                .any(|predicates| predicates.iter().all(|predicate| predicate.matches(record))),
         };
         Ok(matched != self.exclude)
     }
@@ -601,15 +603,28 @@ impl SimplePredicate {
     }
 }
 
-fn parse_simple_predicate_all(raw: &str) -> Option<Vec<SimplePredicate>> {
-    let predicates = split_simple_and(raw)
+fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>> {
+    let groups = split_simple_or(raw)
         .into_iter()
-        .map(parse_simple_predicate)
+        .map(|term| {
+            split_simple_and(term)
+                .into_iter()
+                .map(parse_simple_predicate)
+                .collect::<Option<Vec<_>>>()
+        })
         .collect::<Option<Vec<_>>>()?;
-    (!predicates.is_empty()).then_some(predicates)
+    (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
+}
+
+fn split_simple_or(raw: &str) -> Vec<&str> {
+    split_simple_binary(raw, b'|')
 }
 
 fn split_simple_and(raw: &str) -> Vec<&str> {
+    split_simple_binary(raw, b'&')
+}
+
+fn split_simple_binary(raw: &str, delimiter: u8) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut in_string = false;
@@ -621,9 +636,9 @@ fn split_simple_and(raw: &str) -> Vec<&str> {
                 in_string = !in_string;
                 i += 1;
             }
-            b'&' if !in_string => {
+            ch if ch == delimiter && !in_string => {
                 parts.push(raw[start..i].trim());
-                i += usize::from(i + 1 < bytes.len() && bytes[i + 1] == b'&') + 1;
+                i += usize::from(i + 1 < bytes.len() && bytes[i + 1] == delimiter) + 1;
                 start = i;
             }
             _ => i += 1,
@@ -640,7 +655,7 @@ fn parse_simple_predicate(raw: &str) -> Option<SimplePredicate> {
         .strip_suffix("[*]")
         .map(|lhs| (lhs, true))
         .unwrap_or((lhs, false));
-    let rhs = rhs.trim().strip_prefix('"')?.strip_suffix('"')?;
+    let rhs = parse_quoted_rhs(rhs.trim())?;
     Some(SimplePredicate {
         lhs: lhs.trim().to_string(),
         vector_any,
@@ -662,6 +677,12 @@ fn split_simple_predicate(raw: &str) -> Option<(&str, PredicateOp, &str)> {
         }
     }
     None
+}
+
+fn parse_quoted_rhs(raw: &str) -> Option<&str> {
+    let rest = raw.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    rest[end + 1..].trim().is_empty().then_some(&rest[..end])
 }
 
 fn parse_filter_id_match(raw: &str) -> Option<(String, bool)> {
@@ -884,7 +905,7 @@ impl<'a> TextRecord<'a> {
         } else {
             render_token(key, self, None)
         };
-        if vector_any {
+        if vector_any || key == "ALT" {
             value.split(',').map(ToOwned::to_owned).collect()
         } else {
             vec![value]
