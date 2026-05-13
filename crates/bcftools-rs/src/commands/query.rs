@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use htslib_rs::expr::{Filter, Value};
 use htslib_rs::format::{self, Compression, Exact};
+use htslib_rs::variant::{VariantType, classify_variant};
 
 use crate::diagnostics::fmt_etag;
 use crate::getopt::{Getopt, HasArg, LongOpt};
@@ -582,6 +583,9 @@ fn normalize_filter_expr(raw: &str) -> String {
             '|' => {
                 out.push_str("||");
             }
+            '~' if !matches!(prev_non_ws, Some('!' | '=')) => {
+                out.push_str("=~");
+            }
             _ => out.push(ch),
         }
         if !ch.is_whitespace() {
@@ -609,7 +613,11 @@ fn lookup_filter_symbol(src: &str, record: &TextRecord<'_>) -> Option<(Value, us
 }
 
 fn filter_token_value(token: &str, record: &TextRecord<'_>) -> Value {
-    let raw = render_token(token, record, None);
+    let raw = if token.eq_ignore_ascii_case("type") {
+        record.core("TYPE")
+    } else {
+        render_token(token, record, None)
+    };
     filter_value(raw)
 }
 
@@ -660,6 +668,7 @@ impl<'a> TextRecord<'a> {
             "FORMAT" => self.fields.get(8).copied().unwrap_or(".").to_string(),
             "N_ALT" => self.n_alt().to_string(),
             "N_SAMPLES" => self.samples.len().to_string(),
+            "TYPE" => self.variant_type_label(),
             "LINE" => self.fields.join("\t"),
             _ => ".".to_string(),
         }
@@ -681,6 +690,16 @@ impl<'a> TextRecord<'a> {
             }
         }
         out
+    }
+
+    fn variant_type_label(&self) -> String {
+        let ref_allele = self.fields.get(3).copied().unwrap_or(".");
+        let alt = self.fields.get(4).copied().unwrap_or(".");
+        let mut variant_type = VariantType::REF;
+        for alt_allele in alt.split(',').filter(|allele| !allele.is_empty()) {
+            variant_type |= classify_variant(ref_allele, alt_allele).variant_type;
+        }
+        variant_type_label(variant_type)
     }
 
     fn info(&self, key: &str) -> String {
@@ -908,9 +927,35 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
     }
     match token {
         "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "FORMAT"
-        | "N_ALT" | "N_SAMPLES" | "LINE" => record.core(token),
+        | "N_ALT" | "N_SAMPLES" | "TYPE" | "LINE" => record.core(token),
         _ => record.info(token),
     }
+}
+
+fn variant_type_label(variant_type: VariantType) -> String {
+    if variant_type == VariantType::REF {
+        return "ref".into();
+    }
+    let mut labels = Vec::new();
+    if variant_type.contains(VariantType::SNP) {
+        labels.push("snp");
+    }
+    if variant_type.contains(VariantType::MNP) {
+        labels.push("mnp");
+    }
+    if variant_type.contains(VariantType::INDEL) {
+        labels.push("indel");
+    }
+    if variant_type.contains(VariantType::BND) {
+        labels.push("bnd");
+    }
+    if variant_type.contains(VariantType::OVERLAP) {
+        labels.push("overlap");
+    }
+    if variant_type.contains(VariantType::OTHER) {
+        labels.push("other");
+    }
+    labels.join(",")
 }
 
 #[cfg(test)]

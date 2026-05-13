@@ -340,3 +340,51 @@ fn query_format_token_respects_sample_reordering() {
     assert_eq!(code, 0, "query %FORMAT failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_computed_type_filter_matches_upstream_exact_fixture() {
+    let path = fixture_path("query.filter-type.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.26.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\n",
+        "-i",
+        "type=\"snp\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i type=\"snp\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_computed_type_filter_matches_upstream_regex_fixture() {
+    let path = fixture_path("query.filter-type.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.27.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\n",
+        "-i",
+        "type~\"snp\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i type~\"snp\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_info_type_still_prefers_info_namespace() {
+    let path = fixture_path("query.filter-type.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.67.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\n",
+        "-i",
+        "INFO/TYPE=\"xxx\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i INFO/TYPE failed: {err}");
+    assert_eq!(out, expected);
+}
