@@ -44,6 +44,7 @@ dependencies = [
  "flate2",
  "htslib-rs",
  "memchr",
+ "regex",
  "tempfile",
 ]
 

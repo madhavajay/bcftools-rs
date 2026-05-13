@@ -326,6 +326,22 @@ fn query_computed_n_samples_filter_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_alt_vector_regex_filter_matches_upstream_fixture() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.5.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %REF %ALT\\n",
+        "-i",
+        "REF~\"C\" && ALT[*]~\"CT\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i ALT[*] regex failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_format_token_respects_sample_reordering() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.64.out")).unwrap();

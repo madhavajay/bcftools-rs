@@ -533,12 +533,30 @@ struct QueryFilter {
 enum QueryFilterKind {
     Expr(Filter),
     FilterIdMatch { id: String, negate: bool },
+    PredicateAll(Vec<SimplePredicate>),
+}
+
+#[derive(Debug, Clone)]
+struct SimplePredicate {
+    lhs: String,
+    vector_any: bool,
+    op: PredicateOp,
+    rhs: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PredicateOp {
+    Eq,
+    Ne,
+    Regex,
+    NotRegex,
 }
 
 impl QueryFilter {
     fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
         let kind = parse_filter_id_match(&spec.raw)
             .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
+            .or_else(|| parse_simple_predicate_all(&spec.raw).map(QueryFilterKind::PredicateAll))
             .unwrap_or_else(|| {
                 QueryFilterKind::Expr(Filter::new(normalize_filter_expr(&spec.raw)))
             });
@@ -559,9 +577,91 @@ impl QueryFilter {
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
+            QueryFilterKind::PredicateAll(predicates) => {
+                predicates.iter().all(|predicate| predicate.matches(record))
+            }
         };
         Ok(matched != self.exclude)
     }
+}
+
+impl SimplePredicate {
+    fn matches(&self, record: &TextRecord<'_>) -> bool {
+        let values = record.filter_values(&self.lhs, self.vector_any);
+        match self.op {
+            PredicateOp::Eq => values.iter().any(|value| value == &self.rhs),
+            PredicateOp::Ne => values.iter().all(|value| value != &self.rhs),
+            PredicateOp::Regex => values
+                .iter()
+                .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| re.is_match(value))),
+            PredicateOp::NotRegex => values
+                .iter()
+                .all(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
+        }
+    }
+}
+
+fn parse_simple_predicate_all(raw: &str) -> Option<Vec<SimplePredicate>> {
+    let predicates = split_simple_and(raw)
+        .into_iter()
+        .map(parse_simple_predicate)
+        .collect::<Option<Vec<_>>>()?;
+    (!predicates.is_empty()).then_some(predicates)
+}
+
+fn split_simple_and(raw: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut in_string = false;
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                in_string = !in_string;
+                i += 1;
+            }
+            b'&' if !in_string => {
+                parts.push(raw[start..i].trim());
+                i += usize::from(i + 1 < bytes.len() && bytes[i + 1] == b'&') + 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    parts.push(raw[start..].trim());
+    parts
+}
+
+fn parse_simple_predicate(raw: &str) -> Option<SimplePredicate> {
+    let (lhs, op, rhs) = split_simple_predicate(raw)?;
+    let lhs = lhs.trim();
+    let (lhs, vector_any) = lhs
+        .strip_suffix("[*]")
+        .map(|lhs| (lhs, true))
+        .unwrap_or((lhs, false));
+    let rhs = rhs.trim().strip_prefix('"')?.strip_suffix('"')?;
+    Some(SimplePredicate {
+        lhs: lhs.trim().to_string(),
+        vector_any,
+        op,
+        rhs: rhs.to_string(),
+    })
+}
+
+fn split_simple_predicate(raw: &str) -> Option<(&str, PredicateOp, &str)> {
+    for (needle, op) in [
+        ("!~", PredicateOp::NotRegex),
+        ("!=", PredicateOp::Ne),
+        ("==", PredicateOp::Eq),
+        ("=", PredicateOp::Eq),
+        ("~", PredicateOp::Regex),
+    ] {
+        if let Some((lhs, rhs)) = raw.split_once(needle) {
+            return Some((lhs, op, rhs));
+        }
+    }
+    None
 }
 
 fn parse_filter_id_match(raw: &str) -> Option<(String, bool)> {
@@ -776,6 +876,19 @@ impl<'a> TextRecord<'a> {
             .unwrap_or(".")
             .split(';')
             .any(|filter| filter == id)
+    }
+
+    fn filter_values(&self, key: &str, vector_any: bool) -> Vec<String> {
+        let value = if key.eq_ignore_ascii_case("type") {
+            self.core("TYPE")
+        } else {
+            render_token(key, self, None)
+        };
+        if vector_any {
+            value.split(',').map(ToOwned::to_owned).collect()
+        } else {
+            vec![value]
+        }
     }
 
     fn format_value(&self, sample_index: usize, key: &str) -> String {
