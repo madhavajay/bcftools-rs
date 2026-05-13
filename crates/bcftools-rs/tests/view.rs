@@ -292,6 +292,33 @@ fn view_targets_overlap_modes_match_upstream_fixtures() {
 }
 
 #[test]
+fn view_regions_overlap_modes_match_upstream_fixtures() {
+    let path = fixture_path("overlap.vcf");
+    for (mode, expected_name) in [
+        ("0", "overlap.0.out"),
+        ("1", "overlap.1.out"),
+        ("2", "overlap.2.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_name)).unwrap();
+        let (out, err, code) = run(&[
+            "view",
+            "--no-version",
+            "-H",
+            "-r",
+            "chr1:100-200",
+            "--regions-overlap",
+            mode,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "view --regions-overlap {mode} failed: {err}");
+        assert_eq!(
+            out, expected,
+            "unexpected region overlap mode {mode} output"
+        );
+    }
+}
+
+#[test]
 fn view_targets_overlap_exclusion_matches_upstream_fixture() {
     let path = fixture_path("overlap.vcf");
     let expected = std::fs::read_to_string(fixture_path("overlap.neg2.out")).unwrap();

@@ -50,6 +50,7 @@ Output options:\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
     -r, --regions REG                 restrict to comma-separated regions\n\
     -R, --regions-file FILE           restrict to regions listed in a file\n\
+        --regions-overlap 0|1|2       region overlap mode: 0=POS, 1=record, 2=variant [0]\n\
     -s, --samples LIST                comma-separated sample list, optionally prefixed with ^\n\
     -S, --samples-file FILE           file of samples, optionally prefixed with ^\n\
     -t, --targets REG                 restrict to comma-separated targets\n\
@@ -60,6 +61,7 @@ Output options:\n\
 const OPT_NO_VERSION: i32 = 200;
 const OPT_THREADS: i32 = 9;
 const OPT_TARGETS_OVERLAP: i32 = 201;
+const OPT_REGIONS_OVERLAP: i32 = 202;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
@@ -83,6 +85,7 @@ struct RunOptions<'a> {
     no_header: bool,
     no_version: bool,
     regions: &'a [Region],
+    regions_overlap: RegionOverlap,
     targets: &'a [Region],
     targets_exclude: bool,
     targets_overlap: RegionOverlap,
@@ -326,6 +329,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
         LongOpt::new("regions", HasArg::Required, b'r' as i32),
         LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
+        LongOpt::new("regions-overlap", HasArg::Required, OPT_REGIONS_OVERLAP),
         LongOpt::new("samples", HasArg::Required, b's' as i32),
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
         LongOpt::new("targets", HasArg::Required, b't' as i32),
@@ -343,6 +347,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut no_header = false;
     let mut no_version = false;
     let mut thread_count = None;
+    let mut regions_overlap = RegionOverlap::Pos;
     let mut targets_overlap = RegionOverlap::Pos;
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
@@ -436,6 +441,24 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                                 fmt_etag(
                                     "main_vcfview",
                                     &format!("Could not parse argument: --threads {raw}")
+                                )
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == OPT_REGIONS_OVERLAP => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_overlap_option(raw)
+                        .and_then(|mode| RegionOverlap::try_from(mode).ok())
+                    {
+                        Some(mode) => regions_overlap = mode,
+                        None => {
+                            eprintln!(
+                                "{}",
+                                fmt_etag(
+                                    "main_vcfview",
+                                    &format!("The --regions-overlap mode \"{raw}\" not recognised")
                                 )
                             );
                             return ExitCode::FAILURE;
@@ -547,6 +570,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         no_header,
         no_version,
         regions: &regions,
+        regions_overlap,
         targets: &targets,
         targets_exclude,
         targets_overlap,
@@ -846,6 +870,7 @@ fn write_sample_subset_bcf<W: Write>(
         no_header: false,
         no_version: options.no_version,
         regions: options.regions,
+        regions_overlap: options.regions_overlap,
         targets: options.targets,
         targets_exclude: options.targets_exclude,
         targets_overlap: options.targets_overlap,
@@ -947,6 +972,7 @@ fn write_sample_subset_vcf_text<W: Write>(
         if !record_line_matches_filters(
             &fields,
             options.regions,
+            options.regions_overlap,
             options.targets,
             options.targets_exclude,
             options.targets_overlap,
@@ -1008,6 +1034,7 @@ fn write_projected_vcf_line<W: Write>(
 fn record_line_matches_filters(
     fields: &[&str],
     regions: &[Region],
+    regions_overlap: RegionOverlap,
     targets: &[Region],
     targets_exclude: bool,
     targets_overlap: RegionOverlap,
@@ -1018,7 +1045,7 @@ fn record_line_matches_filters(
     let Some(pos) = fields.get(1).and_then(|pos| pos.parse::<usize>().ok()) else {
         return false;
     };
-    region_list_matches(regions, contig, pos)
+    region_line_matches(regions, regions_overlap, contig, pos, fields)
         && target_line_matches(
             targets,
             targets_exclude,
@@ -1029,12 +1056,16 @@ fn record_line_matches_filters(
         )
 }
 
-fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
+fn region_line_matches(
+    regions: &[Region],
+    overlap: RegionOverlap,
+    contig: &str,
+    pos: usize,
+    fields: &[&str],
+) -> bool {
     regions.is_empty()
         || regions.iter().any(|region| {
-            region.contig == contig
-                && region.start.is_none_or(|start| pos >= start)
-                && region.end.is_none_or(|end| pos <= end)
+            region.contig == contig && record_overlaps_target(pos, fields, region, overlap)
         })
 }
 
@@ -1235,6 +1266,7 @@ where
         if record_line_matches_filters(
             &fields,
             options.regions,
+            options.regions_overlap,
             options.targets,
             options.targets_exclude,
             options.targets_overlap,
