@@ -388,3 +388,35 @@ fn query_info_type_still_prefers_info_namespace() {
     assert_eq!(code, 0, "query -i INFO/TYPE failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_percent_ilen_filter_uses_computed_length() {
+    let path = fixture_path("query.filter.8.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.69.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\t%ILEN\\n",
+        "-i",
+        "%ILEN==1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i %ILEN failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_bare_ilen_filter_uses_info_tag() {
+    let path = fixture_path("query.filter.8.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.70.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\t%ILEN\\n",
+        "-i",
+        "ILEN==1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i ILEN failed: {err}");
+    assert_eq!(out, expected);
+}

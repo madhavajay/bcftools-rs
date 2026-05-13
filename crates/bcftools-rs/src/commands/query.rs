@@ -565,7 +565,7 @@ fn normalize_filter_expr(raw: &str) -> String {
         let next = chars.peek().copied();
         match ch {
             '=' if !matches!(next, Some('=') | Some('~'))
-                && !matches!(prev_non_ws, Some('!') | Some('<') | Some('>')) =>
+                && !matches!(prev_non_ws, Some('!' | '<' | '>' | '=')) =>
             {
                 out.push_str("==")
             }
@@ -607,14 +607,20 @@ fn lookup_filter_symbol(src: &str, record: &TextRecord<'_>) -> Option<(Value, us
         return None;
     }
     let token = &token_src[..len];
-    let value = filter_token_value(token, record);
+    let value = filter_token_value(token, had_percent, record);
     let consumed = len + usize::from(had_percent);
     Some((value, consumed))
 }
 
-fn filter_token_value(token: &str, record: &TextRecord<'_>) -> Value {
+fn filter_token_value(
+    token: &str,
+    explicit_formatter_token: bool,
+    record: &TextRecord<'_>,
+) -> Value {
     let raw = if token.eq_ignore_ascii_case("type") {
         record.core("TYPE")
+    } else if explicit_formatter_token && token == "ILEN" {
+        record.computed_ilen().to_string()
     } else {
         render_token(token, record, None)
     };
@@ -700,6 +706,19 @@ impl<'a> TextRecord<'a> {
             variant_type |= classify_variant(ref_allele, alt_allele).variant_type;
         }
         variant_type_label(variant_type)
+    }
+
+    fn computed_ilen(&self) -> i32 {
+        let ref_len = self.fields.get(3).copied().unwrap_or(".").len() as i32;
+        self.fields
+            .get(4)
+            .copied()
+            .unwrap_or(".")
+            .split(',')
+            .filter(|allele| !allele.is_empty() && *allele != ".")
+            .map(|allele| (allele.len() as i32 - ref_len).abs())
+            .max()
+            .unwrap_or(0)
     }
 
     fn info(&self, key: &str) -> String {
