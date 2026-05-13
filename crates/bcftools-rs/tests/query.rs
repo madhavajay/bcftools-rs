@@ -180,3 +180,81 @@ fn query_print_header_twice_omits_column_indices() {
 4 3258449 C D 1 0 1/1 0/0"
     );
 }
+
+#[test]
+fn query_regions_file_filters_records() {
+    let path = fixture_path("regions.vcf");
+    let regions = fixture_path("regions.tab");
+    let expected = std::fs::read_to_string(fixture_path("regions.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS %REF,%ALT\\n",
+        "-R",
+        regions.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -R failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_inline_regions_filter_records() {
+    let path = fixture_path("regions.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS %REF,%ALT\\n",
+        "-r",
+        "1:3062915-3106154,2:3199815-3199815",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -r failed: {err}");
+    assert_eq!(
+        out,
+        "1 3062915 GTT,G\n\
+1 3062915 G,T\n\
+1 3106154 CA,C\n\
+1 3106154 C,T,CT\n\
+2 3199815 C,T\n"
+    );
+}
+
+#[test]
+fn query_targets_file_filters_records() {
+    let path = fixture_path("regions.vcf");
+    let targets = fixture_path("regions.tab");
+    let expected = std::fs::read_to_string(fixture_path("regions.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS %REF,%ALT\\n",
+        "-T",
+        targets.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -T failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_targets_exclusion_filters_records() {
+    let path = fixture_path("regions.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS %REF,%ALT\\n",
+        "-t",
+        "^1:3062915-3184885",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -t ^ failed: {err}");
+    assert_eq!(
+        out,
+        "2 3199812 G,T\n\
+2 3199815 C,T\n\
+3 3212016 C,A\n\
+3 3212026 C,A\n\
+3 3212036 C,A\n"
+    );
+}

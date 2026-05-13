@@ -24,8 +24,12 @@ Options:\n\
     -f, --format STR                 format string\n\
     -H, --print-header               print output header, -HH omits column indices\n\
     -l, --list-samples               print sample names and exit\n\
+    -r, --regions LIST               comma-separated regions\n\
+    -R, --regions-file FILE          restrict to regions in FILE\n\
     -s, --samples LIST               comma-separated sample list\n\
     -S, --samples-file FILE          file of samples, optionally prefixed with ^\n\
+    -t, --targets LIST               comma-separated targets, optionally prefixed with ^\n\
+    -T, --targets-file FILE          restrict to targets in FILE, optionally prefixed with ^\n\
 \n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +39,15 @@ struct Args {
     header_level: u8,
     samples: Option<String>,
     samples_is_file: bool,
+    regions: Option<RegionFilterSpec>,
     input: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegionFilterSpec {
+    raw: String,
+    is_file: bool,
+    exclude: bool,
 }
 
 /// Subcommand entry point. `argv[0]` is `"query"`.
@@ -65,8 +77,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         LongOpt::new("format", HasArg::Required, b'f' as i32),
         LongOpt::new("print-header", HasArg::None, b'H' as i32),
         LongOpt::new("list-samples", HasArg::None, b'l' as i32),
+        LongOpt::new("regions", HasArg::Required, b'r' as i32),
+        LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
         LongOpt::new("samples", HasArg::Required, b's' as i32),
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
+        LongOpt::new("targets", HasArg::Required, b't' as i32),
+        LongOpt::new("targets-file", HasArg::Required, b'T' as i32),
     ];
 
     let mut list_samples = false;
@@ -74,14 +90,33 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut header_level = 0u8;
     let mut samples = None;
     let mut samples_is_file = false;
+    let mut regions = None;
 
-    let mut g = Getopt::new("f:Hls:S:", &long_opts, argv);
+    let mut g = Getopt::new("f:HlR:r:s:S:T:t:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
                 v if v == b'l' as i32 => list_samples = true,
                 v if v == b'f' as i32 => format = m.value,
                 v if v == b'H' as i32 => header_level = header_level.saturating_add(1),
+                v if v == b'r' as i32 => {
+                    if let Some(value) = m.value {
+                        regions = Some(RegionFilterSpec {
+                            raw: value,
+                            is_file: false,
+                            exclude: false,
+                        });
+                    }
+                }
+                v if v == b'R' as i32 => {
+                    if let Some(value) = m.value {
+                        regions = Some(RegionFilterSpec {
+                            raw: value,
+                            is_file: true,
+                            exclude: false,
+                        });
+                    }
+                }
                 v if v == b's' as i32 => {
                     samples = m.value;
                     samples_is_file = false;
@@ -89,6 +124,26 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 v if v == b'S' as i32 => {
                     samples = m.value;
                     samples_is_file = true;
+                }
+                v if v == b't' as i32 => {
+                    if let Some(value) = m.value {
+                        let (exclude, raw) = strip_exclusion_prefix(value);
+                        regions = Some(RegionFilterSpec {
+                            raw,
+                            is_file: false,
+                            exclude,
+                        });
+                    }
+                }
+                v if v == b'T' as i32 => {
+                    if let Some(value) = m.value {
+                        let (exclude, raw) = strip_exclusion_prefix(value);
+                        regions = Some(RegionFilterSpec {
+                            raw,
+                            is_file: true,
+                            exclude,
+                        });
+                    }
                 }
                 _ => return Err(ParseOutcome::Usage),
             },
@@ -116,8 +171,16 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         header_level,
         samples,
         samples_is_file,
+        regions,
         input,
     })
+}
+
+fn strip_exclusion_prefix(value: String) -> (bool, String) {
+    value
+        .strip_prefix('^')
+        .map(|s| (true, s.to_string()))
+        .unwrap_or((false, value))
 }
 
 fn run<W: Write>(args: &Args, mut out: W) -> io::Result<()> {
@@ -135,6 +198,7 @@ fn run<W: Write>(args: &Args, mut out: W) -> io::Result<()> {
             args.samples.as_deref(),
             args.samples_is_file,
             args.header_level,
+            args.regions.as_ref(),
             &mut out,
         )?;
     }
@@ -219,6 +283,7 @@ fn query_format_from_path<W: Write>(
     sample_list: Option<&str>,
     sample_list_is_file: bool,
     header_level: u8,
+    region_spec: Option<&RegionFilterSpec>,
     out: &mut W,
 ) -> io::Result<()> {
     let text = vcf_text_from_path(path)?;
@@ -228,6 +293,7 @@ fn query_format_from_path<W: Write>(
         sample_list,
         sample_list_is_file,
         header_level,
+        region_spec,
         out,
     )
 }
@@ -253,10 +319,12 @@ fn query_format_text<W: Write>(
     sample_list: Option<&str>,
     sample_list_is_file: bool,
     header_level: u8,
+    region_spec: Option<&RegionFilterSpec>,
     out: &mut W,
 ) -> io::Result<()> {
     let mut samples = Vec::new();
     let mut sample_indices = Vec::new();
+    let mut region_filter: Option<RegionFilter> = None;
     let mut wrote_header = false;
     for line in text.lines() {
         if line.starts_with("##") {
@@ -265,6 +333,7 @@ fn query_format_text<W: Write>(
         if line.starts_with("#CHROM\t") {
             samples = line.split('\t').skip(9).map(ToOwned::to_owned).collect();
             sample_indices = query_sample_indices(&samples, sample_list, sample_list_is_file)?;
+            region_filter = region_spec.map(RegionFilter::from_spec).transpose()?;
             if header_level > 0 {
                 out.write_all(
                     render_format_header(format, &samples, &sample_indices, header_level)
@@ -277,6 +346,11 @@ fn query_format_text<W: Write>(
         if line.starts_with('#') || line.is_empty() {
             continue;
         }
+        if let Some(filter) = &region_filter
+            && !filter.matches(line)?
+        {
+            continue;
+        }
         let record = TextRecord::parse(line, &samples, &sample_indices);
         let rendered = render_format(format, &record);
         out.write_all(rendered.as_bytes())?;
@@ -285,6 +359,130 @@ fn query_format_text<W: Write>(
         out.write_all(render_format_header(format, &[], &[], header_level).as_bytes())?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct RegionFilter {
+    regions: Vec<QueryRegion>,
+    exclude: bool,
+}
+
+#[derive(Debug, Clone)]
+struct QueryRegion {
+    chrom: String,
+    start: Option<i64>,
+    end: Option<i64>,
+}
+
+impl RegionFilter {
+    fn from_spec(spec: &RegionFilterSpec) -> io::Result<Self> {
+        let regions = if spec.is_file {
+            read_region_file(&spec.raw)?
+        } else {
+            parse_region_list(&spec.raw)?
+        };
+        Ok(Self {
+            regions,
+            exclude: spec.exclude,
+        })
+    }
+
+    fn matches(&self, record_line: &str) -> io::Result<bool> {
+        let mut fields = record_line.split('\t');
+        let chrom = fields
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing CHROM field"))?;
+        let pos = fields
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing POS field"))?
+            .parse::<i64>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let matched = self.regions.iter().any(|region| {
+            region.chrom == chrom
+                && region.start.is_none_or(|start| pos >= start)
+                && region.end.is_none_or(|end| pos <= end)
+        });
+        Ok(matched != self.exclude)
+    }
+}
+
+fn parse_region_list(raw: &str) -> io::Result<Vec<QueryRegion>> {
+    raw.split(',')
+        .filter(|item| !item.trim().is_empty())
+        .map(|item| parse_region_item(item.trim()))
+        .collect()
+}
+
+fn parse_region_item(raw: &str) -> io::Result<QueryRegion> {
+    let (chrom, coordinates) = raw.split_once(':').unwrap_or((raw, ""));
+    if chrom.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "empty region chromosome",
+        ));
+    }
+    if coordinates.is_empty() {
+        return Ok(QueryRegion {
+            chrom: chrom.to_string(),
+            start: None,
+            end: None,
+        });
+    }
+    let (start, end) = coordinates
+        .split_once('-')
+        .unwrap_or((coordinates, coordinates));
+    let start = parse_region_position(start)?;
+    let end = parse_region_position(end)?;
+    Ok(QueryRegion {
+        chrom: chrom.to_string(),
+        start: Some(start),
+        end: Some(end),
+    })
+}
+
+fn parse_region_position(raw: &str) -> io::Result<i64> {
+    raw.replace(',', "")
+        .parse::<i64>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+}
+
+fn read_region_file(path: &str) -> io::Result<Vec<QueryRegion>> {
+    let text = if path.ends_with(".gz") {
+        let file = File::open(path)?;
+        let mut dec = flate2::read::MultiGzDecoder::new(file);
+        let mut text = String::new();
+        dec.read_to_string(&mut text)?;
+        text
+    } else {
+        fs::read_to_string(path)?
+    };
+    let is_bed = Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bed"));
+    text.lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| parse_region_file_line(line, is_bed))
+        .collect()
+}
+
+fn parse_region_file_line(line: &str, is_bed: bool) -> io::Result<QueryRegion> {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    if fields.len() < 3 {
+        return parse_region_item(line.trim());
+    }
+    let chrom = fields[0].to_string();
+    let raw_start = parse_region_position(fields[1])?;
+    let raw_end = parse_region_position(fields[2])?;
+    let (start, end) = if is_bed {
+        (raw_start + 1, raw_end)
+    } else {
+        (raw_start, raw_end)
+    };
+    Ok(QueryRegion {
+        chrom,
+        start: Some(start),
+        end: Some(end),
+    })
 }
 
 fn query_sample_indices(
@@ -574,6 +772,7 @@ mod tests {
                 header_level: 0,
                 samples: None,
                 samples_is_file: false,
+                regions: None,
                 input: "in.vcf".into()
             }
         );
@@ -595,6 +794,7 @@ mod tests {
                 header_level: 0,
                 samples: None,
                 samples_is_file: false,
+                regions: None,
                 input: "in.vcf".into()
             }
         );
@@ -612,6 +812,7 @@ mod tests {
             None,
             false,
             0,
+            None,
             &mut out,
         )
         .unwrap();
@@ -627,7 +828,16 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t00\t11\n\
 chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\t1/1\n";
         let mut out = Vec::new();
-        query_format_text(text, "[%SAMPLE %GT\\n]", Some("11,00"), false, 0, &mut out).unwrap();
+        query_format_text(
+            text,
+            "[%SAMPLE %GT\\n]",
+            Some("11,00"),
+            false,
+            0,
+            None,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "11 1/1\n00 0/0\n");
     }
 
@@ -643,5 +853,26 @@ chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\t1/1\n";
             render_format_header("%CHROM %POS[ %SAMPLE][ %DP][ %GT]", &samples, &indices, 2),
             "#CHROM POS C:SAMPLE D:SAMPLE C:DP D:DP C:GT D:GT\n"
         );
+    }
+
+    #[test]
+    fn region_filter_supports_inline_and_exclusion() {
+        let filter = RegionFilter::from_spec(&RegionFilterSpec {
+            raw: "1:10-20".into(),
+            is_file: false,
+            exclude: false,
+        })
+        .unwrap();
+        assert!(filter.matches("1\t10\t.\tA\tC\t.\t.\t.").unwrap());
+        assert!(!filter.matches("1\t21\t.\tA\tC\t.\t.\t.").unwrap());
+
+        let filter = RegionFilter::from_spec(&RegionFilterSpec {
+            raw: "1:10-20".into(),
+            is_file: false,
+            exclude: true,
+        })
+        .unwrap();
+        assert!(!filter.matches("1\t10\t.\tA\tC\t.\t.\t.").unwrap());
+        assert!(filter.matches("1\t21\t.\tA\tC\t.\t.\t.").unwrap());
     }
 }
