@@ -8,18 +8,16 @@
 //! - `-s N` — print N records starting *with* the `#CHROM` header line; this
 //!   implies `-h 0` and ensures the `#CHROM` line is present in output even
 //!   when `-h` would have truncated before it.
-//! - `-v N` — verbosity passthrough (parsed and validated; not yet wired to
-//!   any logging layer).
+//! - `-v N` — verbosity passthrough to `htslib-rs::log_compat`.
 //!
-//! Stdin (`-`) is not yet supported and yields an explicit error. Upstream
-//! reads from stdin when the input descriptor is not a TTY; that requires
-//! magic-byte format detection in our reader path and is deferred.
+//! Stdin is supported when no file is supplied or when the file is `-`.
 
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{self, BufReader, Write};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader, Read as _, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::vcf::variant::io::Write as _;
@@ -96,33 +94,18 @@ pub fn main(argv: &[OsString]) -> ExitCode {
 
     let positional = g.rest();
     let fname = match positional.len() {
-        0 => {
-            eprint!("{USAGE}");
-            return ExitCode::SUCCESS;
-        }
-        1 => &positional[0],
+        0 => None,
+        1 => Some(positional[0].as_os_str().to_string_lossy().into_owned()),
         _ => {
             eprint!("{USAGE}");
             return ExitCode::FAILURE;
         }
     };
 
-    let path = Path::new(fname);
-    if fname == "-" {
-        eprintln!("{}", fmt_etag("main_vcfhead", "stdin not yet supported"));
-        return ExitCode::FAILURE;
-    }
-
-    match run(path, all_headers, nheaders, samples, nrecords) {
+    match run_input(fname.as_deref(), all_headers, nheaders, samples, nrecords) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!(
-                "{}",
-                fmt_etag(
-                    "main_vcfhead",
-                    &format!("Can't open \"{}\": {e}", path.display())
-                )
-            );
+            eprintln!("{}", fmt_etag("main_vcfhead", &format!("{e}")));
             ExitCode::FAILURE
         }
     }
@@ -133,6 +116,49 @@ fn parse_u64(s: &str) -> u64 {
     // negative → wrap to large positive (rare in practice), but for our tests
     // we just accept decimal and treat parse failure as 0.
     s.parse::<u64>().unwrap_or(0)
+}
+
+fn run_input(
+    fname: Option<&str>,
+    all_headers: bool,
+    nheaders: u64,
+    samples: bool,
+    nrecords: u64,
+) -> io::Result<()> {
+    match fname {
+        Some(name) if name != "-" => {
+            let path = Path::new(name);
+            run(path, all_headers, nheaders, samples, nrecords).map_err(|e| {
+                io::Error::new(e.kind(), format!("Can't open \"{}\": {e}", path.display()))
+            })
+        }
+        _ => {
+            let mut data = Vec::new();
+            io::stdin().lock().read_to_end(&mut data)?;
+            if data.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "No input data",
+                ));
+            }
+            let path = stdin_tmp_path();
+            std::fs::write(&path, &data)?;
+            let result = run(&path, all_headers, nheaders, samples, nrecords);
+            let _ = std::fs::remove_file(&path);
+            result
+        }
+    }
+}
+
+fn stdin_tmp_path() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        ".bcftools-rs-head-{}-{nanos}.tmp",
+        std::process::id()
+    ))
 }
 
 fn run(
@@ -179,25 +205,40 @@ fn run(
 
 /// Read the full header text, serialized to VCF.
 fn read_header_text(path: &Path, fmt: format::Format) -> io::Result<String> {
-    use htslib_rs::variant_io_compat::{read_bcf_header_from_path, read_vcf_header_from_path};
+    use htslib_rs::variant_io_compat::read_bcf_header_from_path;
 
-    let header = if fmt.exact == Exact::Bcf {
-        read_bcf_header_from_path(path)?
-    } else {
-        // VCF, possibly bgzf-compressed.
+    if fmt.exact != Exact::Bcf {
+        // For VCF text, preserve the byte order of raw header lines. Writing a
+        // structured header normalizes record categories and fails upstream
+        // `test_vcf_head` byte parity.
         if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
             let f = File::open(path)?;
             let dec = flate2::read::MultiGzDecoder::new(f);
-            let buf = BufReader::new(dec);
-            htslib_rs::variant_io_compat::read_vcf_header(buf)?
-        } else {
-            read_vcf_header_from_path(path)?
+            return read_vcf_header_text(BufReader::new(dec));
         }
-    };
+        return File::open(path)
+            .map(BufReader::new)
+            .and_then(read_vcf_header_text);
+    }
 
+    let header = read_bcf_header_from_path(path)?;
     let mut buf = Vec::new();
     htslib_rs::vcf::io::Writer::new(&mut buf).write_header(&header)?;
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn read_vcf_header_text<R: BufRead>(mut reader: R) -> io::Result<String> {
+    let mut out = String::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 || !line.starts_with('#') {
+            break;
+        }
+        out.push_str(&line);
+    }
+    Ok(out)
 }
 
 fn write_n_records<W: Write>(

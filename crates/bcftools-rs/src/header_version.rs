@@ -15,7 +15,7 @@
 //! See `bcftools/vcfmerge.c:3362-3398` for the C implementation.
 
 use std::ffi::OsStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::version::{BCFTOOLS_VERSION, HTSLIB_RS_VERSION};
 
@@ -71,6 +71,19 @@ where
         version_line,
         command_line,
     }
+}
+
+/// Returns the timestamp to use for `Date=` header fields.
+///
+/// Normal runs use the current time. Tests that intentionally exercise
+/// `##bcftools_*Command` lines can set `BCFTOOLS_RS_FIXED_TIME` to a Unix
+/// timestamp in seconds to make output deterministic.
+pub fn command_time() -> SystemTime {
+    std::env::var("BCFTOOLS_RS_FIXED_TIME")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|secs| UNIX_EPOCH + Duration::from_secs(secs))
+        .unwrap_or_else(SystemTime::now)
 }
 
 /// Format a `SystemTime` as `"Mon Jan  1 00:00:00 2026"`, the same shape that
@@ -188,5 +201,16 @@ mod tests {
         let lines = build_lines("bcftools/csq", &argv, fixed_time());
         assert!(lines.version_line.starts_with("##bcftools/csqVersion="));
         assert!(lines.command_line.starts_with("##bcftools/csqCommand="));
+    }
+
+    #[test]
+    fn command_time_can_be_pinned_by_env() {
+        unsafe {
+            std::env::set_var("BCFTOOLS_RS_FIXED_TIME", "1704067200");
+        }
+        assert_eq!(format_ctime(command_time()), "Mon Jan  1 00:00:00 2024");
+        unsafe {
+            std::env::remove_var("BCFTOOLS_RS_FIXED_TIME");
+        }
     }
 }

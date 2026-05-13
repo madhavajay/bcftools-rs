@@ -1,4 +1,4 @@
-//! Port of the small-file path for `bcftools sort` (upstream `vcfsort.c`).
+//! Port of `bcftools sort` (upstream `vcfsort.c`).
 //!
 //! This implements the command shape VNtyper uses after Kestrel:
 //!
@@ -6,15 +6,15 @@
 //! bcftools sort input.vcf -o output.vcf.gz -W -O z
 //! ```
 //!
-//! Upstream spills sorted runs to temporary BCF blocks and merges them for
-//! large inputs. This first Rust path keeps records in memory, preserves the
-//! same coordinate/ref/alt ordering, writes VCF/VCF.gz, and supports automatic
-//! CSI indexing with `-W`.
+//! The Rust port preserves the same coordinate/ref/alt ordering, writes
+//! VCF/VCF.gz, supports automatic CSI/TBI indexing with `-W`, and spills sorted
+//! runs to temporary files when `--max-mem` is exceeded.
 
 use std::cmp::Ordering;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -26,7 +26,7 @@ use htslib_rs::vcf;
 use htslib_rs::vcf::variant::io::Write as _;
 
 use crate::diagnostics::fmt_etag;
-use crate::io::{HTS_FMT_TBI, apply_verbosity, write_index_parse};
+use crate::io::{VariantOutputFormat, apply_verbosity, init_index2, write_index_parse};
 
 const USAGE: &str = "\n\
 About:   Sort VCF/BCF file.\n\
@@ -37,6 +37,7 @@ Options:\n\
     -o, --output FILE              Output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9] u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
     -T, --temp-dir DIR             Temporary files [/tmp/bcftools.XXXXXX]\n\
+        --threads INT              Use multithreaded BGZF compression for compressed output\n\
     -v, --verbosity INT            Verbosity level\n\
     -W, --write-index[=FMT]        Automatically index the output files [off]\n\
 \n";
@@ -65,6 +66,9 @@ struct Args {
     output: Option<PathBuf>,
     output_kind: OutputKind,
     write_index: Option<i32>,
+    max_mem: usize,
+    temp_dir: PathBuf,
+    thread_count: Option<NonZero<usize>>,
 }
 
 /// Subcommand entry point. `argv[0]` is `"sort"`.
@@ -99,6 +103,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut output: Option<PathBuf> = None;
     let mut output_kind = OutputKind::VcfText;
     let mut write_index = None;
+    let mut max_mem = 768_000_000usize;
+    let mut temp_dir = std::env::temp_dir();
+    let mut thread_count = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -115,8 +122,14 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-W" | "--write-index" => {
                 write_index = parse_write_index(None)?;
             }
-            "-m" | "--max-mem" | "-T" | "--temp-dir" => {
-                let _ = next_string(&mut iter, raw.as_ref())?;
+            "-m" | "--max-mem" => {
+                max_mem = parse_max_mem(&next_string(&mut iter, raw.as_ref())?)?;
+            }
+            "-T" | "--temp-dir" => {
+                temp_dir = PathBuf::from(next_string(&mut iter, raw.as_ref())?);
+            }
+            "--threads" => {
+                thread_count = parse_threads(&next_string(&mut iter, "--threads")?)?;
             }
             "-v" | "--verbosity" => {
                 let value = next_string(&mut iter, "--verbosity")?;
@@ -137,6 +150,21 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             _ if raw.starts_with("--write-index=") => {
                 write_index = parse_write_index(Some(value_after_equals(&raw)))?;
+            }
+            _ if raw.starts_with("--max-mem=") => {
+                max_mem = parse_max_mem(value_after_equals(&raw))?;
+            }
+            _ if raw.starts_with("--temp-dir=") => {
+                temp_dir = PathBuf::from(value_after_equals(&raw));
+            }
+            _ if raw.starts_with("--threads=") => {
+                thread_count = parse_threads(value_after_equals(&raw))?;
+            }
+            _ if raw.starts_with("-m") && raw.len() > 2 => {
+                max_mem = parse_max_mem(&raw[2..])?;
+            }
+            _ if raw.starts_with("-T") && raw.len() > 2 => {
+                temp_dir = PathBuf::from(&raw[2..]);
             }
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?;
@@ -165,6 +193,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output,
         output_kind,
         write_index,
+        max_mem,
+        temp_dir,
+        thread_count,
     })
 }
 
@@ -178,10 +209,15 @@ fn run(args: &Args) -> io::Result<()> {
 
     let fmt = format::detect_path(&args.input).map_err(|e| io::Error::other(e.to_string()))?;
     let (header, mut records) = read_records(&args.input, fmt)?;
-    records.sort_by(|a, b| compare_records(&header, a, b));
+    records = if estimated_records_bytes(&records) > args.max_mem {
+        external_sort_records(&header, records, &args.temp_dir, args.max_mem)?
+    } else {
+        records.sort_by(|a, b| compare_records(&header, a, b));
+        records
+    };
 
     match args.output.as_deref() {
-        Some(path) => write_to_path(path, args.output_kind, &header, &records)?,
+        Some(path) => write_to_path(path, args.output_kind, &header, &records, args.thread_count)?,
         None => write_vcf(io::stdout().lock(), &header, &records)?,
     }
 
@@ -190,6 +226,86 @@ fn run(args: &Args) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn estimated_records_bytes(records: &[vcf::variant::RecordBuf]) -> usize {
+    records
+        .iter()
+        .map(|record| {
+            128 + record.reference_sequence_name().len()
+                + record.reference_bases().len()
+                + alternate_bases_key(record).len()
+        })
+        .sum()
+}
+
+fn external_sort_records(
+    header: &vcf::Header,
+    records: Vec<vcf::variant::RecordBuf>,
+    temp_dir: &Path,
+    max_mem: usize,
+) -> io::Result<Vec<vcf::variant::RecordBuf>> {
+    fs::create_dir_all(temp_dir)?;
+    let estimated_bytes = estimated_records_bytes(&records);
+    let average_record_bytes = 1.max(estimated_bytes / records.len().max(1));
+    let chunk_size = 1.max(max_mem / average_record_bytes);
+    let mut chunk_paths = Vec::new();
+    for (i, chunk) in records.chunks(chunk_size).enumerate() {
+        let mut chunk = chunk.to_vec();
+        chunk.sort_by(|a, b| compare_records(header, a, b));
+        let path = temp_dir.join(format!("bcftools-rs-sort.{}.{}.vcf", std::process::id(), i));
+        write_to_path(&path, OutputKind::VcfText, header, &chunk, None)?;
+        chunk_paths.push(path);
+    }
+
+    let mut runs = Vec::new();
+    for path in &chunk_paths {
+        let (_, records) = read_records(
+            path,
+            format::Format {
+                compression: Compression::None,
+                exact: Exact::Vcf,
+                category: format::Category::VariantData,
+            },
+        )?;
+        runs.push(records);
+    }
+
+    let sorted = merge_sorted_runs(header, runs);
+    for path in chunk_paths {
+        let _ = fs::remove_file(path);
+    }
+    Ok(sorted)
+}
+
+fn merge_sorted_runs(
+    header: &vcf::Header,
+    runs: Vec<Vec<vcf::variant::RecordBuf>>,
+) -> Vec<vcf::variant::RecordBuf> {
+    let mut positions = vec![0usize; runs.len()];
+    let mut out = Vec::new();
+
+    loop {
+        let mut best: Option<usize> = None;
+        for (i, run) in runs.iter().enumerate() {
+            if positions[i] >= run.len() {
+                continue;
+            }
+            if best.is_none_or(|j| {
+                compare_records(header, &run[positions[i]], &runs[j][positions[j]])
+                    == Ordering::Less
+            }) {
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
+            break;
+        };
+        out.push(runs[i][positions[i]].clone());
+        positions[i] += 1;
+    }
+
+    out
 }
 
 fn read_records(
@@ -269,16 +385,26 @@ fn write_to_path(
     output_kind: OutputKind,
     header: &vcf::Header,
     records: &[vcf::variant::RecordBuf],
+    thread_count: Option<NonZero<usize>>,
 ) -> io::Result<()> {
     let file = File::create(path)?;
     match output_kind {
         OutputKind::VcfText => write_vcf(file, header, records),
         OutputKind::VcfGz => {
-            let bgzf = htslib_rs::bgzf::io::Writer::new(file);
-            let mut writer = vcf::io::Writer::new(bgzf);
-            write_records(&mut writer, header, records)?;
-            let bgzf = writer.into_inner();
-            let _file = bgzf.finish()?;
+            if let Some(thread_count) = thread_count {
+                let bgzf =
+                    htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(thread_count, file);
+                let mut writer = vcf::io::Writer::new(bgzf);
+                write_records(&mut writer, header, records)?;
+                let mut bgzf = writer.into_inner();
+                let _file = bgzf.finish()?;
+            } else {
+                let bgzf = htslib_rs::bgzf::io::Writer::new(file);
+                let mut writer = vcf::io::Writer::new(bgzf);
+                write_records(&mut writer, header, records)?;
+                let bgzf = writer.into_inner();
+                let _file = bgzf.finish()?;
+            }
             Ok(())
         }
     }
@@ -306,24 +432,51 @@ fn write_records<W: Write>(
 }
 
 fn write_index(path: &Path, index_format: i32) -> io::Result<()> {
-    if index_format & HTS_FMT_TBI != 0 {
+    let path = path
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "non-UTF-8 output path"))?;
+    let Some(plan) = init_index2(Some(path), index_format, VariantOutputFormat::Vcf)
+        .map_err(io::Error::other)?
+    else {
+        return Ok(());
+    };
+
+    if plan.min_shift == 0 {
         let index = build_vcf_tbi_from_path(path)?;
-        let mut index_path = path.as_os_str().to_owned();
-        index_path.push(".tbi");
-        let index_path = PathBuf::from(index_path);
-        write_tbi(index_path, &index)
+        write_tbi(plan.index_path, &index)
     } else {
-        let index = build_vcf_csi_from_path_with_min_shift(path, 14)?;
-        let mut index_path = path.as_os_str().to_owned();
-        index_path.push(".csi");
-        let index_path = PathBuf::from(index_path);
-        write_csi(index_path, &index)
+        let index = build_vcf_csi_from_path_with_min_shift(path, plan.min_shift)?;
+        write_csi(plan.index_path, &index)
     }
 }
 
 fn parse_output_kind(raw: &str) -> Result<OutputKind, ParseOutcome> {
     OutputKind::parse(raw)
         .ok_or_else(|| ParseOutcome::Error(format!("The output type \"{raw}\" not recognised")))
+}
+
+fn parse_max_mem(raw: &str) -> Result<usize, ParseOutcome> {
+    let (number, multiplier) = match raw.as_bytes().last().copied() {
+        Some(b'k' | b'K') => (&raw[..raw.len() - 1], 1_000f64),
+        Some(b'm' | b'M') => (&raw[..raw.len() - 1], 1_000_000f64),
+        Some(b'g' | b'G') => (&raw[..raw.len() - 1], 1_000_000_000f64),
+        _ => (raw, 1f64),
+    };
+    let value = number
+        .parse::<f64>()
+        .map_err(|_| ParseOutcome::Error(format!("Could not parse --max-mem {raw}")))?;
+    if value <= 0.0 {
+        return Err(ParseOutcome::Error(format!(
+            "--max-mem must be positive: {raw}"
+        )));
+    }
+    Ok((value * multiplier) as usize)
+}
+
+fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, ParseOutcome> {
+    raw.parse::<usize>()
+        .map(NonZero::new)
+        .map_err(|_| ParseOutcome::Error(format!("Could not parse argument: --threads {raw}")))
 }
 
 fn parse_write_index(raw: Option<&str>) -> Result<Option<i32>, ParseOutcome> {

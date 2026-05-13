@@ -5,11 +5,21 @@
 //! The CLI crate dispatches on `argv[1]` exactly like the upstream
 //! `main.c` program. HTSlib-shaped behavior is delegated to `htslib-rs`.
 
+pub mod abuf;
 pub mod commands;
 pub mod diagnostics;
 pub mod getopt;
+pub mod gvcf;
 pub mod header_version;
+pub mod hmm;
 pub mod io;
+pub mod numerics;
+pub mod ploidy;
+pub mod reference;
+pub mod regidx;
+pub mod smpl_ilist;
+pub mod synced;
+pub mod tsv2vcf;
 pub mod version;
 
 pub use diagnostics::{error, error_errno};

@@ -44,8 +44,8 @@ jobs:
       - name: Rust tests
         run: cargo test -p bcftools-rs -p bcftools-rs-cli
 
-  bcftools-c-tests:
-    name: bcftools C tests (parity reference)
+  perl-parity-tests:
+    name: bcftools Perl parity tests
     runs-on: ubuntu-latest
 
     steps:
@@ -54,44 +54,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-suggests --no-install-recommends \
-            autoconf \
-            automake \
-            gcc \
-            libbz2-dev \
-            libcurl4-gnutls-dev \
-            libdeflate-dev \
-            libgsl-dev \
-            liblzma-dev \
-            libperl-dev \
-            libssl-dev \
-            make \
-            perl \
-            zlib1g-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89.0
 
-      - name: Clone HTSlib (sibling to bcftools)
-        run: |
-          git clone --recurse-submodules --depth 1 \
-            https://github.com/samtools/htslib.git htslib
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
 
-      - name: Configure HTSlib
-        working-directory: htslib
-        run: |
-          autoreconf -i
-          ./configure --enable-plugins --with-libdeflate
+      - name: Build Rust bcftools
+        run: cargo build --release -p bcftools-rs-cli
 
-      - name: Build HTSlib
-        working-directory: htslib
-        run: make -j"$(nproc)"
-
-      - name: Build bcftools
-        working-directory: bcftools
-        run: |
-          make -j"$(nproc)" HTSDIR=../htslib
-
-      - name: bcftools C tests (test.pl harness)
-        working-directory: bcftools
-        run: make test HTSDIR=../htslib
+      - name: test.pl head parity
+        run: scripts/run-bcftools-test-pl.sh -f '^test_vcf_head$'

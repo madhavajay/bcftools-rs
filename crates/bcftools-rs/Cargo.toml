@@ -11,8 +11,13 @@ anyhow.workspace = true
 bstr.workspace = true
 flate2.workspace = true
 memchr.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
 htslib-rs.workspace = true
 tempfile = "3.10"
+
+[[bench]]
+name = "command_harness"
+harness = false
