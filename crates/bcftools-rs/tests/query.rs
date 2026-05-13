@@ -221,6 +221,36 @@ fn query_inline_regions_filter_records() {
 }
 
 #[test]
+fn query_regions_support_braced_contig_names_with_colons() {
+    let path = fixture_path("weird-chr-names.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM:%POS\\n",
+        "-r",
+        "{1:1}:1,{1:1}:2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -r braced colon contig failed: {err}");
+    assert_eq!(out, "1:1:1\n1:1:2\n");
+}
+
+#[test]
+fn query_regions_support_braced_contig_names_with_intervals() {
+    let path = fixture_path("weird-chr-names.vcf");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM:%POS\\n",
+        "-r",
+        "{1:1-1}:1-1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -r braced interval contig failed: {err}");
+    assert_eq!(out, "1:1-1:1\n");
+}
+
+#[test]
 fn query_targets_file_filters_records() {
     let path = fixture_path("regions.vcf");
     let targets = fixture_path("regions.tab");

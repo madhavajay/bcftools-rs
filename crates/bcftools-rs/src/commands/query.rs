@@ -448,14 +448,14 @@ impl RegionFilter {
 }
 
 fn parse_region_list(raw: &str) -> io::Result<Vec<QueryRegion>> {
-    raw.split(',')
+    split_region_list(raw)
         .filter(|item| !item.trim().is_empty())
         .map(|item| parse_region_item(item.trim()))
         .collect()
 }
 
 fn parse_region_item(raw: &str) -> io::Result<QueryRegion> {
-    let (chrom, coordinates) = raw.split_once(':').unwrap_or((raw, ""));
+    let (chrom, coordinates) = split_region_contig_interval(raw)?;
     if chrom.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -479,6 +479,50 @@ fn parse_region_item(raw: &str) -> io::Result<QueryRegion> {
         start: Some(start),
         end: Some(end),
     })
+}
+
+fn split_region_contig_interval(raw: &str) -> io::Result<(&str, &str)> {
+    if let Some(rest) = raw.strip_prefix('{') {
+        let Some(end) = rest.find('}') else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Could not parse region \"{raw}\""),
+            ));
+        };
+        let contig = &rest[..end];
+        let suffix = &rest[end + 1..];
+        if suffix.is_empty() {
+            return Ok((contig, ""));
+        }
+        if let Some(interval) = suffix.strip_prefix(':') {
+            return Ok((contig, interval));
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse region \"{raw}\""),
+        ));
+    }
+
+    Ok(raw.split_once(':').unwrap_or((raw, "")))
+}
+
+fn split_region_list(raw: &str) -> impl Iterator<Item = &str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut brace_depth = 0usize;
+    for (idx, ch) in raw.char_indices() {
+        match ch {
+            '{' => brace_depth = brace_depth.saturating_add(1),
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            ',' if brace_depth == 0 => {
+                parts.push(&raw[start..idx]);
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&raw[start..]);
+    parts.into_iter()
 }
 
 fn parse_region_position(raw: &str) -> io::Result<i64> {
