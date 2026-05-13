@@ -804,3 +804,19 @@ fn query_count_filter_counts_gt_class_predicates() {
     assert_eq!(code, 0, "query -i COUNT(GT=het) failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_modulo_filter_evaluates_format_values() {
+    let path = fixture_path("filter.10.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.91.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "DP%10==2",
+        "-f",
+        "[ %DP]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i DP%10 failed: {err}");
+    assert_eq!(out, expected);
+}

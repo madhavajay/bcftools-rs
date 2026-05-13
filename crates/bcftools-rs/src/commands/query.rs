@@ -549,6 +549,12 @@ enum QueryFilterKind {
         op: PredicateOp,
         rhs: f64,
     },
+    ModuloComparison {
+        lhs: String,
+        modulus: f64,
+        op: PredicateOp,
+        rhs: f64,
+    },
     PredicateGroups(Vec<Vec<SimplePredicate>>),
 }
 
@@ -595,6 +601,16 @@ impl QueryFilter {
                 })
             })
             .or_else(|| {
+                parse_modulo_comparison(&spec.raw).map(|(lhs, modulus, op, rhs)| {
+                    QueryFilterKind::ModuloComparison {
+                        lhs,
+                        modulus,
+                        op,
+                        rhs,
+                    }
+                })
+            })
+            .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
             .unwrap_or_else(|| {
@@ -627,6 +643,15 @@ impl QueryFilter {
                 op,
                 rhs,
             } => compare_number(count_values(expression, record) as f64, *op, *rhs),
+            QueryFilterKind::ModuloComparison {
+                lhs,
+                modulus,
+                op,
+                rhs,
+            } => record
+                .numeric_values(lhs)
+                .into_iter()
+                .any(|value| compare_number(value % modulus, *op, *rhs)),
             QueryFilterKind::PredicateGroups(groups) => groups
                 .iter()
                 .any(|predicates| predicates.iter().all(|predicate| predicate.matches(record))),
@@ -779,6 +804,33 @@ fn parse_function_count_comparison(raw: &str, name: &str) -> Option<(String, Pre
     ] {
         if let Some(rhs) = rest.strip_prefix(needle) {
             return Some((expression, op, rhs.trim().parse().ok()?));
+        }
+    }
+    None
+}
+
+fn parse_modulo_comparison(raw: &str) -> Option<(String, f64, PredicateOp, f64)> {
+    let raw = raw.trim();
+    let (lhs, rest) = raw.split_once('%')?;
+    if lhs.trim().is_empty() {
+        return None;
+    }
+    for (needle, op) in [
+        (">=", PredicateOp::Ge),
+        ("<=", PredicateOp::Le),
+        ("!=", PredicateOp::Ne),
+        ("==", PredicateOp::Eq),
+        ("=", PredicateOp::Eq),
+        (">", PredicateOp::Gt),
+        ("<", PredicateOp::Lt),
+    ] {
+        if let Some((modulus, rhs)) = rest.split_once(needle) {
+            return Some((
+                lhs.trim().to_string(),
+                modulus.trim().parse().ok()?,
+                op,
+                rhs.trim().parse().ok()?,
+            ));
         }
     }
     None
@@ -996,6 +1048,19 @@ impl<'a> TextRecord<'a> {
         } else {
             vec![value]
         }
+    }
+
+    fn numeric_values(&self, key: &str) -> Vec<f64> {
+        let record_value = render_token(key, self, None);
+        if record_value != "." {
+            return record_value
+                .split(',')
+                .filter_map(|value| value.parse::<f64>().ok())
+                .collect();
+        }
+        (0..self.sample_indices.len())
+            .filter_map(|sample_index| self.format_value(sample_index, key).parse::<f64>().ok())
+            .collect()
     }
 
     fn format_value(&self, sample_index: usize, key: &str) -> String {
