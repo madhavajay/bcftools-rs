@@ -49,6 +49,8 @@ Output options:\n\
     -m, --min-alleles INT             minimum number of alleles listed in REF and ALT\n\
     -M, --max-alleles INT             maximum number of alleles listed in REF and ALT\n\
         --no-version                  do not append version and command line to the header\n\
+    -p, --phased                      select sites where all samples are phased\n\
+    -P, --exclude-phased              exclude sites where all samples are phased\n\
     -o, --output FILE                 output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
     -r, --regions REG                 restrict to comma-separated regions\n\
@@ -98,6 +100,7 @@ struct RunOptions<'a> {
     type_filter_exclude: bool,
     min_alleles: Option<usize>,
     max_alleles: Option<usize>,
+    phased_filter: Option<bool>,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -390,6 +393,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
         LongOpt::new("min-alleles", HasArg::Required, b'm' as i32),
         LongOpt::new("max-alleles", HasArg::Required, b'M' as i32),
+        LongOpt::new("phased", HasArg::None, b'p' as i32),
+        LongOpt::new("exclude-phased", HasArg::None, b'P' as i32),
         LongOpt::new("header-only", HasArg::None, b'h' as i32),
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
         LongOpt::new("regions", HasArg::Required, b'r' as i32),
@@ -423,12 +428,13 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut type_filter_exclude = false;
     let mut min_alleles = None;
     let mut max_alleles = None;
+    let mut phased_filter = None;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:m:M:hHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:m:M:pPhHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -489,6 +495,17 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                             return ExitCode::FAILURE;
                         }
                     }
+                }
+                v if v == b'p' as i32 || v == b'P' as i32 => {
+                    let include = v == b'p' as i32;
+                    if phased_filter.is_some_and(|existing| existing != include) {
+                        eprintln!(
+                            "{}",
+                            fmt_etag("main_vcfview", "Only one of -p or -P can be given.")
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    phased_filter = Some(include);
                 }
                 v if v == b'h' as i32 => header_only = true,
                 v if v == b'H' as i32 => no_header = true,
@@ -693,6 +710,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         type_filter_exclude,
         min_alleles,
         max_alleles,
+        phased_filter,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -722,7 +740,8 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
     let has_line_filters = options.type_filter.is_some()
         || options.min_alleles.is_some()
-        || options.max_alleles.is_some();
+        || options.max_alleles.is_some()
+        || options.phased_filter.is_some();
     let has_text_filters =
         !options.regions.is_empty() || !options.targets.is_empty() || has_line_filters;
     if has_line_filters
@@ -1009,6 +1028,7 @@ fn write_sample_subset_bcf<W: Write>(
         type_filter_exclude: options.type_filter_exclude,
         min_alleles: options.min_alleles,
         max_alleles: options.max_alleles,
+        phased_filter: options.phased_filter,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -1180,7 +1200,45 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         pos,
         fields,
     ) && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
+        && phased_line_matches(fields, options.phased_filter)
         && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn phased_line_matches(fields: &[&str], phased_filter: Option<bool>) -> bool {
+    let Some(include_phased) = phased_filter else {
+        return true;
+    };
+    let all_phased = all_samples_phased(fields);
+    if include_phased {
+        all_phased
+    } else {
+        !all_phased
+    }
+}
+
+fn all_samples_phased(fields: &[&str]) -> bool {
+    let Some(format) = fields.get(8) else {
+        return true;
+    };
+    let Some(gt_index) = format.split(':').position(|key| key == "GT") else {
+        return true;
+    };
+    fields[9..].iter().all(|sample| {
+        sample
+            .split(':')
+            .nth(gt_index)
+            .is_some_and(sample_genotype_phased)
+    })
+}
+
+fn sample_genotype_phased(gt: &str) -> bool {
+    if gt.is_empty() {
+        return false;
+    }
+    if gt.contains('|') {
+        return true;
+    }
+    !gt.contains('/')
 }
 
 fn allele_count_line_matches(
