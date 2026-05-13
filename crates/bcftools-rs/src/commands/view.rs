@@ -49,12 +49,16 @@ Output options:\n\
     -H, --no-header                   suppress the header in VCF output\n\
     -l, --compression-level INT       compression level: 0 uncompressed, 1 best speed, 9 best compression [-1]\n\
     -k, --known                       select known sites only (ID is not '.')\n\
+    -c, --min-ac INT[:TYPE]           minimum allele count: nref,alt1,minor,major,nonmajor [nref]\n\
+    -C, --max-ac INT[:TYPE]           maximum allele count: nref,alt1,minor,major,nonmajor [nref]\n\
     -m, --min-alleles INT             minimum number of alleles listed in REF and ALT\n\
     -M, --max-alleles INT             maximum number of alleles listed in REF and ALT\n\
     -n, --novel                       select novel sites only (ID is '.')\n\
         --no-version                  do not append version and command line to the header\n\
     -p, --phased                      select sites where all samples are phased\n\
     -P, --exclude-phased              exclude sites where all samples are phased\n\
+    -q, --min-af FLOAT[:TYPE]         minimum allele frequency: nref,alt1,minor,major,nonmajor [nref]\n\
+    -Q, --max-af FLOAT[:TYPE]         maximum allele frequency: nref,alt1,minor,major,nonmajor [nref]\n\
     -o, --output FILE                 output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
     -r, --regions REG                 restrict to comma-separated regions\n\
@@ -105,6 +109,10 @@ struct RunOptions<'a> {
     apply_filters: Option<Vec<String>>,
     type_filter: Option<TypeFilter>,
     type_filter_exclude: bool,
+    min_ac: Option<AlleleCountFilter>,
+    max_ac: Option<AlleleCountFilter>,
+    min_af: Option<AlleleFrequencyFilter>,
+    max_af: Option<AlleleFrequencyFilter>,
     min_alleles: Option<usize>,
     max_alleles: Option<usize>,
     phased_filter: Option<bool>,
@@ -134,6 +142,33 @@ enum GenotypeClass {
     Hom,
     Het,
     Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlleleMetricType {
+    NonRef,
+    Alt1,
+    Minor,
+    Major,
+    NonMajor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AlleleCountFilter {
+    value: usize,
+    metric: AlleleMetricType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AlleleFrequencyFilter {
+    value: f64,
+    metric: AlleleMetricType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AlleleCounts {
+    counts: Vec<usize>,
+    an: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -344,6 +379,48 @@ fn parse_positive_usize(raw: &str, option: &str) -> io::Result<usize> {
     })
 }
 
+fn parse_allele_metric_type(raw: &str, option: &str) -> io::Result<AlleleMetricType> {
+    match raw.to_ascii_lowercase().as_str() {
+        "nref" => Ok(AlleleMetricType::NonRef),
+        "alt1" => Ok(AlleleMetricType::Alt1),
+        "minor" => Ok(AlleleMetricType::Minor),
+        "major" => Ok(AlleleMetricType::Major),
+        "nonmajor" => Ok(AlleleMetricType::NonMajor),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse argument: {option} {raw}"),
+        )),
+    }
+}
+
+fn parse_allele_count_filter(raw: &str, option: &str) -> io::Result<AlleleCountFilter> {
+    let (value, metric) = raw.split_once(':').unwrap_or((raw, "nref"));
+    let value = value.parse::<usize>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse argument: {option} {raw}"),
+        )
+    })?;
+    Ok(AlleleCountFilter {
+        value,
+        metric: parse_allele_metric_type(metric, option)?,
+    })
+}
+
+fn parse_allele_frequency_filter(raw: &str, option: &str) -> io::Result<AlleleFrequencyFilter> {
+    let (value, metric) = raw.split_once(':').unwrap_or((raw, "nref"));
+    let value = value.parse::<f64>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse argument: {option} {raw}"),
+        )
+    })?;
+    Ok(AlleleFrequencyFilter {
+        value,
+        metric: parse_allele_metric_type(metric, option)?,
+    })
+}
+
 fn parse_variant_type_filter(raw: &str) -> io::Result<TypeFilter> {
     let mut mask = VariantType::REF;
     let mut include_ref = false;
@@ -454,6 +531,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("apply-filters", HasArg::Required, b'f' as i32),
         LongOpt::new("genotype", HasArg::Required, b'g' as i32),
         LongOpt::new("known", HasArg::None, b'k' as i32),
+        LongOpt::new("min-ac", HasArg::Required, b'c' as i32),
+        LongOpt::new("max-ac", HasArg::Required, b'C' as i32),
         LongOpt::new("min-alleles", HasArg::Required, b'm' as i32),
         LongOpt::new("max-alleles", HasArg::Required, b'M' as i32),
         LongOpt::new("novel", HasArg::None, b'n' as i32),
@@ -461,6 +540,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("exclude-phased", HasArg::None, b'P' as i32),
         LongOpt::new("header-only", HasArg::None, b'h' as i32),
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
+        LongOpt::new("min-af", HasArg::Required, b'q' as i32),
+        LongOpt::new("max-af", HasArg::Required, b'Q' as i32),
         LongOpt::new("regions", HasArg::Required, b'r' as i32),
         LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
         LongOpt::new("regions-overlap", HasArg::Required, OPT_REGIONS_OVERLAP),
@@ -493,6 +574,10 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut apply_filters = None;
     let mut type_filter = None;
     let mut type_filter_exclude = false;
+    let mut min_ac = None;
+    let mut max_ac = None;
+    let mut min_af = None;
+    let mut max_af = None;
     let mut min_alleles = None;
     let mut max_alleles = None;
     let mut phased_filter = None;
@@ -504,7 +589,11 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:f:g:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
+    let mut g = Getopt::new(
+        "o:O:l:f:g:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGv:V:",
+        &long_opts,
+        argv,
+    );
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -550,6 +639,26 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                     let raw = m.value.as_deref().unwrap_or("");
                     match parse_apply_filters(raw) {
                         Ok(filters) => apply_filters = Some(filters),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'c' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_allele_count_filter(raw, "--min-ac") {
+                        Ok(filter) => min_ac = Some(filter),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'C' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_allele_count_filter(raw, "--max-ac") {
+                        Ok(filter) => max_ac = Some(filter),
                         Err(e) => {
                             eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
                             return ExitCode::FAILURE;
@@ -621,6 +730,26 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                 }
                 v if v == b'h' as i32 => header_only = true,
                 v if v == b'H' as i32 => no_header = true,
+                v if v == b'q' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_allele_frequency_filter(raw, "--min-af") {
+                        Ok(filter) => min_af = Some(filter),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'Q' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_allele_frequency_filter(raw, "--max-af") {
+                        Ok(filter) => max_af = Some(filter),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
                 v if v == b'r' as i32 => {
                     if let Some(value) = m.value {
                         region_specs.push(value);
@@ -821,6 +950,10 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         apply_filters,
         type_filter,
         type_filter_exclude,
+        min_ac,
+        max_ac,
+        min_af,
+        max_af,
         min_alleles,
         max_alleles,
         phased_filter,
@@ -856,6 +989,10 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
     let has_line_filters = options.type_filter.is_some()
         || options.apply_filters.is_some()
+        || options.min_ac.is_some()
+        || options.max_ac.is_some()
+        || options.min_af.is_some()
+        || options.max_af.is_some()
         || options.min_alleles.is_some()
         || options.max_alleles.is_some()
         || options.phased_filter.is_some()
@@ -985,6 +1122,17 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 && options.regions.is_empty()
                 && options.targets.is_empty()
                 && options.type_filter.is_none()
+                && options.apply_filters.is_none()
+                && options.min_ac.is_none()
+                && options.max_ac.is_none()
+                && options.min_af.is_none()
+                && options.max_af.is_none()
+                && options.min_alleles.is_none()
+                && options.max_alleles.is_none()
+                && options.phased_filter.is_none()
+                && options.known_filter.is_none()
+                && options.uncalled_filter.is_none()
+                && options.genotype_filter.is_none()
                 && in_fmt.exact != Exact::Bcf =>
         {
             match options.output_file {
@@ -1147,6 +1295,10 @@ fn write_sample_subset_bcf<W: Write>(
         apply_filters: options.apply_filters.clone(),
         type_filter: options.type_filter,
         type_filter_exclude: options.type_filter_exclude,
+        min_ac: options.min_ac,
+        max_ac: options.max_ac,
+        min_af: options.min_af,
+        max_af: options.max_af,
         min_alleles: options.min_alleles,
         max_alleles: options.max_alleles,
         phased_filter: options.phased_filter,
@@ -1324,6 +1476,13 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         pos,
         fields,
     ) && filter_line_matches(fields, options.apply_filters.as_deref())
+        && allele_frequency_count_line_matches(
+            fields,
+            options.min_ac,
+            options.max_ac,
+            options.min_af,
+            options.max_af,
+        )
         && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
         && known_line_matches(fields, options.known_filter)
         && phased_line_matches(fields, options.phased_filter)
@@ -1352,6 +1511,125 @@ fn filter_field_contains(value: &str, wanted: &str) -> bool {
         return false;
     }
     value.split(';').any(|item| item == wanted)
+}
+
+fn allele_frequency_count_line_matches(
+    fields: &[&str],
+    min_ac: Option<AlleleCountFilter>,
+    max_ac: Option<AlleleCountFilter>,
+    min_af: Option<AlleleFrequencyFilter>,
+    max_af: Option<AlleleFrequencyFilter>,
+) -> bool {
+    if min_ac.is_none() && max_ac.is_none() && min_af.is_none() && max_af.is_none() {
+        return true;
+    }
+    let Some(counts) = allele_counts_from_fields(fields) else {
+        return false;
+    };
+    if let Some(filter) = min_ac
+        && allele_count_metric(&counts, filter.metric) < filter.value
+    {
+        return false;
+    }
+    if let Some(filter) = max_ac
+        && allele_count_metric(&counts, filter.metric) > filter.value
+    {
+        return false;
+    }
+    if min_af.is_some() || max_af.is_some() {
+        if counts.an == 0 {
+            return false;
+        }
+        if let Some(filter) = min_af
+            && allele_frequency_metric(&counts, filter.metric) < filter.value
+        {
+            return false;
+        }
+        if let Some(filter) = max_af
+            && allele_frequency_metric(&counts, filter.metric) > filter.value
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn allele_frequency_metric(counts: &AlleleCounts, metric: AlleleMetricType) -> f64 {
+    allele_count_metric(counts, metric) as f64 / counts.an as f64
+}
+
+fn allele_count_metric(counts: &AlleleCounts, metric: AlleleMetricType) -> usize {
+    let non_ref = counts.counts.iter().skip(1).sum::<usize>();
+    let major = counts.counts.iter().copied().max().unwrap_or(0);
+    let minor = counts.counts.iter().copied().min().unwrap_or(0);
+    match metric {
+        AlleleMetricType::NonRef => non_ref,
+        AlleleMetricType::Alt1 => counts.counts.get(1).copied().unwrap_or(0),
+        AlleleMetricType::Minor => minor,
+        AlleleMetricType::Major => major,
+        AlleleMetricType::NonMajor => counts.an.saturating_sub(major),
+    }
+}
+
+fn allele_counts_from_fields(fields: &[&str]) -> Option<AlleleCounts> {
+    allele_counts_from_info(fields).or_else(|| allele_counts_from_genotypes(fields))
+}
+
+fn allele_counts_from_info(fields: &[&str]) -> Option<AlleleCounts> {
+    let info = fields.get(7)?;
+    let mut ac = None;
+    let mut an = None;
+    for item in info.split(';') {
+        if let Some(value) = item.strip_prefix("AC=") {
+            let counts = value
+                .split(',')
+                .map(|item| item.parse::<usize>())
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            ac = Some(counts);
+        } else if let Some(value) = item.strip_prefix("AN=") {
+            an = value.parse::<usize>().ok();
+        }
+    }
+    let alt_counts = ac?;
+    let an = an?;
+    let ref_count = an.saturating_sub(alt_counts.iter().sum::<usize>());
+    let mut counts = Vec::with_capacity(1 + alt_counts.len());
+    counts.push(ref_count);
+    counts.extend(alt_counts);
+    Some(AlleleCounts { counts, an })
+}
+
+fn allele_counts_from_genotypes(fields: &[&str]) -> Option<AlleleCounts> {
+    let alts = fields.get(4)?;
+    let alt_count = if *alts == "." || alts.is_empty() {
+        0
+    } else {
+        alts.split(',').count()
+    };
+    let mut counts = vec![0; alt_count + 1];
+    let format = fields.get(8)?;
+    let gt_index = format.split(':').position(|key| key == "GT")?;
+    let mut an = 0;
+    for sample in &fields[9..] {
+        let Some(gt) = sample.split(':').nth(gt_index) else {
+            continue;
+        };
+        for allele in gt.split(['/', '|']) {
+            if allele.is_empty() || allele == "." {
+                continue;
+            }
+            let Ok(index) = allele.parse::<usize>() else {
+                continue;
+            };
+            if index >= counts.len() {
+                counts.resize(index + 1, 0);
+            }
+            counts[index] += 1;
+            an += 1;
+        }
+    }
+    Some(AlleleCounts { counts, an })
 }
 
 fn genotype_line_matches(fields: &[&str], genotype_filter: Option<GenotypeFilter>) -> bool {

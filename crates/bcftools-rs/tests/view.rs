@@ -520,6 +520,69 @@ fn view_min_max_alleles_filters_biallelic_records() {
 }
 
 #[test]
+fn view_max_ac_filters_nonmajor_allele_counts_from_genotypes() {
+    let path = fixture_path("view.minmaxac.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-C5:nonmajor",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -C5:nonmajor failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(positions, ["20:1234567"]);
+}
+
+#[test]
+fn view_min_ac_filters_nonmajor_allele_counts_from_genotypes() {
+    let path = fixture_path("view.minmaxac.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-c6:nonmajor",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -c6:nonmajor failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(positions, ["20:1234568"]);
+}
+
+#[test]
+fn view_min_af_filters_major_allele_frequency_from_genotypes() {
+    let path = fixture_path("view.minmaxac.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-q0.3:major",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -q0.3:major failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(positions, ["20:1234567"]);
+}
+
+#[test]
 fn view_known_filter_selects_records_with_ids() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-k", path.to_str().unwrap()]);
