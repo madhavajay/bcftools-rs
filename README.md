@@ -67,8 +67,8 @@ mirroring the split used by `htslib-rs`:
 
 - **`bcftools/`** tracks upstream tag `1.23.1` (the version emitted in
   `##bcftools_<cmd>Version=...+htslib-...` header lines).
-- **`htslib-rs/`** is currently pinned to the `bcftools-rs-extensions`
-  branch, which adds:
+- **`htslib-rs/`** tracks the `main` branch. The two consumer-driven
+  extensions added for bcftools-rs are merged upstream:
   - `index_compat::build_vcf_csi_from_path` /
     `build_vcf_csi_from_path_with_min_shift` /
     `build_vcf_tbi_from_path` — index existing BGZF-compressed VCFs without
