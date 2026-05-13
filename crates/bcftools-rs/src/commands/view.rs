@@ -50,6 +50,8 @@ Output options:\n\
     -R, --regions-file FILE           restrict to regions listed in a file\n\
     -s, --samples LIST                comma-separated sample list, optionally prefixed with ^\n\
     -S, --samples-file FILE           file of samples, optionally prefixed with ^\n\
+    -t, --targets REG                 restrict to comma-separated targets\n\
+    -T, --targets-file FILE           restrict to targets listed in a file\n\
 \n";
 
 const OPT_NO_VERSION: i32 = 200;
@@ -77,10 +79,17 @@ struct RunOptions<'a> {
     no_header: bool,
     no_version: bool,
     regions: &'a [Region],
+    targets: &'a [Region],
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
     drop_genotypes: bool,
+}
+
+#[derive(Clone, Copy)]
+struct RecordFilters<'a> {
+    regions: &'a [Region],
+    targets: &'a [Region],
 }
 
 impl Region {
@@ -200,6 +209,50 @@ fn extend_regions_from_file(regions: &mut Vec<Region>, path: &Path) -> io::Resul
     Ok(())
 }
 
+fn extend_targets_from_file(targets: &mut Vec<Region>, path: &Path) -> io::Result<()> {
+    use crate::regidx::{Parser, parser_for_path};
+
+    if parser_for_path(path) == Parser::Bed {
+        return extend_regions_from_file(targets, path);
+    }
+
+    let reader: Box<dyn io::BufRead> = if path
+        .as_os_str()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .ends_with(".gz")
+    {
+        Box::new(io::BufReader::new(flate2::read::MultiGzDecoder::new(
+            File::open(path)?,
+        )))
+    } else {
+        Box::new(io::BufReader::new(File::open(path)?))
+    };
+
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(contig) = fields.next() else {
+            continue;
+        };
+        let Some(pos) = fields.next() else {
+            continue;
+        };
+        let pos = parse_region_pos(pos, line)?;
+        targets.push(Region {
+            contig: contig.to_string(),
+            start: Some(pos),
+            end: Some(pos),
+        });
+    }
+
+    Ok(())
+}
+
 fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, std::num::ParseIntError> {
     let n = raw.parse::<usize>()?;
     Ok(NonZero::new(n))
@@ -242,6 +295,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("regions-file", HasArg::Required, b'R' as i32),
         LongOpt::new("samples", HasArg::Required, b's' as i32),
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
+        LongOpt::new("targets", HasArg::Required, b't' as i32),
+        LongOpt::new("targets-file", HasArg::Required, b'T' as i32),
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
         LongOpt::new("threads", HasArg::Required, OPT_THREADS),
@@ -259,8 +314,10 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut drop_genotypes = false;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
+    let mut target_specs = Vec::new();
+    let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:hHr:R:s:S:G", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:hHr:R:s:S:t:T:G", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -321,6 +378,16 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                 v if v == b'S' as i32 => {
                     sample_list = m.value;
                     sample_list_is_file = true;
+                }
+                v if v == b't' as i32 => {
+                    if let Some(value) = m.value {
+                        target_specs.push(value);
+                    }
+                }
+                v if v == b'T' as i32 => {
+                    if let Some(value) = m.value {
+                        target_files.push(value);
+                    }
                 }
                 v if v == b'G' as i32 => drop_genotypes = true,
                 v if v == OPT_NO_VERSION => no_version = true,
@@ -383,6 +450,23 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
         return ExitCode::FAILURE;
     }
+    let mut targets = Vec::new();
+    let parsed_targets = target_specs
+        .iter()
+        .try_for_each(|raw| extend_regions_from_list(&mut targets, raw));
+    if let Err(e) = parsed_targets {
+        eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+        return ExitCode::FAILURE;
+    }
+    for file in &target_files {
+        match extend_targets_from_file(&mut targets, Path::new(file)) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let path = Path::new(&fname);
     let _ = compression_level; // consumed by future writers
@@ -394,6 +478,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         no_header,
         no_version,
         regions: &regions,
+        targets: &targets,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -421,6 +506,10 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     }
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
+    let filters = RecordFilters {
+        regions: options.regions,
+        targets: options.targets,
+    };
 
     if options.sample_list.is_some() || options.drop_genotypes {
         return run_sample_subset(path, in_fmt, options, argv);
@@ -444,6 +533,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     if options.output_kind == OutputKind::VcfText
         && options.no_version
         && options.regions.is_empty()
+        && options.targets.is_empty()
         && in_fmt.exact == Exact::Bcf
     {
         return match options.output_file {
@@ -467,6 +557,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
             Some("-") | None
                 if options.no_version
                     && options.regions.is_empty()
+                    && options.targets.is_empty()
                     && in_fmt.exact != Exact::Bcf =>
             {
                 write_vcf_text_passthrough(
@@ -483,12 +574,13 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 &header,
                 options.header_only,
                 options.no_header,
-                options.regions,
+                filters,
                 io::stdout().lock(),
             ),
             Some(p)
                 if options.no_version
                     && options.regions.is_empty()
+                    && options.targets.is_empty()
                     && in_fmt.exact != Exact::Bcf =>
             {
                 write_vcf_text_passthrough(
@@ -505,12 +597,15 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 &header,
                 options.header_only,
                 options.no_header,
-                options.regions,
+                filters,
                 File::create(p)?,
             ),
         },
         OutputKind::VcfGz
-            if options.no_version && options.regions.is_empty() && in_fmt.exact != Exact::Bcf =>
+            if options.no_version
+                && options.regions.is_empty()
+                && options.targets.is_empty()
+                && in_fmt.exact != Exact::Bcf =>
         {
             match options.output_file {
                 Some(p) if p != "-" => {
@@ -547,7 +642,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     &header,
                     options.header_only,
                     options.no_header,
-                    options.regions,
+                    filters,
                     io::stdout().lock(),
                 ),
                 Some(p) => write_bcf(
@@ -556,7 +651,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     &header,
                     options.header_only,
                     options.no_header,
-                    options.regions,
+                    filters,
                     File::create(p)?,
                 ),
             }
@@ -720,7 +815,7 @@ fn write_sample_subset_vcf_text<W: Write>(
             break;
         }
         let fields = line_fields(line);
-        if !record_line_matches_regions(&fields, options.regions) {
+        if !record_line_matches_filters(&fields, options.regions, options.targets) {
             continue;
         }
         let selected = selected_samples.as_ref().ok_or_else(|| {
@@ -775,21 +870,23 @@ fn write_projected_vcf_line<W: Write>(
     writeln!(out, "{}", projected.join("\t"))
 }
 
-fn record_line_matches_regions(fields: &[&str], regions: &[Region]) -> bool {
-    if regions.is_empty() {
-        return true;
-    }
+fn record_line_matches_filters(fields: &[&str], regions: &[Region], targets: &[Region]) -> bool {
     let Some(contig) = fields.first() else {
         return false;
     };
     let Some(pos) = fields.get(1).and_then(|pos| pos.parse::<usize>().ok()) else {
         return false;
     };
-    regions.iter().any(|region| {
-        region.contig == *contig
-            && region.start.is_none_or(|start| pos >= start)
-            && region.end.is_none_or(|end| pos <= end)
-    })
+    region_list_matches(regions, contig, pos) && region_list_matches(targets, contig, pos)
+}
+
+fn region_list_matches(regions: &[Region], contig: &str, pos: usize) -> bool {
+    regions.is_empty()
+        || regions.iter().any(|region| {
+            region.contig == contig
+                && region.start.is_none_or(|start| pos >= start)
+                && region.end.is_none_or(|end| pos <= end)
+        })
 }
 
 fn write_vcf_gz(
@@ -809,7 +906,10 @@ fn write_vcf_gz(
                 header,
                 options.header_only,
                 options.no_header,
-                options.regions,
+                RecordFilters {
+                    regions: options.regions,
+                    targets: options.targets,
+                },
                 bgzf,
             )
         }
@@ -821,7 +921,10 @@ fn write_vcf_gz(
                 header,
                 options.header_only,
                 options.no_header,
-                options.regions,
+                RecordFilters {
+                    regions: options.regions,
+                    targets: options.targets,
+                },
                 bgzf,
             )
         }
@@ -833,7 +936,10 @@ fn write_vcf_gz(
                 header,
                 options.header_only,
                 options.no_header,
-                options.regions,
+                RecordFilters {
+                    regions: options.regions,
+                    targets: options.targets,
+                },
                 bgzf,
             )
         }
@@ -941,7 +1047,7 @@ fn write_vcf<W: Write>(
     header: &htslib_rs::vcf::Header,
     header_only: bool,
     no_header: bool,
-    regions: &[Region],
+    filters: RecordFilters<'_>,
     out: W,
 ) -> io::Result<()> {
     use htslib_rs::vcf;
@@ -952,14 +1058,14 @@ fn write_vcf<W: Write>(
     if header_only {
         return Ok(());
     }
-    write_records_into_vcf(path, fmt, header, regions, &mut writer)
+    write_records_into_vcf(path, fmt, header, filters, &mut writer)
 }
 
 fn write_records_into_vcf<W: Write>(
     path: &Path,
     fmt: format::Format,
     header: &htslib_rs::vcf::Header,
-    regions: &[Region],
+    filters: RecordFilters<'_>,
     writer: &mut htslib_rs::vcf::io::Writer<W>,
 ) -> io::Result<()> {
     use htslib_rs::bcf;
@@ -970,7 +1076,7 @@ fn write_records_into_vcf<W: Write>(
         let _h = reader.read_header()?;
         for result in reader.record_bufs(header) {
             let rec = result?;
-            if region_matches(regions, rec.reference_sequence_name(), rec.variant_start()) {
+            if record_matches(filters, rec.reference_sequence_name(), rec.variant_start()) {
                 writer.write_variant_record(header, &rec)?;
             }
         }
@@ -981,7 +1087,7 @@ fn write_records_into_vcf<W: Write>(
         let _h = reader.read_header()?;
         for result in reader.records() {
             let rec = result?;
-            if region_matches_result(regions, rec.reference_sequence_name(), rec.variant_start())? {
+            if record_matches_result(filters, rec.reference_sequence_name(), rec.variant_start())? {
                 writer.write_variant_record(header, &rec)?;
             }
         }
@@ -992,7 +1098,7 @@ fn write_records_into_vcf<W: Write>(
         let _h = reader.read_header()?;
         for result in reader.records() {
             let rec = result?;
-            if region_matches_result(regions, rec.reference_sequence_name(), rec.variant_start())? {
+            if record_matches_result(filters, rec.reference_sequence_name(), rec.variant_start())? {
                 writer.write_variant_record(header, &rec)?;
             }
         }
@@ -1006,7 +1112,7 @@ fn write_bcf<W: Write>(
     header: &htslib_rs::vcf::Header,
     header_only: bool,
     no_header: bool,
-    regions: &[Region],
+    filters: RecordFilters<'_>,
     out: W,
 ) -> io::Result<()> {
     use htslib_rs::bcf;
@@ -1026,7 +1132,7 @@ fn write_bcf<W: Write>(
         writer.write_variant_header(header)?;
         for result in reader.record_bufs(header) {
             let rec = result?;
-            if region_matches(regions, rec.reference_sequence_name(), rec.variant_start()) {
+            if record_matches(filters, rec.reference_sequence_name(), rec.variant_start()) {
                 writer.write_variant_record(header, &rec)?;
             }
         }
@@ -1044,14 +1150,14 @@ fn write_bcf<W: Write>(
         writer.write_variant_header(&header)?;
         for result in reader.records() {
             let rec = result?;
-            if region_matches_result(regions, rec.reference_sequence_name(), rec.variant_start())? {
+            if record_matches_result(filters, rec.reference_sequence_name(), rec.variant_start())? {
                 writer.write_variant_record(&header, &rec)?;
             }
         }
         writer.try_finish()?;
         Ok(())
     } else {
-        if regions.is_empty() {
+        if filters.regions.is_empty() && filters.targets.is_empty() {
             // Plain VCF → BCF: delegate to htslib-rs's tested helper.
             htslib_rs::variant_io_compat::write_bcf_from_vcf_path(path, out)?;
         } else {
@@ -1064,8 +1170,8 @@ fn write_bcf<W: Write>(
             writer.write_variant_header(&header)?;
             for result in reader.records() {
                 let rec = result?;
-                if region_matches_result(
-                    regions,
+                if record_matches_result(
+                    filters,
                     rec.reference_sequence_name(),
                     rec.variant_start(),
                 )? {
@@ -1078,21 +1184,25 @@ fn write_bcf<W: Write>(
     }
 }
 
-fn region_matches(regions: &[Region], contig: &str, pos: Option<Position>) -> bool {
-    regions.is_empty()
-        || pos
-            .map(|pos| regions.iter().any(|region| region.contains(contig, pos)))
-            .unwrap_or(false)
+fn record_matches(filters: RecordFilters<'_>, contig: &str, pos: Option<Position>) -> bool {
+    pos.map(|pos| {
+        region_matches(filters.regions, contig, pos) && region_matches(filters.targets, contig, pos)
+    })
+    .unwrap_or(false)
 }
 
-fn region_matches_result(
-    regions: &[Region],
+fn region_matches(regions: &[Region], contig: &str, pos: Position) -> bool {
+    regions.is_empty() || regions.iter().any(|region| region.contains(contig, pos))
+}
+
+fn record_matches_result(
+    filters: RecordFilters<'_>,
     contig: &str,
     pos: Option<io::Result<Position>>,
 ) -> io::Result<bool> {
     match pos {
-        Some(Ok(pos)) => Ok(region_matches(regions, contig, Some(pos))),
+        Some(Ok(pos)) => Ok(record_matches(filters, contig, Some(pos))),
         Some(Err(e)) => Err(e),
-        None => Ok(region_matches(regions, contig, None)),
+        None => Ok(record_matches(filters, contig, None)),
     }
 }

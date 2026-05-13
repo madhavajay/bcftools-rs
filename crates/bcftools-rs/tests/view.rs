@@ -192,6 +192,38 @@ fn view_regions_file_filters_tab_regions() {
 }
 
 #[test]
+fn view_targets_option_filters_contig_targets() {
+    let path = fixture_path("view-t.vcf");
+    let expected = std::fs::read_to_string(fixture_path("view-t.1.out")).unwrap();
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-t",
+        "2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -t failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn view_targets_file_filters_site_targets() {
+    let path = fixture_path("view.sites.vcf");
+    let targets = fixture_path("view.sites.txt");
+    let expected = std::fs::read_to_string(fixture_path("view.sites.1.out")).unwrap();
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-T",
+        targets.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -T failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn view_region_filters_bcf_input() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
