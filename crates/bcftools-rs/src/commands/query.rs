@@ -525,25 +525,60 @@ fn parse_region_file_line(line: &str, is_bed: bool) -> io::Result<QueryRegion> {
 
 #[derive(Debug, Clone)]
 struct QueryFilter {
-    filter: Filter,
+    kind: QueryFilterKind,
     exclude: bool,
+}
+
+#[derive(Debug, Clone)]
+enum QueryFilterKind {
+    Expr(Filter),
+    FilterIdMatch { id: String, negate: bool },
 }
 
 impl QueryFilter {
     fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
+        let kind = parse_filter_id_match(&spec.raw)
+            .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
+            .unwrap_or_else(|| {
+                QueryFilterKind::Expr(Filter::new(normalize_filter_expr(&spec.raw)))
+            });
         Ok(Self {
-            filter: Filter::new(normalize_filter_expr(&spec.raw)),
+            kind,
             exclude: spec.exclude,
         })
     }
 
     fn matches(&self, record: &TextRecord<'_>) -> io::Result<bool> {
-        let value = self
-            .filter
-            .eval_with(|src| lookup_filter_symbol(src, record))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        Ok(value.truth() != self.exclude)
+        let matched = match &self.kind {
+            QueryFilterKind::Expr(filter) => {
+                let value = filter
+                    .eval_with(|src| lookup_filter_symbol(src, record))
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                value.truth()
+            }
+            QueryFilterKind::FilterIdMatch { id, negate } => {
+                record.filter_has_id(id.as_str()) != *negate
+            }
+        };
+        Ok(matched != self.exclude)
     }
+}
+
+fn parse_filter_id_match(raw: &str) -> Option<(String, bool)> {
+    let raw = raw.trim();
+    let (lhs, op, rhs) = if let Some((lhs, rhs)) = raw.split_once("!~") {
+        (lhs, "!~", rhs)
+    } else if let Some((lhs, rhs)) = raw.split_once('~') {
+        (lhs, "~", rhs)
+    } else {
+        return None;
+    };
+    if lhs.trim() != "FILTER" {
+        return None;
+    }
+    let rhs = rhs.trim();
+    let id = rhs.strip_prefix('"')?.strip_suffix('"')?;
+    Some((id.to_string(), op == "!~"))
 }
 
 fn normalize_filter_expr(raw: &str) -> String {
@@ -732,6 +767,15 @@ impl<'a> TextRecord<'a> {
             }
         }
         ".".into()
+    }
+
+    fn filter_has_id(&self, id: &str) -> bool {
+        self.fields
+            .get(6)
+            .copied()
+            .unwrap_or(".")
+            .split(';')
+            .any(|filter| filter == id)
     }
 
     fn format_value(&self, sample_index: usize, key: &str) -> String {

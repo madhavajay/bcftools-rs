@@ -374,6 +374,38 @@ fn query_computed_type_filter_matches_upstream_regex_fixture() {
 }
 
 #[test]
+fn query_computed_type_filter_matches_upstream_negated_exact_fixture() {
+    let path = fixture_path("query.filter-type.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.28.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\n",
+        "-i",
+        "type!=\"snp\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i type!=\"snp\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_computed_type_filter_matches_upstream_negated_regex_fixture() {
+    let path = fixture_path("query.filter-type.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.29.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%REF\\t%ALT\\n",
+        "-i",
+        "type!~\"snp\"",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i type!~\"snp\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_info_type_still_prefers_info_namespace() {
     let path = fixture_path("query.filter-type.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.67.out")).unwrap();
@@ -418,5 +450,69 @@ fn query_bare_ilen_filter_uses_info_tag() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -i ILEN failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_exact_match_matches_upstream_fixture() {
+    let path = fixture_path("filter.11.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.76.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "FILTER=\"A\"",
+        "-f",
+        "%POS %FILTER\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FILTER=\"A\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_negated_exact_match_matches_upstream_fixture() {
+    let path = fixture_path("filter.11.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.77.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "FILTER!=\"A\"",
+        "-f",
+        "%POS %FILTER\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FILTER!=\"A\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_id_match_matches_upstream_fixture() {
+    let path = fixture_path("filter.11.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.78.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "FILTER~\"A\"",
+        "-f",
+        "%POS %FILTER\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FILTER~\"A\" failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_negated_id_match_matches_upstream_fixture() {
+    let path = fixture_path("filter.11.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.79.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "FILTER!~\"A\"",
+        "-f",
+        "%POS %FILTER\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FILTER!~\"A\" failed: {err}");
     assert_eq!(out, expected);
 }
