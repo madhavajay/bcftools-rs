@@ -1281,17 +1281,17 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
             // For uncompressed BCF, upstream uses `wbu`. noodles' bcf writer
             // always wraps in BGZF; an "uncompressed" mode here is treated the
             // same as the compressed path until htslib-rs exposes the raw form.
-            match options.output_file {
-                Some("-") | None => write_bcf(
+            match (options.output_file, options.thread_count) {
+                (Some(p), Some(thread_count)) if p != "-" => write_bcf_threaded(
                     path,
                     in_fmt,
                     &header,
                     options.header_only,
-                    options.no_header,
                     filters,
-                    io::stdout().lock(),
+                    File::create(p)?,
+                    thread_count,
                 ),
-                Some(p) => write_bcf(
+                (Some(p), _) if p != "-" => write_bcf(
                     path,
                     in_fmt,
                     &header,
@@ -1299,6 +1299,24 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     options.no_header,
                     filters,
                     File::create(p)?,
+                ),
+                (_, Some(thread_count)) => write_bcf_threaded(
+                    path,
+                    in_fmt,
+                    &header,
+                    options.header_only,
+                    filters,
+                    io::stdout(),
+                    thread_count,
+                ),
+                _ => write_bcf(
+                    path,
+                    in_fmt,
+                    &header,
+                    options.header_only,
+                    options.no_header,
+                    filters,
+                    io::stdout().lock(),
                 ),
             }
         }
@@ -2409,18 +2427,50 @@ fn write_bcf<W: Write>(
 ) -> io::Result<()> {
     use htslib_rs::bcf;
     let _ = no_header; // BCF cannot be sensibly written without a header.
+    let mut writer = bcf::io::Writer::new(out);
+    write_bcf_content(path, fmt, header, header_only, filters, &mut writer)?;
+    writer.try_finish()
+}
+
+fn write_bcf_threaded<W>(
+    path: &Path,
+    fmt: format::Format,
+    header: &htslib_rs::vcf::Header,
+    header_only: bool,
+    filters: RecordFilters<'_>,
+    out: W,
+    thread_count: NonZero<usize>,
+) -> io::Result<()>
+where
+    W: Write + Send + 'static,
+{
+    use htslib_rs::bcf;
+    let bgzf = htslib_rs::bgzf::io::MultithreadedWriter::with_worker_count(thread_count, out);
+    let mut writer = bcf::io::Writer::from(bgzf);
+    write_bcf_content(path, fmt, header, header_only, filters, &mut writer)?;
+    let mut bgzf = writer.into_inner();
+    let _out = bgzf.finish()?;
+    Ok(())
+}
+
+fn write_bcf_content<W: Write>(
+    path: &Path,
+    fmt: format::Format,
+    header: &htslib_rs::vcf::Header,
+    header_only: bool,
+    filters: RecordFilters<'_>,
+    writer: &mut htslib_rs::bcf::io::Writer<W>,
+) -> io::Result<()> {
     if header_only {
-        let mut writer = bcf::io::Writer::new(out);
         writer.write_variant_header(header)?;
-        writer.try_finish()?;
         return Ok(());
     }
     if fmt.exact == Exact::Bcf {
         // BCF → BCF: copy records through as-is. Use record_bufs so the writer
         // sees fully decoded records keyed by contig string.
+        use htslib_rs::bcf;
         let mut reader = File::open(path).map(bcf::io::Reader::new)?;
         let _h = reader.read_header()?;
-        let mut writer = bcf::io::Writer::new(out);
         writer.write_variant_header(header)?;
         for result in reader.record_bufs(header) {
             let rec = result?;
@@ -2428,7 +2478,6 @@ fn write_bcf<W: Write>(
                 writer.write_variant_record(header, &rec)?;
             }
         }
-        writer.try_finish()?;
         Ok(())
     } else if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         // VCF.gz → BCF: decompress on the fly into the htslib-rs path that's
@@ -2438,7 +2487,6 @@ fn write_bcf<W: Write>(
         let dec = flate2::read::MultiGzDecoder::new(f);
         let mut reader = vcf::io::Reader::new(BufReader::new(dec));
         let header = reader.read_header()?;
-        let mut writer = bcf::io::Writer::new(out);
         writer.write_variant_header(&header)?;
         for result in reader.records() {
             let rec = result?;
@@ -2446,31 +2494,19 @@ fn write_bcf<W: Write>(
                 writer.write_variant_record(&header, &rec)?;
             }
         }
-        writer.try_finish()?;
         Ok(())
     } else {
-        if filters.regions.is_empty() && filters.targets.is_empty() {
-            // Plain VCF → BCF: delegate to htslib-rs's tested helper.
-            htslib_rs::variant_io_compat::write_bcf_from_vcf_path(path, out)?;
-        } else {
-            use htslib_rs::vcf;
-            let mut reader = File::open(path)
-                .map(BufReader::new)
-                .map(vcf::io::Reader::new)?;
-            let header = reader.read_header()?;
-            let mut writer = bcf::io::Writer::new(out);
-            writer.write_variant_header(&header)?;
-            for result in reader.records() {
-                let rec = result?;
-                if record_matches_result(
-                    filters,
-                    rec.reference_sequence_name(),
-                    rec.variant_start(),
-                )? {
-                    writer.write_variant_record(&header, &rec)?;
-                }
+        use htslib_rs::vcf;
+        let mut reader = File::open(path)
+            .map(BufReader::new)
+            .map(vcf::io::Reader::new)?;
+        let header = reader.read_header()?;
+        writer.write_variant_header(&header)?;
+        for result in reader.records() {
+            let rec = result?;
+            if record_matches_result(filters, rec.reference_sequence_name(), rec.variant_start())? {
+                writer.write_variant_record(&header, &rec)?;
             }
-            writer.try_finish()?;
         }
         Ok(())
     }

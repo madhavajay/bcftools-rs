@@ -1012,6 +1012,30 @@ fn view_threads_writes_bgzf_vcf_output() {
 }
 
 #[test]
+fn view_threads_writes_bcf_output() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("aa.vcf");
+    let output = tmp.path().join("aa.bcf");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "--threads",
+        "2",
+        "-Ob",
+        "-o",
+        output.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view --threads -Ob failed: {err}");
+
+    let (out, err, code) = run(&["view", "--no-version", "-H", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "view threaded BCF failed: {err}");
+    let records = out.lines().filter(|line| !line.is_empty()).count();
+    assert_eq!(records, 21);
+}
+
+#[test]
 fn view_threads_rejects_non_integer_argument() {
     let path = fixture_path("aa.vcf");
     let (_out, err, code) = run(&["view", "--threads", "abc", path.to_str().unwrap()]);
