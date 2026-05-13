@@ -43,6 +43,7 @@ Usage:   bcftools view [OPTIONS] <in.vcf.gz>|<in.bcf> [REGION...]\n\
 \n\
 Output options:\n\
     -G, --drop-genotypes              drop individual genotype information\n\
+    -g, --genotype [^]hom|het|miss    require or exclude genotype class\n\
     -h, --header-only                 print only the header in VCF output\n\
     -H, --no-header                   suppress the header in VCF output\n\
     -l, --compression-level INT       compression level: 0 uncompressed, 1 best speed, 9 best compression [-1]\n\
@@ -107,6 +108,7 @@ struct RunOptions<'a> {
     phased_filter: Option<bool>,
     known_filter: Option<bool>,
     uncalled_filter: Option<bool>,
+    genotype_filter: Option<GenotypeFilter>,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -117,6 +119,19 @@ struct RunOptions<'a> {
 struct TypeFilter {
     mask: VariantType,
     include_ref: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GenotypeFilter {
+    class: GenotypeClass,
+    exclude: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenotypeClass {
+    Hom,
+    Het,
+    Missing,
 }
 
 #[derive(Clone, Copy)]
@@ -366,6 +381,26 @@ fn parse_variant_type_filter(raw: &str) -> io::Result<TypeFilter> {
     Ok(TypeFilter { mask, include_ref })
 }
 
+fn parse_genotype_filter(raw: &str) -> io::Result<GenotypeFilter> {
+    let (exclude, body) = raw
+        .strip_prefix('^')
+        .map_or((false, raw), |body| (true, body));
+    let class = match body.to_ascii_lowercase().as_str() {
+        "hom" => GenotypeClass::Hom,
+        "het" => GenotypeClass::Het,
+        "miss" => GenotypeClass::Missing,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "The argument to -g not recognised. Expected one of hom/het/miss/^hom/^het/^miss, got \"{raw}\"."
+                ),
+            ));
+        }
+    };
+    Ok(GenotypeFilter { class, exclude })
+}
+
 impl OutputKind {
     fn parse(s: &str) -> Option<(Self, Option<u32>)> {
         if s.is_empty() {
@@ -397,6 +432,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("output-file", HasArg::Required, b'o' as i32),
         LongOpt::new("output-type", HasArg::Required, b'O' as i32),
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
+        LongOpt::new("genotype", HasArg::Required, b'g' as i32),
         LongOpt::new("known", HasArg::None, b'k' as i32),
         LongOpt::new("min-alleles", HasArg::Required, b'm' as i32),
         LongOpt::new("max-alleles", HasArg::Required, b'M' as i32),
@@ -441,12 +477,13 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut phased_filter = None;
     let mut known_filter = None;
     let mut uncalled_filter = None;
+    let mut genotype_filter = None;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:g:km:M:npPhHr:R:s:S:t:T:uUGv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -502,6 +539,16 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                     let raw = m.value.as_deref().unwrap_or("");
                     match parse_positive_usize(raw, "--max-alleles") {
                         Ok(value) => max_alleles = Some(value),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'g' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_genotype_filter(raw) {
+                        Ok(filter) => genotype_filter = Some(filter),
                         Err(e) => {
                             eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
                             return ExitCode::FAILURE;
@@ -747,6 +794,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         phased_filter,
         known_filter,
         uncalled_filter,
+        genotype_filter,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -779,7 +827,8 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
         || options.max_alleles.is_some()
         || options.phased_filter.is_some()
         || options.known_filter.is_some()
-        || options.uncalled_filter.is_some();
+        || options.uncalled_filter.is_some()
+        || options.genotype_filter.is_some();
     let has_text_filters =
         !options.regions.is_empty() || !options.targets.is_empty() || has_line_filters;
     if has_line_filters
@@ -1069,6 +1118,7 @@ fn write_sample_subset_bcf<W: Write>(
         phased_filter: options.phased_filter,
         known_filter: options.known_filter,
         uncalled_filter: options.uncalled_filter,
+        genotype_filter: options.genotype_filter,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -1243,7 +1293,56 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         && known_line_matches(fields, options.known_filter)
         && phased_line_matches(fields, options.phased_filter)
         && uncalled_line_matches(fields, options.uncalled_filter)
+        && genotype_line_matches(fields, options.genotype_filter)
         && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn genotype_line_matches(fields: &[&str], genotype_filter: Option<GenotypeFilter>) -> bool {
+    let Some(filter) = genotype_filter else {
+        return true;
+    };
+    let Some(format) = fields.get(8) else {
+        return true;
+    };
+    let Some(gt_index) = format.split(':').position(|key| key == "GT") else {
+        return true;
+    };
+    let has_class = fields[9..].iter().any(|sample| {
+        sample
+            .split(':')
+            .nth(gt_index)
+            .and_then(classify_sample_genotype)
+            .is_some_and(|class| class == filter.class)
+    });
+    if filter.exclude {
+        !has_class
+    } else {
+        has_class
+    }
+}
+
+fn classify_sample_genotype(gt: &str) -> Option<GenotypeClass> {
+    if gt.is_empty() {
+        return None;
+    }
+    let alleles = gt
+        .split(['/', '|'])
+        .filter(|allele| !allele.is_empty())
+        .collect::<Vec<_>>();
+    if alleles.is_empty() || alleles.iter().all(|allele| *allele == ".") {
+        return Some(GenotypeClass::Missing);
+    }
+    let called = alleles
+        .iter()
+        .copied()
+        .filter(|allele| *allele != ".")
+        .collect::<Vec<_>>();
+    let first = called.first()?;
+    if called.iter().all(|allele| allele == first) {
+        Some(GenotypeClass::Hom)
+    } else {
+        Some(GenotypeClass::Het)
+    }
 }
 
 fn uncalled_line_matches(fields: &[&str], uncalled_filter: Option<bool>) -> bool {

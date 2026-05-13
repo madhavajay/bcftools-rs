@@ -617,6 +617,62 @@ fn view_exclude_uncalled_filter_drops_records_without_called_gt() {
 }
 
 #[test]
+fn view_genotype_filter_selects_records_with_missing_gt() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-g",
+        "miss",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -g miss failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        ["11:5464562", "20:326891", "Y:8657215", "Y:10011673"]
+    );
+}
+
+#[test]
+fn view_genotype_filter_excludes_records_with_het_gt() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-g",
+        "^het",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -g ^het failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:2343543",
+            "11:5464562",
+            "X:2942109",
+            "Y:8657215",
+            "Y:10011673",
+        ]
+    );
+}
+
+#[test]
 fn view_phased_filter_selects_all_phased_records() {
     let path = fixture_path("view.vcf");
     let (out, err, code) = run(&["view", "--no-version", "-H", "-p", path.to_str().unwrap()]);
