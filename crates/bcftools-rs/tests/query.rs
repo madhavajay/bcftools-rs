@@ -716,3 +716,47 @@ fn query_n_pass_formatter_counts_selected_samples_matching_predicate() {
     assert_eq!(code, 0, "query -f %N_PASS failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_n_pass_filter_counts_numeric_format_predicates() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.63.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS\\t%SAMPLE\\t%GQ\\n]",
+        "-i",
+        "N_PASS(GQ<20)==1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i N_PASS(GQ<20) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_n_pass_filter_counts_gt_class_predicates() {
+    let path = fixture_path("query.filter.11.vcf");
+    let include_expected = std::fs::read_to_string(fixture_path("query.80.out")).unwrap();
+    let exclude_expected = std::fs::read_to_string(fixture_path("query.81.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS\\t%SAMPLE\\t%GT\\n]",
+        "-i",
+        "N_PASS(GT=\"alt\")==1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i N_PASS(GT=alt) failed: {err}");
+    assert_eq!(out, include_expected);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS\\t%SAMPLE\\t%GT\\n]",
+        "-e",
+        "N_PASS(GT=\"alt\")==1",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -e N_PASS(GT=alt) failed: {err}");
+    assert_eq!(out, exclude_expected);
+}

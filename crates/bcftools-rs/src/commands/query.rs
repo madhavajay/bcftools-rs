@@ -535,7 +535,15 @@ struct QueryFilter {
 #[derive(Debug, Clone)]
 enum QueryFilterKind {
     Expr(Filter),
-    FilterIdMatch { id: String, negate: bool },
+    FilterIdMatch {
+        id: String,
+        negate: bool,
+    },
+    NPassComparison {
+        expression: String,
+        op: PredicateOp,
+        rhs: f64,
+    },
     PredicateGroups(Vec<Vec<SimplePredicate>>),
 }
 
@@ -564,6 +572,15 @@ impl QueryFilter {
         let kind = parse_filter_id_match(&spec.raw)
             .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
             .or_else(|| {
+                parse_n_pass_comparison(&spec.raw).map(|(expression, op, rhs)| {
+                    QueryFilterKind::NPassComparison {
+                        expression,
+                        op,
+                        rhs,
+                    }
+                })
+            })
+            .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
             .unwrap_or_else(|| {
@@ -586,6 +603,11 @@ impl QueryFilter {
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
+            QueryFilterKind::NPassComparison {
+                expression,
+                op,
+                rhs,
+            } => compare_number(n_pass(expression, record) as f64, *op, *rhs),
             QueryFilterKind::PredicateGroups(groups) => groups
                 .iter()
                 .any(|predicates| predicates.iter().all(|predicate| predicate.matches(record))),
@@ -708,6 +730,31 @@ fn parse_filter_id_match(raw: &str) -> Option<(String, bool)> {
     let rhs = rhs.trim();
     let id = rhs.strip_prefix('"')?.strip_suffix('"')?;
     Some((id.to_string(), op == "!~"))
+}
+
+fn parse_n_pass_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
+    let raw = raw.trim();
+    let args_start = "N_PASS".len();
+    if !raw.starts_with("N_PASS") {
+        return None;
+    }
+    let args_end = find_function_end(raw, args_start)?;
+    let expression = raw[args_start + 1..args_end].trim().to_string();
+    let rest = raw[args_end + 1..].trim();
+    for (needle, op) in [
+        (">=", PredicateOp::Ge),
+        ("<=", PredicateOp::Le),
+        ("!=", PredicateOp::Ne),
+        ("==", PredicateOp::Eq),
+        ("=", PredicateOp::Eq),
+        (">", PredicateOp::Gt),
+        ("<", PredicateOp::Lt),
+    ] {
+        if let Some(rhs) = rest.strip_prefix(needle) {
+            return Some((expression, op, rhs.trim().parse().ok()?));
+        }
+    }
+    None
 }
 
 fn normalize_filter_expr(raw: &str) -> String {
@@ -1205,20 +1252,24 @@ fn compare_gt(value: &str, op: PredicateOp, rhs: &str) -> bool {
 fn compare_sample_value(value: &str, op: PredicateOp, rhs: &str) -> bool {
     let rhs = rhs.trim().trim_matches('"');
     if let (Ok(left), Ok(right)) = (value.parse::<f64>(), rhs.parse::<f64>()) {
-        return match op {
-            PredicateOp::Eq => left == right,
-            PredicateOp::Ne => left != right,
-            PredicateOp::Gt => left > right,
-            PredicateOp::Ge => left >= right,
-            PredicateOp::Lt => left < right,
-            PredicateOp::Le => left <= right,
-            PredicateOp::Regex | PredicateOp::NotRegex => false,
-        };
+        return compare_number(left, op, right);
     }
     match op {
         PredicateOp::Eq => value == rhs,
         PredicateOp::Ne => value != rhs,
         _ => false,
+    }
+}
+
+fn compare_number(left: f64, op: PredicateOp, right: f64) -> bool {
+    match op {
+        PredicateOp::Eq => left == right,
+        PredicateOp::Ne => left != right,
+        PredicateOp::Gt => left > right,
+        PredicateOp::Ge => left >= right,
+        PredicateOp::Lt => left < right,
+        PredicateOp::Le => left <= right,
+        PredicateOp::Regex | PredicateOp::NotRegex => false,
     }
 }
 
