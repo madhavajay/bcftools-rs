@@ -23,12 +23,16 @@ Usage:   bcftools query [OPTIONS] <in.vcf.gz>|<in.bcf>\n\
 Options:\n\
     -f, --format STR                 format string\n\
     -l, --list-samples               print sample names and exit\n\
+    -s, --samples LIST               comma-separated sample list\n\
+    -S, --samples-file FILE          file of samples, optionally prefixed with ^\n\
 \n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     list_samples: bool,
     format: Option<String>,
+    samples: Option<String>,
+    samples_is_file: bool,
     input: String,
 }
 
@@ -58,17 +62,29 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let long_opts = [
         LongOpt::new("format", HasArg::Required, b'f' as i32),
         LongOpt::new("list-samples", HasArg::None, b'l' as i32),
+        LongOpt::new("samples", HasArg::Required, b's' as i32),
+        LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
     ];
 
     let mut list_samples = false;
     let mut format = None;
+    let mut samples = None;
+    let mut samples_is_file = false;
 
-    let mut g = Getopt::new("f:l", &long_opts, argv);
+    let mut g = Getopt::new("f:ls:S:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
                 v if v == b'l' as i32 => list_samples = true,
                 v if v == b'f' as i32 => format = m.value,
+                v if v == b's' as i32 => {
+                    samples = m.value;
+                    samples_is_file = false;
+                }
+                v if v == b'S' as i32 => {
+                    samples = m.value;
+                    samples_is_file = true;
+                }
                 _ => return Err(ParseOutcome::Usage),
             },
             Ok(None) => break,
@@ -92,6 +108,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     Ok(Args {
         list_samples,
         format,
+        samples,
+        samples_is_file,
         input,
     })
 }
@@ -99,12 +117,19 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
 fn run<W: Write>(args: &Args, mut out: W) -> io::Result<()> {
     let input = materialize_input(&args.input)?;
     if args.list_samples {
-        for sample in sample_names_from_path(&input)? {
+        for sample in sample_names_from_path(&input, args.samples.as_deref(), args.samples_is_file)?
+        {
             writeln!(out, "{sample}")?;
         }
     }
     if let Some(format) = &args.format {
-        query_format_from_path(&input, format, &mut out)?;
+        query_format_from_path(
+            &input,
+            format,
+            args.samples.as_deref(),
+            args.samples_is_file,
+            &mut out,
+        )?;
     }
     Ok(())
 }
@@ -132,7 +157,29 @@ fn stdin_tmp_path() -> PathBuf {
     ))
 }
 
-fn sample_names_from_path<P>(path: P) -> io::Result<Vec<String>>
+fn sample_names_from_path<P>(
+    path: P,
+    sample_list: Option<&str>,
+    sample_list_is_file: bool,
+) -> io::Result<Vec<String>>
+where
+    P: AsRef<Path>,
+{
+    let samples = header_sample_names_from_path(path)?;
+    let selected = crate::smpl_ilist::init(
+        &samples,
+        sample_list,
+        sample_list_is_file,
+        crate::smpl_ilist::SMPL_STRICT,
+    )?;
+    Ok(selected
+        .idx
+        .into_iter()
+        .map(|idx| samples[idx].clone())
+        .collect())
+}
+
+fn header_sample_names_from_path<P>(path: P) -> io::Result<Vec<String>>
 where
     P: AsRef<Path>,
 {
@@ -159,9 +206,15 @@ where
         .collect())
 }
 
-fn query_format_from_path<W: Write>(path: &Path, format: &str, out: &mut W) -> io::Result<()> {
+fn query_format_from_path<W: Write>(
+    path: &Path,
+    format: &str,
+    sample_list: Option<&str>,
+    sample_list_is_file: bool,
+    out: &mut W,
+) -> io::Result<()> {
     let text = vcf_text_from_path(path)?;
-    query_format_text(&text, format, out)
+    query_format_text(&text, format, sample_list, sample_list_is_file, out)
 }
 
 fn vcf_text_from_path(path: &Path) -> io::Result<String> {
@@ -179,37 +232,56 @@ fn vcf_text_from_path(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
-fn query_format_text<W: Write>(text: &str, format: &str, out: &mut W) -> io::Result<()> {
+fn query_format_text<W: Write>(
+    text: &str,
+    format: &str,
+    sample_list: Option<&str>,
+    sample_list_is_file: bool,
+    out: &mut W,
+) -> io::Result<()> {
     let mut samples = Vec::new();
+    let mut sample_indices = Vec::new();
     for line in text.lines() {
         if line.starts_with("##") {
             continue;
         }
         if line.starts_with("#CHROM\t") {
             samples = line.split('\t').skip(9).map(ToOwned::to_owned).collect();
+            sample_indices = query_sample_indices(&samples, sample_list, sample_list_is_file)?;
             continue;
         }
         if line.starts_with('#') || line.is_empty() {
             continue;
         }
-        let record = TextRecord::parse(line, &samples);
+        let record = TextRecord::parse(line, &samples, &sample_indices);
         let rendered = render_format(format, &record);
         out.write_all(rendered.as_bytes())?;
     }
     Ok(())
 }
 
+fn query_sample_indices(
+    samples: &[String],
+    sample_list: Option<&str>,
+    sample_list_is_file: bool,
+) -> io::Result<Vec<usize>> {
+    let flags = crate::smpl_ilist::SMPL_STRICT | crate::smpl_ilist::SMPL_REORDER;
+    Ok(crate::smpl_ilist::init(samples, sample_list, sample_list_is_file, flags)?.idx)
+}
+
 #[derive(Debug)]
 struct TextRecord<'a> {
     fields: Vec<&'a str>,
     samples: &'a [String],
+    sample_indices: &'a [usize],
 }
 
 impl<'a> TextRecord<'a> {
-    fn parse(line: &'a str, samples: &'a [String]) -> Self {
+    fn parse(line: &'a str, samples: &'a [String], sample_indices: &'a [usize]) -> Self {
         Self {
             fields: line.split('\t').collect(),
             samples,
+            sample_indices,
         }
     }
 
@@ -245,7 +317,10 @@ impl<'a> TextRecord<'a> {
         let Some(format) = self.fields.get(8) else {
             return ".".into();
         };
-        let Some(sample) = self.fields.get(9 + sample_index) else {
+        let Some(&header_sample_index) = self.sample_indices.get(sample_index) else {
+            return ".".into();
+        };
+        let Some(sample) = self.fields.get(9 + header_sample_index) else {
             return ".".into();
         };
         for (idx, name) in format.split(':').enumerate() {
@@ -268,7 +343,7 @@ fn render_format(format: &str, record: &TextRecord<'_>) -> String {
             return out;
         };
         let block = &after_start[..end];
-        for sample_index in 0..record.samples.len() {
+        for sample_index in 0..record.sample_indices.len() {
             render_segment(block, record, Some(sample_index), &mut out);
         }
         rest = &after_start[end + 1..];
@@ -320,7 +395,8 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
     let token = token.strip_prefix('/').unwrap_or(token);
     if token == "SAMPLE" {
         return sample_index
-            .and_then(|i| record.samples.get(i))
+            .and_then(|i| record.sample_indices.get(i))
+            .and_then(|&i| record.samples.get(i))
             .cloned()
             .unwrap_or_else(|| ".".into());
     }
@@ -365,6 +441,8 @@ mod tests {
             Args {
                 list_samples: true,
                 format: None,
+                samples: None,
+                samples_is_file: false,
                 input: "in.vcf".into()
             }
         );
@@ -383,6 +461,8 @@ mod tests {
             Args {
                 list_samples: false,
                 format: Some("%CHROM\n".into()),
+                samples: None,
+                samples_is_file: false,
                 input: "in.vcf".into()
             }
         );
@@ -394,10 +474,27 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
 1\t2\trs1\tA\tC\t.\tPASS\tDP=7\tGT:DP\t0/1:3\t0/0:4\n";
         let mut out = Vec::new();
-        query_format_text(text, "%CHROM\\t%POS\\t%DP[\\t%SAMPLE=%GT:%DP]\\n", &mut out).unwrap();
+        query_format_text(
+            text,
+            "%CHROM\\t%POS\\t%DP[\\t%SAMPLE=%GT:%DP]\\n",
+            None,
+            false,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "1\t2\t7\tA=0/1:3\tB=0/0:4\n"
         );
+    }
+
+    #[test]
+    fn sample_selection_reorders_format_loops() {
+        let text = "##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t00\t11\n\
+chr1\t10000\t.\tA\tC\t.\t.\t.\tGT\t0/0\t1/1\n";
+        let mut out = Vec::new();
+        query_format_text(text, "[%SAMPLE %GT\\n]", Some("11,00"), false, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "11 1/1\n00 0/0\n");
     }
 }

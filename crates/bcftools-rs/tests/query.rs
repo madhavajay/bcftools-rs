@@ -96,3 +96,51 @@ fn query_format_core_fields_from_vcf() {
     assert!(out.starts_with("1\t3000001\tC\tT\n"));
     assert!(out.lines().count() > 1);
 }
+
+#[test]
+fn query_samples_file_filters_list_samples_in_header_order() {
+    let path = fixture_path("query.smpl.vcf");
+    let samples = fixture_path("query.smpl.txt");
+    let (out, err, code) = run(&[
+        "query",
+        "-l",
+        "-S",
+        samples.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -l -S failed: {err}");
+    assert_eq!(out, "00\n11\n");
+}
+
+#[test]
+fn query_samples_file_reorders_format_loops() {
+    let path = fixture_path("query.smpl.vcf");
+    let samples = fixture_path("query.smpl.txt");
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%SAMPLE %GT\\n]",
+        "-S",
+        samples.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f -S failed: {err}");
+    assert_eq!(out, "11 1/1\n00 0/0\n");
+}
+
+#[test]
+fn query_samples_file_exclusion_filters_format_loops() {
+    let path = fixture_path("query.smpl.vcf");
+    let samples = fixture_path("query.smpl.11.txt");
+    let excluded = format!("^{}", samples.display());
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%SAMPLE %GT\\n]",
+        "-S",
+        &excluded,
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f -S ^ failed: {err}");
+    assert_eq!(out, "00 0/0\n");
+}
