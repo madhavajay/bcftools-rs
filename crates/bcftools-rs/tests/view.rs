@@ -463,6 +463,63 @@ fn view_exclude_snps_matches_upstream_fixture() {
 }
 
 #[test]
+fn view_min_alleles_filters_multiallelic_records() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-m",
+        "3",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -m 3 failed: {err}");
+    assert_eq!(
+        out,
+        "20\t271225\t.\tT\tTTTA,TA\t999\tStrandBias\tDP4=29281,42401,27887,29245;DP=272732;INDEL;IS=95,0.748031;MQ=47;PV4=0,1,0,1;QD=0.0948;AN=6;AC=2,2\tGT:DP:GQ:PL\t0/2:33:49:151,53,203,0,52,159\t0/1:51:99:255,0,213,255,255,255\t1/2:47:99:255,255,255,255,0,241\n"
+    );
+}
+
+#[test]
+fn view_min_max_alleles_filters_biallelic_records() {
+    let path = fixture_path("view.vcf");
+    let (out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-H",
+        "-m2",
+        "-M2",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -m2 -M2 failed: {err}");
+    let positions = out
+        .lines()
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            format!("{}:{}", fields[0], fields[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        positions,
+        [
+            "11:5464562",
+            "20:76962",
+            "20:126310",
+            "20:138125",
+            "20:138148",
+            "20:304568",
+            "20:326891",
+            "X:2928329",
+            "X:2933066",
+            "X:2942109",
+            "X:3048719",
+            "Y:8657215",
+            "Y:10011673",
+        ]
+    );
+}
+
+#[test]
 fn view_drop_genotypes_no_header_matches_upstream_fixture() {
     let path = fixture_path("view.omitgenotypes.vcf");
     let expected =

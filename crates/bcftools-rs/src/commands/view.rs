@@ -46,6 +46,8 @@ Output options:\n\
     -h, --header-only                 print only the header in VCF output\n\
     -H, --no-header                   suppress the header in VCF output\n\
     -l, --compression-level INT       compression level: 0 uncompressed, 1 best speed, 9 best compression [-1]\n\
+    -m, --min-alleles INT             minimum number of alleles listed in REF and ALT\n\
+    -M, --max-alleles INT             maximum number of alleles listed in REF and ALT\n\
         --no-version                  do not append version and command line to the header\n\
     -o, --output FILE                 output file name [stdout]\n\
     -O, --output-type u|b|v|z[0-9]    u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n\
@@ -94,6 +96,8 @@ struct RunOptions<'a> {
     targets_overlap: RegionOverlap,
     type_filter: Option<TypeFilter>,
     type_filter_exclude: bool,
+    min_alleles: Option<usize>,
+    max_alleles: Option<usize>,
     thread_count: Option<NonZero<usize>>,
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
@@ -305,6 +309,15 @@ fn parse_threads(raw: &str) -> Result<Option<NonZero<usize>>, std::num::ParseInt
     Ok(NonZero::new(n))
 }
 
+fn parse_positive_usize(raw: &str, option: &str) -> io::Result<usize> {
+    raw.parse::<usize>().ok().filter(|n| *n > 0).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Could not parse argument: {option} {raw}"),
+        )
+    })
+}
+
 fn parse_variant_type_filter(raw: &str) -> io::Result<TypeFilter> {
     let mut mask = VariantType::REF;
     let mut include_ref = false;
@@ -375,6 +388,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("output-file", HasArg::Required, b'o' as i32),
         LongOpt::new("output-type", HasArg::Required, b'O' as i32),
         LongOpt::new("compression-level", HasArg::Required, b'l' as i32),
+        LongOpt::new("min-alleles", HasArg::Required, b'm' as i32),
+        LongOpt::new("max-alleles", HasArg::Required, b'M' as i32),
         LongOpt::new("header-only", HasArg::None, b'h' as i32),
         LongOpt::new("no-header", HasArg::None, b'H' as i32),
         LongOpt::new("regions", HasArg::Required, b'r' as i32),
@@ -406,12 +421,14 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut drop_genotypes = false;
     let mut type_filter = None;
     let mut type_filter_exclude = false;
+    let mut min_alleles = None;
+    let mut max_alleles = None;
     let mut region_specs = Vec::new();
     let mut region_files = Vec::new();
     let mut target_specs = Vec::new();
     let mut target_files = Vec::new();
 
-    let mut g = Getopt::new("o:O:l:hHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
+    let mut g = Getopt::new("o:O:l:m:M:hHr:R:s:S:t:T:Gv:V:", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -449,6 +466,26 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                                     &format!("invalid compression level \"{raw}\"")
                                 )
                             );
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'm' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_positive_usize(raw, "--min-alleles") {
+                        Ok(value) => min_alleles = Some(value),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                v if v == b'M' as i32 => {
+                    let raw = m.value.as_deref().unwrap_or("");
+                    match parse_positive_usize(raw, "--max-alleles") {
+                        Ok(value) => max_alleles = Some(value),
+                        Err(e) => {
+                            eprintln!("{}", fmt_etag("main_vcfview", &format!("{e}")));
                             return ExitCode::FAILURE;
                         }
                     }
@@ -654,6 +691,8 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         targets_overlap,
         type_filter,
         type_filter_exclude,
+        min_alleles,
+        max_alleles,
         thread_count,
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
@@ -681,9 +720,12 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     }
 
     let in_fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
+    let has_line_filters = options.type_filter.is_some()
+        || options.min_alleles.is_some()
+        || options.max_alleles.is_some();
     let has_text_filters =
-        !options.regions.is_empty() || !options.targets.is_empty() || options.type_filter.is_some();
-    if options.type_filter.is_some()
+        !options.regions.is_empty() || !options.targets.is_empty() || has_line_filters;
+    if has_line_filters
         && !(options.sample_list.is_some()
             || options.drop_genotypes
             || (options.output_kind == OutputKind::VcfText
@@ -692,7 +734,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "type filtering currently requires text VCF output with --no-version or sample projection",
+            "allele/type filtering currently requires text VCF output with --no-version or sample projection",
         ));
     }
     let filters = RecordFilters {
@@ -965,6 +1007,8 @@ fn write_sample_subset_bcf<W: Write>(
         targets_overlap: options.targets_overlap,
         type_filter: options.type_filter,
         type_filter_exclude: options.type_filter_exclude,
+        min_alleles: options.min_alleles,
+        max_alleles: options.max_alleles,
         thread_count: options.thread_count,
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
@@ -1135,7 +1179,28 @@ fn record_line_matches_filters(fields: &[&str], options: &RunOptions<'_>) -> boo
         contig,
         pos,
         fields,
-    ) && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+    ) && allele_count_line_matches(fields, options.min_alleles, options.max_alleles)
+        && variant_type_line_matches(fields, options.type_filter, options.type_filter_exclude)
+}
+
+fn allele_count_line_matches(
+    fields: &[&str],
+    min_alleles: Option<usize>,
+    max_alleles: Option<usize>,
+) -> bool {
+    let n_alleles = allele_count_from_fields(fields);
+    min_alleles.is_none_or(|min| n_alleles >= min) && max_alleles.is_none_or(|max| n_alleles <= max)
+}
+
+fn allele_count_from_fields(fields: &[&str]) -> usize {
+    let Some(alts) = fields.get(4) else {
+        return 1;
+    };
+    if *alts == "." || alts.is_empty() {
+        1
+    } else {
+        1 + alts.split(',').count()
+    }
 }
 
 fn variant_type_line_matches(
