@@ -548,3 +548,106 @@ fn query_filter_negated_id_match_matches_upstream_fixture() {
     assert_eq!(code, 0, "query -i FILTER!~\"A\" failed: {err}");
     assert_eq!(out, expected);
 }
+
+#[test]
+fn query_missing_integer_info_matches_upstream_fixtures() {
+    let path = fixture_path("missing.vcf");
+    let expected_missing = std::fs::read_to_string(fixture_path("query.18.out")).unwrap();
+    let expected_present = std::fs::read_to_string(fixture_path("query.19.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "IINT=\".\"",
+        "-f",
+        "%POS %IINT\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i IINT missing failed: {err}");
+    assert_eq!(out, expected_missing);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "IINT!=\".\"",
+        "-f",
+        "%POS %IINT\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i IINT present failed: {err}");
+    assert_eq!(out, expected_present);
+}
+
+#[test]
+fn query_missing_float_info_matches_upstream_fixtures() {
+    let path = fixture_path("missing.vcf");
+    let expected_missing = std::fs::read_to_string(fixture_path("query.20.out")).unwrap();
+    let expected_present = std::fs::read_to_string(fixture_path("query.21.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "IFLT=\".\"",
+        "-f",
+        "%POS %IFLT\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i IFLT missing failed: {err}");
+    assert_eq!(out, expected_missing);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "IFLT!=\".\"",
+        "-f",
+        "%POS %IFLT\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i IFLT present failed: {err}");
+    assert_eq!(out, expected_present);
+}
+
+#[test]
+fn query_missing_string_info_matches_upstream_fixtures() {
+    let path = fixture_path("missing.vcf");
+    let expected_missing = std::fs::read_to_string(fixture_path("query.22.out")).unwrap();
+    let expected_present = std::fs::read_to_string(fixture_path("query.23.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "ISTR=\".\"",
+        "-f",
+        "%POS %ISTR\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i ISTR missing failed: {err}");
+    assert_eq!(out, expected_missing);
+
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "ISTR!=\".\"",
+        "-f",
+        "%POS %ISTR\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i ISTR present failed: {err}");
+    assert_eq!(out, expected_present);
+}
+
+#[test]
+fn query_filter_exact_missing_fixture_matches_upstream() {
+    let path = fixture_path("missing.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.24.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "FILTER=\"q11\"",
+        "-f",
+        "%POS %ISTR\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FILTER=\"q11\" failed: {err}");
+    assert_eq!(out, expected);
+}
