@@ -46,6 +46,11 @@ const UNSORTED_VCF: &str = "##fileformat=VCFv4.2\n\
 1\t10\t.\tA\tC\t100\tPASS\t.\n\
 2\t15\t.\tT\tA\t100\tPASS\t.\n";
 
+const KESTREL_HEADER_VCF: &str = "##fileformat=VCF4.2\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+chr1\t1\t.\tA\tC\t.\tPASS\t.\n";
+
 #[test]
 fn sort_writes_records_in_contig_position_ref_alt_order() {
     let dir = TempDir::new().expect("tempdir");
@@ -150,6 +155,83 @@ fn sort_threads_rejects_non_integer_argument() {
     let (_out, err, code) = run(&["sort", "--threads", "abc", input.to_str().unwrap()]);
     assert_ne!(code, 0);
     assert!(err.contains("Could not parse argument: --threads abc"));
+}
+
+#[test]
+fn sort_accepts_kestrel_non_canonical_fileformat_header() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("kestrel-style.vcf");
+    let output = dir.path().join("kestrel-style.sorted.vcf");
+    std::fs::write(&input, KESTREL_HEADER_VCF).unwrap();
+
+    let (_out, err, code) = run(&[
+        "sort",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "-O",
+        "v",
+    ]);
+    assert_eq!(code, 0, "sort rejected Kestrel header: {err}");
+    assert!(
+        err.contains("[W::bcf_get_version] Couldn't get VCF version, considering as 4.2"),
+        "expected upstream-style warning, got: {err}"
+    );
+
+    let sorted = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        sorted.contains("##fileformat=VCFv4.2"),
+        "fileformat header not normalized in output: {sorted}"
+    );
+    let records: Vec<_> = sorted
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(records, ["chr1\t1\t.\tA\tC\t.\tPASS\t."]);
+}
+
+#[test]
+fn sort_accepts_kestrel_header_with_compressed_write_index() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("kestrel-style.vcf");
+    let output = dir.path().join("kestrel-style.sorted.vcf.gz");
+    std::fs::write(&input, KESTREL_HEADER_VCF).unwrap();
+
+    let (_out, err, code) = run(&[
+        "sort",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "-W",
+        "-O",
+        "z",
+    ]);
+    assert_eq!(code, 0, "sort -W -O z rejected Kestrel header: {err}");
+    assert!(output.exists(), "compressed VCF output not produced");
+    let csi = dir.path().join("kestrel-style.sorted.vcf.gz.csi");
+    assert!(csi.exists(), "CSI index not produced for -W");
+
+    let mut decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(&output).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    assert!(
+        decoded.contains("##fileformat=VCFv4.2"),
+        "fileformat header not normalized in output: {decoded}"
+    );
+}
+
+#[test]
+fn sort_does_not_warn_for_canonical_fileformat_header() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("canonical.vcf");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (_out, err, code) = run(&["sort", input.to_str().unwrap()]);
+    assert_eq!(code, 0, "sort failed: {err}");
+    assert!(
+        !err.contains("Couldn't get VCF version"),
+        "unexpected warning for canonical header: {err}"
+    );
 }
 
 #[test]

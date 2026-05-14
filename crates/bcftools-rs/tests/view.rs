@@ -68,6 +68,33 @@ fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
 }
 
 #[test]
+fn view_accepts_kestrel_non_canonical_fileformat_header() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let input = dir.path().join("kestrel.vcf");
+    let kestrel = "##fileformat=VCF4.2\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+chr1\t1\t.\tA\tC\t.\tPASS\t.\n";
+    std::fs::write(&input, kestrel).unwrap();
+
+    let (out, err, code) = run(&["view", "--no-version", input.to_str().unwrap()]);
+    assert_eq!(code, 0, "view rejected Kestrel header: {err}");
+    assert!(
+        err.contains("[W::bcf_get_version] Couldn't get VCF version, considering as 4.2"),
+        "missing upstream-style warning: {err}"
+    );
+    assert!(
+        out.contains("##fileformat=VCFv4.2"),
+        "fileformat header not normalized in output: {out}"
+    );
+    let records: Vec<_> = out
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .collect();
+    assert_eq!(records, ["chr1\t1\t.\tA\tC\t.\tPASS\t."]);
+}
+
+#[test]
 fn view_text_round_trip_emits_all_records() {
     let path = fixture_path("aa.vcf");
     let (out, _err, code) = run(&["view", "--no-version", path.to_str().unwrap()]);

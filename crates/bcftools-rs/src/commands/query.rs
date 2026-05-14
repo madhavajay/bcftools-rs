@@ -284,9 +284,7 @@ fn header_sample_names_from_path<P>(path: P) -> io::Result<Vec<String>>
 where
     P: AsRef<Path>,
 {
-    use htslib_rs::variant_io_compat::{
-        read_bcf_header_from_path, read_vcf_header, read_vcf_header_from_path,
-    };
+    use htslib_rs::variant_io_compat::{read_bcf_header_from_path, read_vcf_header};
 
     let path = path.as_ref();
     let fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
@@ -295,9 +293,12 @@ where
     } else if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        read_vcf_header(BufReader::new(dec))?
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        read_vcf_header(BufReader::new(normalized))?
     } else {
-        read_vcf_header_from_path(path)?
+        let f = File::open(path)?;
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+        read_vcf_header(BufReader::new(normalized))?
     };
 
     Ok(header
