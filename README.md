@@ -68,7 +68,7 @@ Run selected upstream Perl parity tests against the Rust binary:
 
 ```sh
 cargo build --release -p bcftools-rs-cli
-scripts/run-bcftools-test-pl.sh -f '^test_vcf_head$'
+scripts/run-bcftools-test-pl.sh -f '^(test_vcf_head|test_index|test_vcf_idxstats)$'
 ```
 
 The upstream harness does not expose a direct `--bin` option for `bcftools`

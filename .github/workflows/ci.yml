@@ -71,5 +71,5 @@ jobs:
       - name: Build Rust bcftools
         run: cargo build --release -p bcftools-rs-cli
 
-      - name: test.pl head parity
-        run: scripts/run-bcftools-test-pl.sh -f '^test_vcf_head$'
+      - name: test.pl enabled parity slices
+        run: scripts/run-bcftools-test-pl.sh -f '^(test_vcf_head|test_index|test_vcf_idxstats)$'
