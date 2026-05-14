@@ -34,6 +34,7 @@ Options:\n\
     -S, --samples-file FILE          file of samples, optionally prefixed with ^\n\
     -t, --targets LIST               comma-separated targets, optionally prefixed with ^\n\
     -T, --targets-file FILE          restrict to targets in FILE, optionally prefixed with ^\n\
+    -u, --allow-undef-tags           print \".\" for undefined tags\n\
 \n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +97,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         LongOpt::new("samples-file", HasArg::Required, b'S' as i32),
         LongOpt::new("targets", HasArg::Required, b't' as i32),
         LongOpt::new("targets-file", HasArg::Required, b'T' as i32),
+        LongOpt::new("allow-undef-tags", HasArg::None, b'u' as i32),
     ];
 
     let mut list_samples = false;
@@ -106,7 +108,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut regions = None;
     let mut filter = None;
 
-    let mut g = Getopt::new("e:f:Hi:lR:r:s:S:T:t:", &long_opts, argv);
+    let mut g = Getopt::new("e:f:Hi:lR:r:s:S:T:t:u", &long_opts, argv);
     loop {
         match g.next() {
             Ok(Some(m)) => match m.code {
@@ -175,6 +177,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                         });
                     }
                 }
+                v if v == b'u' as i32 => {}
                 _ => return Err(ParseOutcome::Usage),
             },
             Ok(None) => break,
