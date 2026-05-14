@@ -1150,6 +1150,46 @@ fn query_filter_uses_native_binom_function() {
 }
 
 #[test]
+fn query_binom_sample_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.5.vcf");
+    for (expression, expected_fixture) in [
+        ("GT=\"het\" & binom(FMT/AD)>0.01", "query.57.out"),
+        (
+            "GT=\"het\" & binom(FMT/AD[:0],FMT/AD[:1])>0.01",
+            "query.58.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%POS\\t%SAMPLE\\t%GT\\t%AD\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_binom_info_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.5.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.59.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%AD\\n",
+        "-i",
+        "binom(INFO/AD[0],INFO/AD[1])>0.01",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i binom(INFO/AD) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_filter_uses_native_fisher_function() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("fisher-filter.vcf");

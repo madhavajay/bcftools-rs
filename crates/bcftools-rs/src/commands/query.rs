@@ -913,6 +913,18 @@ fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> boo
                     | PredicateOp::Le
             );
     }
+    if parse_sample_binom_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
     sample_rhs_is_simple(rhs)
         && (lhs == "GT"
             || lhs.starts_with("FMT/")
@@ -2136,6 +2148,15 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
         };
         return compare_number(value, op, rhs);
     }
+    if let Some(arguments) = parse_sample_binom_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_binom(arguments, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
     let lhs = lhs
         .trim()
         .strip_prefix("FMT/")
@@ -2150,6 +2171,10 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
 }
 
 fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usize) -> String {
+    let lhs = lhs
+        .strip_prefix("FMT/")
+        .or_else(|| lhs.strip_prefix("FORMAT/"))
+        .unwrap_or(lhs);
     let Some((key, index)) = parse_sample_vector_index(lhs) else {
         return render_token(lhs, record, Some(sample_index));
     };
@@ -2203,6 +2228,53 @@ fn sample_vector_ratio(
         .filter_map(|value| value.parse::<f64>().ok())
         .sum::<f64>();
     (denominator != 0.0).then_some(numerator / denominator)
+}
+
+fn parse_sample_binom_lhs(lhs: &str) -> Option<Vec<&str>> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("BINOM") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let args = lhs[open_idx + 1..close_idx]
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if !matches!(args.as_slice(), [_] | [_, _]) {
+        return None;
+    }
+    args.iter()
+        .all(|arg| arg.starts_with("FMT/") || arg.starts_with("FORMAT/"))
+        .then_some(args)
+}
+
+fn sample_binom(arguments: Vec<&str>, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    match arguments.as_slice() {
+        [argument] => {
+            let gt = record.format_value(sample_index, "GT");
+            let alleles = parse_diploid_gt(&gt)?;
+            let values =
+                parse_integer_values(&sample_predicate_value(argument, record, sample_index))?;
+            Some(binom_two_sided(
+                *values.get(alleles[0])?,
+                *values.get(alleles[1])?,
+                0.5,
+            ))
+        }
+        [lhs, rhs] => {
+            let lhs = sample_predicate_value(lhs, record, sample_index)
+                .parse::<i32>()
+                .ok()?;
+            let rhs = sample_predicate_value(rhs, record, sample_index)
+                .parse::<i32>()
+                .ok()?;
+            Some(binom_two_sided(lhs, rhs, 0.5))
+        }
+        _ => None,
+    }
 }
 
 fn sample_predicate_rhs<'a>(
