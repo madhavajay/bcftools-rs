@@ -2080,11 +2080,53 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
         .strip_prefix("FMT/")
         .or_else(|| lhs.trim().strip_prefix("FORMAT/"))
         .unwrap_or_else(|| lhs.trim());
-    let value = render_token(lhs, record, Some(sample_index));
+    let value = sample_predicate_value(lhs, record, sample_index);
     if lhs == "GT" {
         return compare_gt(&value, op, rhs);
     }
-    compare_sample_value(&value, op, rhs)
+    let rhs = sample_predicate_rhs(rhs, record, sample_index);
+    compare_sample_value(&value, op, &rhs)
+}
+
+fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usize) -> String {
+    let Some((key, index)) = parse_sample_vector_index(lhs) else {
+        return render_token(lhs, record, Some(sample_index));
+    };
+    record
+        .format_value(sample_index, key)
+        .split(',')
+        .nth(index)
+        .unwrap_or(".")
+        .to_string()
+}
+
+fn parse_sample_vector_index(lhs: &str) -> Option<(&str, usize)> {
+    let index_start = lhs.rfind("[:")?;
+    let key = &lhs[..index_start];
+    let index = lhs[index_start + 2..].strip_suffix(']')?.parse().ok()?;
+    (!key.is_empty()).then_some((key, index))
+}
+
+fn sample_predicate_rhs<'a>(
+    rhs: &'a str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> std::borrow::Cow<'a, str> {
+    let rhs = rhs.trim();
+    if rhs.starts_with('"') || rhs.parse::<f64>().is_ok() {
+        return std::borrow::Cow::Borrowed(rhs);
+    }
+    let key = rhs
+        .strip_prefix("FMT/")
+        .or_else(|| rhs.strip_prefix("FORMAT/"))
+        .unwrap_or(rhs);
+    let format_key = parse_sample_vector_index(key)
+        .map(|(key, _)| key)
+        .unwrap_or(key);
+    if record.format_has_key(format_key) {
+        return std::borrow::Cow::Owned(sample_predicate_value(key, record, sample_index));
+    }
+    std::borrow::Cow::Borrowed(rhs)
 }
 
 fn parse_sample_count_lhs(lhs: &str) -> Option<&str> {

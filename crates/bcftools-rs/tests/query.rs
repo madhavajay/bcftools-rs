@@ -1268,3 +1268,24 @@ fn query_single_pipe_masks_samples_while_double_pipe_keeps_record() {
         assert_eq!(out, expected, "fixture {expected_fixture}");
     }
 }
+
+#[test]
+fn query_format_vector_index_sample_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.9.vcf");
+    for (expression, expected_fixture) in [
+        ("FMT/AD[:0] < FMT/AD[:1]", "query.71.out"),
+        ("FMT/AD[:0] > FMT/AD[:1]", "query.72.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%POS  %SAMPLE  %AD\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
