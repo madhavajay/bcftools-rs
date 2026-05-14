@@ -182,6 +182,52 @@ fn query_print_header_twice_omits_column_indices() {
 }
 
 #[test]
+fn query_header_formats_match_upstream_fixtures() {
+    let path = fixture_path("query.header.vcf");
+    for (args, expected_fixture) in [
+        (
+            vec!["-H", "-f", "[%CHROM %POS  %SAMPLE %DP %GT\\n]"],
+            "query.95.out",
+        ),
+        (
+            vec!["-H", "-f", "[%CHROM %POS  %SAMPLE %DP %GT\\t]\\n"],
+            "query.96.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE %DP %GT]\\n"],
+            "query.97.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE %DP %GT]"],
+            "query.97.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]\\n"],
+            "query.98.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]"],
+            "query.98.out",
+        ),
+        (
+            vec!["-HH", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]"],
+            "query.98.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let mut command = vec!["query"];
+        command.extend(args);
+        command.push(path.to_str().unwrap());
+        let (out, err, code) = run(&command);
+        assert_eq!(
+            code, 0,
+            "query header fixture {expected_fixture} failed: {err}"
+        );
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_regions_file_filters_records() {
     let path = fixture_path("regions.vcf");
     let regions = fixture_path("regions.tab");
@@ -312,7 +358,7 @@ fn query_exclude_filters_string_info_fields() {
         "-f",
         "%POS\\t%CLNREVSTAT\\n",
         "-e",
-        "CLNREVSTAT=\"criteria_provided,_single_submitter\"",
+        "CLNREVSTAT=\"_single_submitter\"",
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -e failed: {err}");
@@ -321,6 +367,68 @@ fn query_exclude_filters_string_info_fields() {
         "865568\tcriteria_provided,_conflicting_interpretations\n\
 865628\tcriteria_provided,_multiple_submitters,_no_conflicts\n"
     );
+}
+
+#[test]
+fn query_string_info_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.string.vcf");
+    for (expression, expected_fixture) in [
+        (
+            "CLNREVSTAT=\"criteria_provided,_conflicting_interpretations\"",
+            "query.string.1.out",
+        ),
+        (
+            "CLNREVSTAT=\"criteria_provided\" || CLNREVSTAT=\"_conflicting_interpretations\"",
+            "query.string.1.out",
+        ),
+        (
+            "CLNREVSTAT=\"criteria_provided\" && CLNREVSTAT=\"_conflicting_interpretations\"",
+            "query.string.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%CHROM\\t%POS\\t%CLNREVSTAT\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_string_file_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.string.2.vcf");
+    let info_list = fixture_path("query.string.2.1.txt");
+    let format_list = fixture_path("query.string.2.2.txt");
+    for (format, expression, expected_fixture) in [
+        (
+            "%CHROM\\t%POS\\t%INFO/STR\\n",
+            format!("INFO/STR=@{}", info_list.display()),
+            "query.string.2.1.out",
+        ),
+        (
+            "%CHROM\\t%POS[\\t%STR]\\n",
+            format!("FMT/STR=@{}", format_list.display()),
+            "query.string.2.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            format,
+            "-i",
+            &expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
 }
 
 #[test]
@@ -368,6 +476,59 @@ fn query_alt_vector_regex_filter_matches_upstream_fixture() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -i ALT[*] regex failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_strlen_filter_matches_upstream_fixture() {
+    let path = fixture_path("view.filter.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.9.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %CIGAR\\n",
+        "-i",
+        "strlen(CIGAR[*])=4",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i strlen(CIGAR[*]) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_allele_count_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.vcf");
+    for (expression, expected_fixture) in [
+        ("AC[0]=3", "query.10.out"),
+        ("AF[0]=3/4", "query.10.out"),
+        ("MAC[0]=1", "query.11.out"),
+        ("MAF[0]=1/4", "query.11.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%POS[ %GT]\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_vector_formatting_matches_upstream_fixture() {
+    let path = fixture_path("view.vectors.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.12.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "I8=%I8 I16=%I16 I32=%I32 IF=%IF IA8=%IA8 IA16=%IA16 IA32=%IA32 IAF=%IAF IA8=%IA8{1} IA16=%IA16{1} IA32=%IA32{1} IAF=%IAF{1} [ %F8:%F16:%F32:%FF]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f vector formatting failed: {err}");
     assert_eq!(out, expected);
 }
 
@@ -534,6 +695,90 @@ fn query_info_type_still_prefers_info_namespace() {
 }
 
 #[test]
+fn query_core_string_and_large_position_filters_match_upstream_fixtures() {
+    let chrom_path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.60.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS\\n",
+        "-i",
+        "CHROM=\"4\"",
+        chrom_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i CHROM failed: {err}");
+    assert_eq!(out, expected);
+
+    let pos_path = fixture_path("query.filter.6.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.66.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\n",
+        "-i",
+        "POS==16777217 || POS==33554432 || POS=118673904",
+        pos_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i large POS values failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_negative_numeric_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.negative.vcf");
+    for (format, expression, expected_fixture) in [
+        (
+            "%POS\\t%TAG1\\n",
+            "(TAG1>=-129 && TAG1<=-120) || (TAG1>=-32769 && TAG1<=-32760)",
+            "query.61.out",
+        ),
+        (
+            "%POS\\t%TAGV1\\n",
+            "(TAGV1>=-129 && TAGV1<=-120) || (TAGV1>=-32769 && TAGV1<=-32760)",
+            "query.61.out",
+        ),
+        (
+            "%POS\\t%TAG2\\n",
+            "(TAG2>=-129 && TAG2<=-120) || (TAG2>=-32769 && TAG2<=-32760)",
+            "query.62.out",
+        ),
+        (
+            "%POS\\t%TAGV2\\n",
+            "(TAGV2>=-129 && TAGV2<=-120) || (TAGV2>=-32769 && TAGV2<=-32760)",
+            "query.62.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            format,
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_ref_filter_matches_upstream_fixture() {
+    let path = fixture_path("filter.13.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.99.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "REF=\"N\"",
+        "-f",
+        "%CHROM %POS %REF %ALT %QUAL\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i REF failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_percent_ilen_filter_uses_computed_length() {
     let path = fixture_path("query.filter.8.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.69.out")).unwrap();
@@ -627,6 +872,63 @@ fn query_filter_negated_id_match_matches_upstream_fixture() {
     ]);
     assert_eq!(code, 0, "query -i FILTER!~\"A\" failed: {err}");
     assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_set_matches_upstream_fixtures() {
+    let path = fixture_path("filter.12.vcf");
+    for (expression, expected_fixture) in [
+        ("FILTER=\"A\"", "query.85.out"),
+        ("FILTER~\"A\"", "query.86.out"),
+        ("FILTER=\"A;B\"", "query.87.out"),
+        ("FILTER!=\"A;B\"", "query.88.out"),
+        ("FILTER~\"A;B\"", "query.89.out"),
+        ("FILTER!~\"A;B\"", "query.90.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-i",
+            expression,
+            "-f",
+            "%FILTER\\n",
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_id_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.id.vcf");
+    let list = fixture_path("query.filter.id.3.txt");
+    for (expression, expected_fixture) in [
+        ("ID~\"s12\"".to_string(), "query.filter.id.1.out"),
+        ("ID=\"rs123\"".to_string(), "query.filter.id.2.out"),
+        ("ID=\"abc\"".to_string(), "query.filter.id.3.out"),
+        (
+            format!("ID=@{}", list.to_string_lossy()),
+            "query.filter.id.3.out",
+        ),
+        ("ID!=\"abc\"".to_string(), "query.filter.id.4.out"),
+        (
+            format!("ID!=@{}", list.to_string_lossy()),
+            "query.filter.id.4.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%ID\\n",
+            "-i",
+            &expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
 }
 
 #[test]
@@ -798,6 +1100,226 @@ fn query_n_pass_formatter_counts_selected_samples_matching_predicate() {
 }
 
 #[test]
+fn query_pbinom_formatter_uses_sample_gt_alleles() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("pbinom.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\tC\tD\n\
+1\t10\t.\tA\tC\t.\tPASS\t.\tGT:AD\t0/1:10,2\t0/0:5,5\t0/1:0,0\t./.:3,4\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%SAMPLE:%GT:%PBINOM(AD)\\n]",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %PBINOM failed: {err}");
+    assert_eq!(out, "A:0/1:14.137\nB:0/0:0\nC:0/1:.\nD:./.:.\n");
+}
+
+#[test]
+fn query_filter_uses_native_binom_function() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("binom-filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n\
+1\t10\t.\tA\tC\t.\tPASS\t.\tAD\t10,2\n\
+1\t11\t.\tA\tC\t.\tPASS\t.\tAD\t50,0\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t[%AD]\\n",
+        "-i",
+        "phred(binom(FMT/AD)) < 50",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(binom()) failed: {err}");
+    assert_eq!(out, "10\t10,2\n");
+}
+
+#[test]
+fn query_pbinom_filter_and_formatter_match_upstream_fixture() {
+    let path = fixture_path("query.pbinom.1.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.65.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS %SAMPLE %GT %AD %PBINOM(AD)\\n]",
+        "-i",
+        "phred(binom(FMT/AD))>=0",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(binom(FMT/AD)) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_binom_sample_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.5.vcf");
+    for (expression, expected_fixture) in [
+        ("GT=\"het\" & binom(FMT/AD)>0.01", "query.57.out"),
+        (
+            "GT=\"het\" & binom(FMT/AD[:0],FMT/AD[:1])>0.01",
+            "query.58.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%POS\\t%SAMPLE\\t%GT\\t%AD\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_binom_info_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.5.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.59.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%AD\\n",
+        "-i",
+        "binom(INFO/AD[0],INFO/AD[1])>0.01",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i binom(INFO/AD) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_filter_uses_native_fisher_function() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("fisher-filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=DP4,Number=4,Type=Integer,Description=\"Strand depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\t.\tA\tC\t.\tPASS\tDP4=1,9,11,3\n\
+1\t11\t.\tA\tC\t.\tPASS\tDP4=5,5,5,5\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%INFO/DP4\\n",
+        "-i",
+        "phred(fisher(INFO/DP4)) > 20",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(fisher()) failed: {err}");
+    assert_eq!(out, "10\t1,9,11,3\n");
+}
+
+#[test]
+fn query_numeric_format_functions_sum_record_and_sample_values() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("numeric-functions.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
+1\t10\t.\tA\tC\t.\tPASS\tAD=3,4,5\tAD\t1,2\t4,6\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%SUM(INFO/AD) %AVG(INFO/AD) %MIN(INFO/AD) %MAX(INFO/AD) %SUM(FORMAT/AD)[ %sSUM(AD)]\\n",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f numeric functions failed: {err}");
+    assert_eq!(out, "12 4 3 5 13 3 10\n");
+}
+
+#[test]
+fn query_numeric_format_functions_match_upstream_fixtures() {
+    let path = fixture_path("query.func.1.vcf");
+    for (format, expected_fixture) in [
+        (
+            "%CHROM:%POS\\t%INFO/AD\\t%SUM(INFO/AD)",
+            "query.func.1.1.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t%SUM(FORMAT/AD)",
+            "query.func.1.2.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t[ %SUM(FORMAT/AD)]",
+            "query.func.1.3.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t[ %sSUM(FORMAT/AD)]",
+            "query.func.1.4.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&["query", "-f", format, path.to_str().unwrap()]);
+        assert_eq!(code, 0, "query -f {format} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_sample_count_formatter_matches_upstream_fixture() {
+    let path = fixture_path("smpl-count.vcf");
+    let expected = std::fs::read_to_string(fixture_path("smpl-count.1.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%CHROM\\t%POS\\t%GT\\t%LAA\\t%smpl_count(FMT/LAA)\\n]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %smpl_count failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_sample_count_filters_match_upstream_fixtures() {
+    let path = fixture_path("smpl-count.vcf");
+    for (expression, expected_fixture) in [
+        ("smpl_count(LAA)==1", "smpl-count.2.out"),
+        ("smpl_count(LAA)==1 & GT=\"hom\"", "smpl-count.3.out"),
+        ("GT=\"hom\" & smpl_count(LAA)==1", "smpl-count.3.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%CHROM\\t%POS\\t%GT\\t%LAA\\t%smpl_count(FMT/LAA)\\n]\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_n_pass_filter_counts_numeric_format_predicates() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.63.out")).unwrap();
@@ -934,5 +1456,85 @@ fn query_modulo_filter_evaluates_format_values() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -i DP%10 failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_single_pipe_masks_samples_while_double_pipe_keeps_record() {
+    let path = fixture_path("query.filter-or.vcf");
+    for (expression, expected_fixture) in [
+        ("DP=1 || DP=2", "query.filter-or.1.out"),
+        ("DP=1 |  DP=2", "query.filter-or.2.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%SAMPLE %DP\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_format_vector_index_sample_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.9.vcf");
+    for (expression, expected_fixture) in [
+        ("FMT/AD[:0] < FMT/AD[:1]", "query.71.out"),
+        ("FMT/AD[:0] > FMT/AD[:1]", "query.72.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%POS  %SAMPLE  %AD\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_format_gt_vector_index_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.5.vcf");
+    for (expression, expected_fixture) in [
+        ("FMT/AD[GT]==10", "query.92.out"),
+        ("sSUM(FMT/AD[GT])==210", "query.93.out"),
+        ("FMT/AD[0:GT]==30", "query.94.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "[%POS\\t%GT\\t%SAMPLE\\t%AD\\n]",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_sample_vector_ratio_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.13.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.84.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[ %AD\\n]",
+        "-i",
+        "AD[:1] / sum(AD[*]) > 0.5",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i AD ratio failed: {err}");
     assert_eq!(out, expected);
 }

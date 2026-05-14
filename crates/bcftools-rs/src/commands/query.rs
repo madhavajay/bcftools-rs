@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use htslib_rs::expr::{Filter, Value};
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::variant::{VariantType, classify_variant};
 
 use crate::diagnostics::fmt_etag;
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::getopt::{Getopt, HasArg, LongOpt};
 
 const USAGE: &str = "\n\
@@ -390,7 +390,7 @@ fn query_format_text<W: Write>(
         {
             continue;
         }
-        let rendered = render_format(format, &record);
+        let rendered = render_format(format, &record, query_filter.as_ref());
         out.write_all(rendered.as_bytes())?;
         if !rendered.ends_with('\n') {
             out.write_all(b"\n")?;
@@ -578,7 +578,14 @@ struct QueryFilter {
 
 #[derive(Debug, Clone)]
 enum QueryFilterKind {
-    Expr(Filter),
+    Expr(String),
+    SamplePredicateGroups(Vec<Vec<String>>),
+    FileMembership {
+        lhs: String,
+        op: PredicateOp,
+        values: Vec<String>,
+        sample_scoped: bool,
+    },
     FilterIdMatch {
         id: String,
         negate: bool,
@@ -624,6 +631,20 @@ enum PredicateOp {
 
 impl QueryFilter {
     fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
+        if let Some((lhs, op, path)) = parse_file_membership(&spec.raw) {
+            let values = read_filter_values(path)?;
+            let sample_scoped = lhs.starts_with("FMT/") || lhs.starts_with("FORMAT/");
+            return Ok(Self {
+                kind: QueryFilterKind::FileMembership {
+                    lhs,
+                    op,
+                    values,
+                    sample_scoped,
+                },
+                exclude: spec.exclude,
+            });
+        }
+
         let kind = parse_filter_id_match(&spec.raw)
             .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
             .or_else(|| {
@@ -655,11 +676,12 @@ impl QueryFilter {
                 })
             })
             .or_else(|| {
+                parse_sample_predicate_groups(&spec.raw).map(QueryFilterKind::SamplePredicateGroups)
+            })
+            .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
-            .unwrap_or_else(|| {
-                QueryFilterKind::Expr(Filter::new(normalize_filter_expr(&spec.raw)))
-            });
+            .unwrap_or_else(|| QueryFilterKind::Expr(normalize_filter_expr(&spec.raw)));
         Ok(Self {
             kind,
             exclude: spec.exclude,
@@ -667,15 +689,40 @@ impl QueryFilter {
     }
 
     fn matches(&self, record: &TextRecord<'_>) -> io::Result<bool> {
+        if let QueryFilterKind::SamplePredicateGroups(groups) = &self.kind {
+            return Ok((0..record.sample_indices.len()).any(|sample_index| {
+                sample_groups_match(groups, record, sample_index) != self.exclude
+            }));
+        }
         let matched = match &self.kind {
-            QueryFilterKind::Expr(filter) => {
-                let value = filter
-                    .eval_with(|src| lookup_filter_symbol(src, record))
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                value.truth()
+            QueryFilterKind::Expr(expression) => bcffilter::eval_expression_with(
+                expression,
+                &filter_eval_context(record),
+                |name, sample| filter_lookup_value(name, sample, record),
+            )?
+            .truthy(),
+            QueryFilterKind::SamplePredicateGroups(_) => unreachable!("handled above"),
+            QueryFilterKind::FileMembership {
+                lhs,
+                op,
+                values,
+                sample_scoped,
+            } => {
+                if *sample_scoped {
+                    (0..record.sample_indices.len()).any(|sample_index| {
+                        file_membership_matches(lhs, *op, values, record, Some(sample_index))
+                    })
+                } else {
+                    file_membership_matches(lhs, *op, values, record, None)
+                }
             }
             QueryFilterKind::FilterIdMatch { id, negate } => {
-                record.filter_has_id(id.as_str()) != *negate
+                let matched = if id.contains(';') {
+                    filter_set_contains_all(&record.core("FILTER"), id)
+                } else {
+                    record.filter_has_id(id.as_str())
+                };
+                matched != *negate
             }
             QueryFilterKind::NPassComparison {
                 expression,
@@ -702,27 +749,109 @@ impl QueryFilter {
         };
         Ok(matched != self.exclude)
     }
+
+    fn matches_sample(&self, record: &TextRecord<'_>, sample_index: usize) -> bool {
+        match &self.kind {
+            QueryFilterKind::SamplePredicateGroups(groups) => {
+                sample_groups_match(groups, record, sample_index) != self.exclude
+            }
+            QueryFilterKind::FileMembership {
+                lhs,
+                op,
+                values,
+                sample_scoped: true,
+            } => {
+                file_membership_matches(lhs, *op, values, record, Some(sample_index))
+                    != self.exclude
+            }
+            _ => true,
+        }
+    }
 }
 
 impl SimplePredicate {
     fn matches(&self, record: &TextRecord<'_>) -> bool {
         let values = record.predicate_values(&self.lhs, self.vector_any);
         match self.op {
-            PredicateOp::Eq => values.iter().any(|value| value == &self.rhs),
+            PredicateOp::Eq => values.iter().any(|value| {
+                if self.lhs.eq_ignore_ascii_case("TYPE") {
+                    value == &self.rhs
+                } else if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    filter_set_exact_matches(value, &self.rhs)
+                } else {
+                    string_value_matches(value, &self.rhs)
+                }
+            }),
             PredicateOp::Ne if self.vector_any => values.iter().any(|value| value != &self.rhs),
-            PredicateOp::Ne => values.iter().all(|value| value != &self.rhs),
-            PredicateOp::Regex => values
-                .iter()
-                .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| re.is_match(value))),
+            PredicateOp::Ne => values.iter().all(|value| {
+                if self.lhs.eq_ignore_ascii_case("TYPE") {
+                    value != &self.rhs
+                } else if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    !filter_set_exact_matches(value, &self.rhs)
+                } else {
+                    !string_value_matches(value, &self.rhs)
+                }
+            }),
+            PredicateOp::Regex => values.iter().any(|value| {
+                if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    filter_set_contains_all(value, &self.rhs)
+                } else {
+                    regex::Regex::new(&self.rhs)
+                        .is_ok_and(|re| string_value_regex_matches(value, &re))
+                }
+            }),
             PredicateOp::NotRegex if self.vector_any => values
                 .iter()
                 .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
-            PredicateOp::NotRegex => values
-                .iter()
-                .all(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
+            PredicateOp::NotRegex => values.iter().all(|value| {
+                if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    !filter_set_contains_all(value, &self.rhs)
+                } else {
+                    regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))
+                }
+            }),
             PredicateOp::Gt | PredicateOp::Ge | PredicateOp::Lt | PredicateOp::Le => false,
         }
     }
+}
+
+fn filter_set_exact_matches(value: &str, rhs: &str) -> bool {
+    let mut value_ids = filter_ids(value);
+    let mut rhs_ids = filter_ids(rhs);
+    value_ids.sort_unstable();
+    rhs_ids.sort_unstable();
+    value_ids == rhs_ids
+}
+
+fn filter_set_contains_all(value: &str, rhs: &str) -> bool {
+    let value_ids = filter_ids(value);
+    filter_ids(rhs)
+        .into_iter()
+        .all(|rhs_id| value_ids.contains(&rhs_id))
+}
+
+fn filter_ids(value: &str) -> Vec<&str> {
+    value
+        .split(';')
+        .filter(|id| !id.is_empty() && *id != "." && *id != "PASS")
+        .collect()
+}
+
+fn string_value_matches(value: &str, rhs: &str) -> bool {
+    value == rhs
+        || rhs
+            .split(',')
+            .any(|rhs_part| value.split(',').any(|value_part| value_part == rhs_part))
+}
+
+fn string_value_matches_any(value: &str, rhs_values: &[String]) -> bool {
+    rhs_values
+        .iter()
+        .any(|rhs| string_value_matches(value, rhs))
+}
+
+fn string_value_regex_matches(value: &str, regex: &regex::Regex) -> bool {
+    regex.is_match(value) || value.split(',').any(|part| regex.is_match(part))
 }
 
 fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>> {
@@ -736,6 +865,194 @@ fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>>
         })
         .collect::<Option<Vec<_>>>()?;
     (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
+}
+
+fn parse_sample_predicate_groups(raw: &str) -> Option<Vec<Vec<String>>> {
+    let allow_bare_format_tags = has_single_sample_binary(raw);
+    let groups = split_sample_or(raw)
+        .into_iter()
+        .map(|term| {
+            split_sample_and(term)
+                .into_iter()
+                .map(|predicate| {
+                    sample_predicate_is_supported(predicate, allow_bare_format_tags)
+                        .then_some(predicate.to_string())
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
+}
+
+fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> bool {
+    let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
+        return false;
+    };
+    let lhs = lhs.trim();
+    if parse_sample_count_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    if parse_sample_ratio_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    if parse_sample_sum_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    if parse_sample_phred_binom_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    if parse_sample_binom_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    sample_rhs_is_simple(rhs)
+        && (lhs == "GT"
+            || lhs.starts_with("FMT/")
+            || lhs.starts_with("FORMAT/")
+            || (allow_bare_format_tags && !is_record_scoped_filter_lhs(lhs)))
+}
+
+fn has_single_sample_binary(raw: &str) -> bool {
+    has_single_binary(raw, b'|') || has_single_binary(raw, b'&')
+}
+
+fn has_single_binary(raw: &str, delimiter: u8) -> bool {
+    let mut in_string = false;
+    let bytes = raw.as_bytes();
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'"' => in_string = !in_string,
+            ch if ch == delimiter
+                && !in_string
+                && bytes.get(i + 1).copied() != Some(delimiter)
+                && i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied() != Some(delimiter) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn sample_rhs_is_simple(rhs: &str) -> bool {
+    let rhs = rhs.trim();
+    if rhs.starts_with('"') {
+        return parse_quoted_rhs(rhs).is_some();
+    }
+    !rhs.is_empty()
+        && !rhs
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '&' || ch == '|')
+}
+
+fn is_record_scoped_filter_lhs(lhs: &str) -> bool {
+    let lhs = lhs
+        .strip_prefix('%')
+        .unwrap_or(lhs)
+        .split(['[', ':'])
+        .next()
+        .unwrap_or(lhs)
+        .to_ascii_uppercase();
+    lhs.starts_with("INFO/")
+        || matches!(
+            lhs.as_str(),
+            "CHROM"
+                | "POS"
+                | "ID"
+                | "REF"
+                | "ALT"
+                | "QUAL"
+                | "FILTER"
+                | "INFO"
+                | "TYPE"
+                | "N_ALT"
+                | "N_SAMPLES"
+                | "ILEN"
+                | "PCT_ILEN"
+        )
+}
+
+fn split_sample_or(raw: &str) -> Vec<&str> {
+    split_single_binary(raw, b'|')
+}
+
+fn split_sample_and(raw: &str) -> Vec<&str> {
+    split_single_binary(raw, b'&')
+}
+
+fn split_single_binary(raw: &str, delimiter: u8) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut in_string = false;
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                in_string = !in_string;
+                i += 1;
+            }
+            ch if ch == delimiter && !in_string => {
+                if bytes.get(i + 1).copied() == Some(delimiter)
+                    || i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied() == Some(delimiter)
+                {
+                    i += 1;
+                    continue;
+                }
+                parts.push(raw[start..i].trim());
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    parts.push(raw[start..].trim());
+    parts
 }
 
 fn split_simple_or(raw: &str) -> Vec<&str> {
@@ -777,6 +1094,9 @@ fn parse_simple_predicate(raw: &str) -> Option<SimplePredicate> {
         .strip_suffix("[*]")
         .map(|lhs| (lhs, true))
         .unwrap_or((lhs, false));
+    if lhs.contains('[') || lhs.contains(']') {
+        return None;
+    }
     let rhs = parse_quoted_rhs(rhs.trim())?;
     Some(SimplePredicate {
         lhs: lhs.trim().to_string(),
@@ -830,6 +1150,25 @@ fn parse_n_pass_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
 
 fn parse_count_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
     parse_function_count_comparison(raw, "COUNT")
+}
+
+fn parse_file_membership(raw: &str) -> Option<(String, PredicateOp, &str)> {
+    let (lhs, op, rhs) = split_sample_predicate(raw)?;
+    if !matches!(op, PredicateOp::Eq | PredicateOp::Ne) {
+        return None;
+    }
+    let path = rhs.trim().strip_prefix('@')?;
+    Some((lhs.trim().to_string(), op, path))
+}
+
+fn read_filter_values(path: &str) -> io::Result<Vec<String>> {
+    let text = fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 fn parse_function_count_comparison(raw: &str, name: &str) -> Option<(String, PredicateOp, f64)> {
@@ -924,6 +1263,11 @@ fn normalize_filter_expr(raw: &str) -> String {
             '~' if !matches!(prev_non_ws, Some('!' | '=')) => {
                 out.push_str("=~");
             }
+            '%' if next.is_some_and(is_identifier_start)
+                && !prev_non_ws.is_some_and(is_identifier_continue) =>
+            {
+                out.push_str("PCT_");
+            }
             _ => out.push(ch),
         }
         if !ch.is_whitespace() {
@@ -933,31 +1277,82 @@ fn normalize_filter_expr(raw: &str) -> String {
     out
 }
 
-fn lookup_filter_symbol(src: &str, record: &TextRecord<'_>) -> Option<(Value, usize)> {
-    let had_percent = src.starts_with('%');
-    let token_src = src.strip_prefix('%').unwrap_or(src);
-    let len = token_src
-        .char_indices()
-        .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/'))
-        .map(|(idx, ch)| idx + ch.len_utf8())
-        .last()?;
-    if token_src[len..].starts_with('(') {
-        return None;
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ')' | ']')
+}
+
+fn filter_eval_context(record: &TextRecord<'_>) -> EvalContext {
+    let mut context = EvalContext::new();
+    for sample_index in 0..record.sample_indices.len() {
+        let values = record
+            .fields
+            .get(8)
+            .copied()
+            .unwrap_or(".")
+            .split(':')
+            .map(|key| {
+                (
+                    key.to_string(),
+                    filter_value(record.format_value(sample_index, key)),
+                )
+            })
+            .collect::<Vec<_>>();
+        context = context.with_sample(values);
     }
-    let token = &token_src[..len];
-    let value = filter_token_value(token, had_percent, record);
-    let consumed = len + usize::from(had_percent);
-    Some((value, consumed))
+    context
+}
+
+fn filter_lookup_value(
+    token: &str,
+    sample_index: Option<usize>,
+    record: &TextRecord<'_>,
+) -> Option<FilterValue> {
+    if let Some(sample_index) = sample_index {
+        let key = token
+            .strip_prefix("FMT/")
+            .or_else(|| token.strip_prefix("FORMAT/"))
+            .unwrap_or(token);
+        return Some(filter_value(record.format_value(sample_index, key)));
+    }
+
+    Some(filter_token_value(token, token.starts_with('%'), record))
 }
 
 fn filter_token_value(
     token: &str,
     explicit_formatter_token: bool,
     record: &TextRecord<'_>,
-) -> Value {
+) -> FilterValue {
+    let token = token.strip_prefix('%').unwrap_or(token);
+    if token.starts_with("FMT/") || token.starts_with("FORMAT/") {
+        return filter_list_value(
+            (0..record.sample_indices.len())
+                .map(|sample_index| render_token(token, record, Some(sample_index)))
+                .collect(),
+        );
+    }
+    if let Some(value) = record.computed_allele_metric(token) {
+        return value;
+    }
+    if record
+        .fields
+        .get(8)
+        .is_some_and(|format| token == "GT" || format.split(':').any(|name| name == token))
+    {
+        return filter_list_value(
+            (0..record.sample_indices.len())
+                .map(|sample_index| record.format_value(sample_index, token))
+                .collect(),
+        );
+    }
+
     let raw = if token.eq_ignore_ascii_case("type") {
         record.core("TYPE")
-    } else if explicit_formatter_token && token == "ILEN" {
+    } else if (explicit_formatter_token && token == "ILEN") || token == "PCT_ILEN" {
         record.computed_ilen().to_string()
     } else {
         render_token(token, record, None)
@@ -965,13 +1360,24 @@ fn filter_token_value(
     filter_value(raw)
 }
 
-fn filter_value(raw: String) -> Value {
+fn filter_list_value(values: Vec<String>) -> FilterValue {
+    FilterValue::List(values.into_iter().map(filter_value).collect())
+}
+
+fn filter_value(raw: String) -> FilterValue {
     if raw == "." {
-        return Value::string(raw);
+        return FilterValue::Missing;
+    }
+    if raw.contains(',') {
+        return FilterValue::List(
+            raw.split(',')
+                .map(|value| filter_value(value.into()))
+                .collect(),
+        );
     }
     raw.parse::<f64>()
-        .map(Value::number)
-        .unwrap_or_else(|_| Value::string(raw))
+        .map(FilterValue::Number)
+        .unwrap_or(FilterValue::String(raw))
 }
 
 fn query_sample_indices(
@@ -1063,6 +1469,34 @@ impl<'a> TextRecord<'a> {
             .unwrap_or(0)
     }
 
+    fn computed_allele_metric(&self, key: &str) -> Option<FilterValue> {
+        let key = key.to_ascii_uppercase();
+        if !matches!(key.as_str(), "AF" | "MAC" | "MAF") {
+            return None;
+        }
+
+        let an = self.info("AN").parse::<f64>().ok()?;
+        let ac_values = self
+            .info("AC")
+            .split(',')
+            .filter_map(|value| value.parse::<f64>().ok())
+            .collect::<Vec<_>>();
+        if an == 0.0 || ac_values.is_empty() {
+            return Some(FilterValue::Missing);
+        }
+
+        let values = ac_values
+            .into_iter()
+            .map(|ac| match key.as_str() {
+                "AF" => FilterValue::Number(ac / an),
+                "MAC" => FilterValue::Number(ac.min(an - ac)),
+                "MAF" => FilterValue::Number(ac.min(an - ac) / an),
+                _ => unreachable!("checked above"),
+            })
+            .collect();
+        Some(FilterValue::List(values))
+    }
+
     fn info(&self, key: &str) -> String {
         let Some(info) = self.fields.get(7) else {
             return ".".into();
@@ -1070,7 +1504,7 @@ impl<'a> TextRecord<'a> {
         for field in info.split(';') {
             let (name, value) = field.split_once('=').unwrap_or((field, "1"));
             if name == key {
-                return value.to_string();
+                return value.trim().to_string();
             }
         }
         ".".into()
@@ -1091,6 +1525,16 @@ impl<'a> TextRecord<'a> {
         } else {
             render_token(key, self, None)
         };
+        if key == "ID" {
+            let mut values = vec![value.clone()];
+            values.extend(
+                value
+                    .split(';')
+                    .filter(|part| !part.is_empty() && *part != value)
+                    .map(ToOwned::to_owned),
+            );
+            return values;
+        }
         if vector_any || key == "ALT" {
             value.split(',').map(ToOwned::to_owned).collect()
         } else {
@@ -1108,9 +1552,7 @@ impl<'a> TextRecord<'a> {
             .strip_prefix("FMT/")
             .or_else(|| key.strip_prefix("FORMAT/"))
             .unwrap_or(key);
-        let format = self.fields.get(8).copied().unwrap_or(".");
-        let has_key = key == "GT" || format.split(':').any(|name| name == key);
-        if !has_key {
+        if !self.format_has_key(key) {
             return None;
         }
         Some(
@@ -1133,6 +1575,11 @@ impl<'a> TextRecord<'a> {
             .collect()
     }
 
+    fn format_has_key(&self, key: &str) -> bool {
+        let format = self.fields.get(8).copied().unwrap_or(".");
+        key == "GT" || format.split(':').any(|name| name == key)
+    }
+
     fn format_value(&self, sample_index: usize, key: &str) -> String {
         let Some(format) = self.fields.get(8) else {
             return ".".into();
@@ -1152,7 +1599,7 @@ impl<'a> TextRecord<'a> {
     }
 }
 
-fn render_format(format: &str, record: &TextRecord<'_>) -> String {
+fn render_format(format: &str, record: &TextRecord<'_>, filter: Option<&QueryFilter>) -> String {
     let mut out = String::new();
     let mut rest = format;
     while let Some(start) = rest.find('[') {
@@ -1164,6 +1611,9 @@ fn render_format(format: &str, record: &TextRecord<'_>) -> String {
         };
         let block = &after_start[..end];
         for sample_index in 0..record.sample_indices.len() {
+            if filter.is_some_and(|filter| !filter.matches_sample(record, sample_index)) {
+                continue;
+            }
             render_segment(block, record, Some(sample_index), &mut out);
         }
         rest = &after_start[end + 1..];
@@ -1319,12 +1769,294 @@ fn render_segment(
                             break;
                         }
                     }
+                } else if token.eq_ignore_ascii_case("SMPL_COUNT")
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&sample_count(argument, record, sample_index).to_string());
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                } else if is_numeric_format_function(token)
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&render_numeric_function(
+                        token,
+                        argument,
+                        record,
+                        sample_index,
+                    ));
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                } else if token == "PBINOM"
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&pbinom(argument, record, sample_index));
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
                 } else {
-                    out.push_str(&render_token(token, record, sample_index));
+                    let vector_index = parse_braced_vector_index(&segment[token_end..]);
+                    out.push_str(&render_token_for_output(
+                        token,
+                        record,
+                        sample_index,
+                        vector_index.map(|(_, index)| index),
+                    ));
+                    if let Some((end_offset, _)) = vector_index {
+                        let brace_end = token_end + end_offset;
+                        while let Some(&(next_idx, _)) = chars.peek() {
+                            if next_idx < brace_end {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             _ => out.push(ch),
         }
+    }
+}
+
+fn parse_braced_vector_index(raw: &str) -> Option<(usize, usize)> {
+    let rest = raw.strip_prefix('{')?;
+    let end = rest.find('}')?;
+    let index = rest[..end].parse().ok()?;
+    Some((end + 2, index))
+}
+
+fn is_numeric_format_function(token: &str) -> bool {
+    matches!(
+        token.to_ascii_uppercase().as_str(),
+        "SUM"
+            | "SSUM"
+            | "SMPL_SUM"
+            | "AVG"
+            | "MEAN"
+            | "SAVG"
+            | "SMEAN"
+            | "SMPL_AVG"
+            | "SMPL_MEAN"
+            | "MIN"
+            | "SMIN"
+            | "SMPL_MIN"
+            | "MAX"
+            | "SMAX"
+            | "SMPL_MAX"
+            | "ABS"
+    )
+}
+
+fn render_numeric_function(
+    function: &str,
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+) -> String {
+    let sample_function = is_sample_numeric_function(function);
+    let values = numeric_format_values(argument.trim(), record, sample_index, sample_function);
+    match function.to_ascii_uppercase().as_str() {
+        "SUM" | "SSUM" | "SMPL_SUM" => {
+            if values.is_empty() {
+                if sample_function {
+                    "nan".into()
+                } else {
+                    ".".into()
+                }
+            } else {
+                format_number(values.iter().sum())
+            }
+        }
+        "AVG" | "MEAN" | "SAVG" | "SMEAN" | "SMPL_AVG" | "SMPL_MEAN" => {
+            if values.is_empty() {
+                if sample_function {
+                    "nan".into()
+                } else {
+                    ".".into()
+                }
+            } else {
+                format_number(values.iter().sum::<f64>() / values.len() as f64)
+            }
+        }
+        "MIN" | "SMIN" | "SMPL_MIN" => values
+            .into_iter()
+            .reduce(f64::min)
+            .map(format_number)
+            .unwrap_or_else(|| ".".into()),
+        "MAX" | "SMAX" | "SMPL_MAX" => values
+            .into_iter()
+            .reduce(f64::max)
+            .map(format_number)
+            .unwrap_or_else(|| ".".into()),
+        "ABS" => values
+            .first()
+            .map(|value| format_number(value.abs()))
+            .unwrap_or_else(|| ".".into()),
+        _ => ".".into(),
+    }
+}
+
+fn is_sample_numeric_function(function: &str) -> bool {
+    matches!(
+        function.to_ascii_uppercase().as_str(),
+        "SSUM"
+            | "SMPL_SUM"
+            | "SAVG"
+            | "SMEAN"
+            | "SMPL_AVG"
+            | "SMPL_MEAN"
+            | "SMIN"
+            | "SMPL_MIN"
+            | "SMAX"
+            | "SMPL_MAX"
+    )
+}
+
+fn numeric_format_values(
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+    sample_function: bool,
+) -> Vec<f64> {
+    let is_format_argument = argument.starts_with("FORMAT/") || argument.starts_with("FMT/");
+    let rendered_values = if is_format_argument && (!sample_function || sample_index.is_none()) {
+        (0..record.sample_indices.len())
+            .map(|i| render_token(argument, record, Some(i)))
+            .collect::<Vec<_>>()
+    } else {
+        vec![render_token(argument, record, sample_index)]
+    };
+
+    rendered_values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| {
+            let value = value.trim();
+            (!value.is_empty() && value != ".")
+                .then(|| value.parse::<f64>().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn pbinom(argument: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {
+    let Some(sample_index) = sample_index else {
+        return ".".into();
+    };
+    let gt = record.format_value(sample_index, "GT");
+    let values = render_token(argument.trim(), record, Some(sample_index));
+
+    pbinom_from_gt_and_values(&gt, &values).unwrap_or_else(|| ".".into())
+}
+
+fn pbinom_from_gt_and_values(gt: &str, values: &str) -> Option<String> {
+    let alleles = parse_diploid_gt(gt)?;
+    let values = parse_integer_values(values)?;
+    let counts = [*values.get(alleles[0])?, *values.get(alleles[1])?];
+
+    if counts[0] == counts[1] {
+        return Some(if counts[0] == 0 { "." } else { "0" }.into());
+    }
+
+    let pval = binom_two_sided(counts[0], counts[1], 0.5);
+    if pval >= 1.0 {
+        Some("0".into())
+    } else if pval <= 0.0 {
+        Some("99".into())
+    } else {
+        Some(format_pbinom_score(-4.34294481903 * pval.ln()))
+    }
+}
+
+fn format_pbinom_score(value: f64) -> String {
+    if value.fract() == 0.0 {
+        return format!("{value:.0}");
+    }
+    let abs = value.abs();
+    let digits_before_decimal = if abs >= 1.0 {
+        abs.log10().floor() as isize + 1
+    } else {
+        0
+    };
+    let decimals = (6 - digits_before_decimal).max(0) as usize;
+    format!("{value:.decimals$}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn parse_diploid_gt(gt: &str) -> Option<[usize; 2]> {
+    let mut alleles = gt.split(['/', '|']);
+    let first = parse_gt_allele(alleles.next()?)?;
+    let second = parse_gt_allele(alleles.next()?)?;
+    alleles.next().is_none().then_some([first, second])
+}
+
+fn parse_gt_allele(allele: &str) -> Option<usize> {
+    let allele = allele.split(':').next()?.trim();
+    (!allele.is_empty() && allele != ".")
+        .then(|| allele.parse().ok())
+        .flatten()
+}
+
+fn parse_integer_values(values: &str) -> Option<Vec<i32>> {
+    values
+        .split(',')
+        .map(|value| {
+            let value = value.trim();
+            (!value.is_empty() && value != ".")
+                .then(|| value.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn binom_two_sided(a: i32, b: i32, probability: f64) -> f64 {
+    if a < 0 || b < 0 {
+        return 0.0;
+    }
+    if a == 0 && b == 0 {
+        return -1.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+
+    let n = (a + b) as usize;
+    let limit = a.min(b) as usize;
+    let mut term = (1.0 - probability).powi(n as i32);
+    let mut cdf = term;
+
+    for k in 0..limit {
+        term *= (n - k) as f64 / (k + 1) as f64 * probability / (1.0 - probability);
+        cdf += term;
+    }
+
+    (2.0 * cdf).min(1.0)
+}
+
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
     }
 }
 
@@ -1333,10 +2065,17 @@ fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
         return None;
     }
     let mut in_string = false;
+    let mut depth = 1usize;
     for (idx, ch) in segment[open_idx + 1..].char_indices() {
         match ch {
             '"' => in_string = !in_string,
-            ')' if !in_string => return Some(open_idx + 1 + idx),
+            '(' if !in_string => depth += 1,
+            ')' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_idx + 1 + idx);
+                }
+            }
             _ => {}
         }
     }
@@ -1346,6 +2085,27 @@ fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
 fn n_pass(expression: &str, record: &TextRecord<'_>) -> usize {
     (0..record.sample_indices.len())
         .filter(|&sample_index| sample_expression_matches(expression, record, sample_index))
+        .count()
+}
+
+fn sample_count(argument: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> usize {
+    let argument = argument.trim();
+    let values = if let Some(sample_index) = sample_index {
+        vec![render_token(argument, record, Some(sample_index))]
+    } else if argument.starts_with("FORMAT/") || argument.starts_with("FMT/") {
+        (0..record.sample_indices.len())
+            .map(|sample_index| render_token(argument, record, Some(sample_index)))
+            .collect()
+    } else {
+        vec![render_token(argument, record, None)]
+    };
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .filter(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "."
+        })
         .count()
 }
 
@@ -1375,20 +2135,424 @@ fn sample_expression_matches(
     })
 }
 
+fn sample_groups_match(
+    groups: &[Vec<String>],
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> bool {
+    groups.iter().any(|group| {
+        group
+            .iter()
+            .all(|predicate| sample_predicate_matches(predicate, record, sample_index))
+    })
+}
+
+fn file_membership_matches(
+    lhs: &str,
+    op: PredicateOp,
+    values: &[String],
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+) -> bool {
+    let matched = if let Some(sample_index) = sample_index {
+        let lhs = lhs
+            .strip_prefix("FMT/")
+            .or_else(|| lhs.strip_prefix("FORMAT/"))
+            .unwrap_or(lhs);
+        string_value_matches_any(&render_token(lhs, record, Some(sample_index)), values)
+    } else {
+        record
+            .predicate_values(lhs, true)
+            .iter()
+            .any(|value| string_value_matches_any(value, values))
+    };
+    match op {
+        PredicateOp::Eq => matched,
+        PredicateOp::Ne => !matched,
+        _ => false,
+    }
+}
+
 fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: usize) -> bool {
     let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
         return false;
     };
+    if let Some(argument) = parse_sample_count_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        return compare_number(
+            sample_count(argument, record, Some(sample_index)) as f64,
+            op,
+            rhs,
+        );
+    }
+    if let Some((numerator, denominator)) = parse_sample_ratio_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_vector_ratio(numerator, denominator, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
+    if let Some(argument) = parse_sample_sum_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_vector_sum(argument, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
+    if let Some(argument) = parse_sample_phred_binom_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_phred_binom(argument, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
+    if let Some(arguments) = parse_sample_binom_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_binom(arguments, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
     let lhs = lhs
         .trim()
         .strip_prefix("FMT/")
         .or_else(|| lhs.trim().strip_prefix("FORMAT/"))
         .unwrap_or_else(|| lhs.trim());
-    let value = render_token(lhs, record, Some(sample_index));
+    let value = sample_predicate_value(lhs, record, sample_index);
     if lhs == "GT" {
         return compare_gt(&value, op, rhs);
     }
-    compare_sample_value(&value, op, rhs)
+    let rhs = sample_predicate_rhs(rhs, record, sample_index);
+    compare_sample_value(&value, op, &rhs)
+}
+
+fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usize) -> String {
+    let lhs = lhs
+        .strip_prefix("FMT/")
+        .or_else(|| lhs.strip_prefix("FORMAT/"))
+        .unwrap_or(lhs);
+    let Some((key, selector)) = parse_sample_vector_selector(lhs) else {
+        return render_token(lhs, record, Some(sample_index));
+    };
+    let value = record.format_value(sample_index, key);
+    let values = value.split(',').collect::<Vec<_>>();
+    match selector {
+        SampleVectorSelector::Index(index) => values.get(index).copied().unwrap_or(".").to_string(),
+        SampleVectorSelector::GenotypeAlleles => {
+            let gt = record.format_value(sample_index, "GT");
+            let Some(alleles) = parse_diploid_gt(&gt) else {
+                return ".".into();
+            };
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele).copied().unwrap_or("."))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+        SampleVectorSelector::SampleGenotypeAlleles(selector_sample_index) => {
+            if sample_index != selector_sample_index {
+                return ".".into();
+            }
+            let gt = record.format_value(selector_sample_index, "GT");
+            let Some(alleles) = parse_diploid_gt(&gt) else {
+                return ".".into();
+            };
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele).copied().unwrap_or("."))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SampleVectorSelector {
+    Index(usize),
+    GenotypeAlleles,
+    SampleGenotypeAlleles(usize),
+}
+
+fn parse_sample_vector_selector(lhs: &str) -> Option<(&str, SampleVectorSelector)> {
+    if let Some((key, sample_index)) = lhs.strip_suffix(":GT]").and_then(|lhs| {
+        let index_start = lhs.rfind('[')?;
+        let key = &lhs[..index_start];
+        let sample_index = lhs[index_start + 1..].parse().ok()?;
+        Some((key, sample_index))
+    }) {
+        return (!key.is_empty()).then_some((
+            key,
+            SampleVectorSelector::SampleGenotypeAlleles(sample_index),
+        ));
+    }
+    if let Some(key) = lhs.strip_suffix("[GT]") {
+        return (!key.is_empty()).then_some((key, SampleVectorSelector::GenotypeAlleles));
+    }
+    if let Some(index_start) = lhs.rfind("[:") {
+        let key = &lhs[..index_start];
+        let index = lhs[index_start + 2..].strip_suffix(']')?.parse().ok()?;
+        return (!key.is_empty()).then_some((key, SampleVectorSelector::Index(index)));
+    }
+    let index_start = lhs.rfind('[')?;
+    let key = &lhs[..index_start];
+    let index = lhs[index_start + 1..].strip_suffix(']')?.parse().ok()?;
+    (!key.is_empty()).then_some((key, SampleVectorSelector::Index(index)))
+}
+
+fn parse_sample_vector_index(lhs: &str) -> Option<(&str, usize)> {
+    match parse_sample_vector_selector(lhs)? {
+        (key, SampleVectorSelector::Index(index)) => Some((key, index)),
+        (
+            _,
+            SampleVectorSelector::GenotypeAlleles | SampleVectorSelector::SampleGenotypeAlleles(_),
+        ) => None,
+    }
+}
+
+fn parse_sample_ratio_lhs(lhs: &str) -> Option<(&str, &str)> {
+    let (numerator, denominator) = lhs.split_once('/')?;
+    let numerator = numerator.trim();
+    let denominator = denominator.trim();
+    let argument = denominator
+        .strip_prefix("sum(")
+        .or_else(|| denominator.strip_prefix("SUM("))?
+        .strip_suffix(')')?
+        .trim();
+    parse_sample_vector_index(numerator)?;
+    parse_sample_vector_wildcard(argument)?;
+    Some((numerator, argument))
+}
+
+fn parse_sample_sum_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !matches!(
+        lhs[..open_idx].to_ascii_uppercase().as_str(),
+        "SSUM" | "SMPL_SUM"
+    ) {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let argument = lhs[open_idx + 1..close_idx].trim();
+    parse_sample_vector_selector(
+        argument
+            .strip_prefix("FMT/")
+            .or_else(|| argument.strip_prefix("FORMAT/"))
+            .unwrap_or(argument),
+    )?;
+    Some(argument)
+}
+
+fn parse_sample_phred_binom_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("PHRED") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let inner = lhs[open_idx + 1..close_idx].trim();
+    let binom_open_idx = inner.find('(')?;
+    if !inner[..binom_open_idx].eq_ignore_ascii_case("BINOM") {
+        return None;
+    }
+    let binom_close_idx = find_function_end(inner, binom_open_idx)?;
+    if !inner[binom_close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let argument = inner[binom_open_idx + 1..binom_close_idx].trim();
+    let key = argument
+        .strip_prefix("FMT/")
+        .or_else(|| argument.strip_prefix("FORMAT/"))?;
+    record_format_key_is_simple(key).then_some(argument)
+}
+
+fn record_format_key_is_simple(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+}
+
+fn parse_sample_vector_wildcard(lhs: &str) -> Option<&str> {
+    lhs.strip_suffix("[*]")
+        .filter(|key| !key.is_empty())
+        .map(str::trim)
+}
+
+fn sample_vector_ratio(
+    numerator: &str,
+    denominator: &str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> Option<f64> {
+    let numerator = sample_predicate_value(numerator, record, sample_index)
+        .parse::<f64>()
+        .ok()?;
+    let denominator_key = parse_sample_vector_wildcard(denominator)?;
+    let denominator = render_token(denominator_key, record, Some(sample_index))
+        .split(',')
+        .filter_map(|value| value.parse::<f64>().ok())
+        .sum::<f64>();
+    (denominator != 0.0).then_some(numerator / denominator)
+}
+
+fn sample_vector_sum(argument: &str, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    let values = sample_vector_values(argument, record, sample_index)?;
+    Some(values.into_iter().sum())
+}
+
+fn sample_vector_values(
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> Option<Vec<f64>> {
+    let argument = argument
+        .strip_prefix("FMT/")
+        .or_else(|| argument.strip_prefix("FORMAT/"))
+        .unwrap_or(argument);
+    let (key, selector) = parse_sample_vector_selector(argument)?;
+    let value = record.format_value(sample_index, key);
+    let values = value.split(',').collect::<Vec<_>>();
+    match selector {
+        SampleVectorSelector::Index(index) => values
+            .get(index)
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| vec![value]),
+        SampleVectorSelector::GenotypeAlleles => {
+            let gt = record.format_value(sample_index, "GT");
+            let alleles = unique_gt_alleles(&gt)?;
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele)?.parse::<f64>().ok())
+                .collect()
+        }
+        SampleVectorSelector::SampleGenotypeAlleles(selector_sample_index) => {
+            if sample_index != selector_sample_index {
+                return Some(Vec::new());
+            }
+            let gt = record.format_value(selector_sample_index, "GT");
+            let alleles = unique_gt_alleles(&gt)?;
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele)?.parse::<f64>().ok())
+                .collect()
+        }
+    }
+}
+
+fn sample_phred_binom(argument: &str, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    let gt = record.format_value(sample_index, "GT");
+    let values = sample_predicate_value(argument, record, sample_index);
+    if let Some(value) =
+        pbinom_from_gt_and_values(&gt, &values).and_then(|value| value.parse().ok())
+    {
+        return Some(value);
+    }
+    let values = parse_integer_values(&values)?;
+    let pval = binom_two_sided(*values.first()?, *values.get(1)?, 0.5);
+    (pval > 0.0).then(|| -4.34294481903 * pval.ln())
+}
+
+fn unique_gt_alleles(gt: &str) -> Option<Vec<usize>> {
+    let mut alleles = parse_diploid_gt(gt)?.to_vec();
+    alleles.sort_unstable();
+    alleles.dedup();
+    Some(alleles)
+}
+
+fn parse_sample_binom_lhs(lhs: &str) -> Option<Vec<&str>> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("BINOM") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let args = lhs[open_idx + 1..close_idx]
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if !matches!(args.as_slice(), [_] | [_, _]) {
+        return None;
+    }
+    args.iter()
+        .all(|arg| arg.starts_with("FMT/") || arg.starts_with("FORMAT/"))
+        .then_some(args)
+}
+
+fn sample_binom(arguments: Vec<&str>, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    match arguments.as_slice() {
+        [argument] => {
+            let gt = record.format_value(sample_index, "GT");
+            let alleles = parse_diploid_gt(&gt)?;
+            let values =
+                parse_integer_values(&sample_predicate_value(argument, record, sample_index))?;
+            Some(binom_two_sided(
+                *values.get(alleles[0])?,
+                *values.get(alleles[1])?,
+                0.5,
+            ))
+        }
+        [lhs, rhs] => {
+            let lhs = sample_predicate_value(lhs, record, sample_index)
+                .parse::<i32>()
+                .ok()?;
+            let rhs = sample_predicate_value(rhs, record, sample_index)
+                .parse::<i32>()
+                .ok()?;
+            Some(binom_two_sided(lhs, rhs, 0.5))
+        }
+        _ => None,
+    }
+}
+
+fn sample_predicate_rhs<'a>(
+    rhs: &'a str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> std::borrow::Cow<'a, str> {
+    let rhs = rhs.trim();
+    if rhs.starts_with('"') || rhs.parse::<f64>().is_ok() {
+        return std::borrow::Cow::Borrowed(rhs);
+    }
+    let key = rhs
+        .strip_prefix("FMT/")
+        .or_else(|| rhs.strip_prefix("FORMAT/"))
+        .unwrap_or(rhs);
+    let format_key = parse_sample_vector_index(key)
+        .map(|(key, _)| key)
+        .unwrap_or(key);
+    if record.format_has_key(format_key) {
+        return std::borrow::Cow::Owned(sample_predicate_value(key, record, sample_index));
+    }
+    std::borrow::Cow::Borrowed(rhs)
+}
+
+fn parse_sample_count_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("SMPL_COUNT") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    lhs[close_idx + 1..]
+        .trim()
+        .is_empty()
+        .then_some(&lhs[open_idx + 1..close_idx])
 }
 
 fn split_sample_predicate(raw: &str) -> Option<(&str, PredicateOp, &str)> {
@@ -1427,6 +2591,17 @@ fn compare_gt(value: &str, op: PredicateOp, rhs: &str) -> bool {
 
 fn compare_sample_value(value: &str, op: PredicateOp, rhs: &str) -> bool {
     let rhs = rhs.trim().trim_matches('"');
+    if value.contains(',') {
+        let values = value.split(',').collect::<Vec<_>>();
+        return match op {
+            PredicateOp::Ne => values
+                .iter()
+                .all(|value| compare_sample_value(value.trim(), op, rhs)),
+            _ => values
+                .iter()
+                .any(|value| compare_sample_value(value.trim(), op, rhs)),
+        };
+    }
     if let (Ok(left), Ok(right)) = (value.parse::<f64>(), rhs.parse::<f64>()) {
         return compare_number(left, op, right);
     }
@@ -1479,6 +2654,48 @@ fn gt_is_hom(value: &str) -> bool {
         .is_some_and(|first| *first != "." && alleles.iter().all(|allele| allele == first))
 }
 
+fn render_token_for_output(
+    token: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+    vector_index: Option<usize>,
+) -> String {
+    let value = render_token(token, record, sample_index);
+    if let Some(index) = vector_index {
+        return value
+            .split(',')
+            .nth(index)
+            .map(|value| format_output_scalar(token, value, sample_index))
+            .unwrap_or_else(|| ".".into());
+    }
+    value
+        .split(',')
+        .map(|value| format_output_scalar(token, value, sample_index))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_output_scalar(token: &str, value: &str, sample_index: Option<usize>) -> String {
+    if value.contains(['e', 'E'])
+        && let Ok(parsed) = value.parse::<f64>()
+    {
+        return format_number(parsed);
+    }
+    if sample_index.is_some()
+        && token
+            .strip_prefix("FMT/")
+            .or_else(|| token.strip_prefix("FORMAT/"))
+            .unwrap_or(token)
+            == "AD"
+        && value.len() > 1
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(parsed) = value.parse::<i64>()
+    {
+        return parsed.to_string();
+    }
+    value.to_string()
+}
+
 fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {
     let force_record_namespace = token.starts_with('/');
     let token = token.strip_prefix('/').unwrap_or(token);
@@ -1503,11 +2720,11 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
             .map(|i| record.format_value(i, key))
             .unwrap_or_else(|| ".".into());
     }
-    if !force_record_namespace && let Some(i) = sample_index {
-        let value = record.format_value(i, token);
-        if value != "." {
-            return value;
-        }
+    if !force_record_namespace
+        && let Some(i) = sample_index
+        && record.format_has_key(token)
+    {
+        return record.format_value(i, token);
     }
     match token {
         "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "FORMAT"
