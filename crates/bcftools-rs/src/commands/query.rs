@@ -913,6 +913,18 @@ fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> boo
                     | PredicateOp::Le
             );
     }
+    if parse_sample_sum_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
     if parse_sample_binom_lhs(lhs).is_some() {
         return rhs.trim().parse::<f64>().is_ok()
             && matches!(
@@ -2148,6 +2160,15 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
         };
         return compare_number(value, op, rhs);
     }
+    if let Some(argument) = parse_sample_sum_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_vector_sum(argument, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
     if let Some(arguments) = parse_sample_binom_lhs(lhs.trim()) {
         let Ok(rhs) = rhs.trim().parse::<f64>() else {
             return false;
@@ -2267,6 +2288,28 @@ fn parse_sample_ratio_lhs(lhs: &str) -> Option<(&str, &str)> {
     Some((numerator, argument))
 }
 
+fn parse_sample_sum_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !matches!(
+        lhs[..open_idx].to_ascii_uppercase().as_str(),
+        "SSUM" | "SMPL_SUM"
+    ) {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let argument = lhs[open_idx + 1..close_idx].trim();
+    parse_sample_vector_selector(
+        argument
+            .strip_prefix("FMT/")
+            .or_else(|| argument.strip_prefix("FORMAT/"))
+            .unwrap_or(argument),
+    )?;
+    Some(argument)
+}
+
 fn parse_sample_vector_wildcard(lhs: &str) -> Option<&str> {
     lhs.strip_suffix("[*]")
         .filter(|key| !key.is_empty())
@@ -2288,6 +2331,57 @@ fn sample_vector_ratio(
         .filter_map(|value| value.parse::<f64>().ok())
         .sum::<f64>();
     (denominator != 0.0).then_some(numerator / denominator)
+}
+
+fn sample_vector_sum(argument: &str, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    let values = sample_vector_values(argument, record, sample_index)?;
+    Some(values.into_iter().sum())
+}
+
+fn sample_vector_values(
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> Option<Vec<f64>> {
+    let argument = argument
+        .strip_prefix("FMT/")
+        .or_else(|| argument.strip_prefix("FORMAT/"))
+        .unwrap_or(argument);
+    let (key, selector) = parse_sample_vector_selector(argument)?;
+    let value = record.format_value(sample_index, key);
+    let values = value.split(',').collect::<Vec<_>>();
+    match selector {
+        SampleVectorSelector::Index(index) => values
+            .get(index)
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| vec![value]),
+        SampleVectorSelector::GenotypeAlleles => {
+            let gt = record.format_value(sample_index, "GT");
+            let alleles = unique_gt_alleles(&gt)?;
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele)?.parse::<f64>().ok())
+                .collect()
+        }
+        SampleVectorSelector::SampleGenotypeAlleles(selector_sample_index) => {
+            if sample_index != selector_sample_index {
+                return Some(Vec::new());
+            }
+            let gt = record.format_value(selector_sample_index, "GT");
+            let alleles = unique_gt_alleles(&gt)?;
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele)?.parse::<f64>().ok())
+                .collect()
+        }
+    }
+}
+
+fn unique_gt_alleles(gt: &str) -> Option<Vec<usize>> {
+    let mut alleles = parse_diploid_gt(gt)?.to_vec();
+    alleles.sort_unstable();
+    alleles.dedup();
+    Some(alleles)
 }
 
 fn parse_sample_binom_lhs(lhs: &str) -> Option<Vec<&str>> {

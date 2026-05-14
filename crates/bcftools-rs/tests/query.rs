@@ -1490,6 +1490,7 @@ fn query_format_gt_vector_index_predicate_matches_upstream_fixture() {
     let path = fixture_path("query.filter.5.vcf");
     for (expression, expected_fixture) in [
         ("FMT/AD[GT]==10", "query.92.out"),
+        ("sSUM(FMT/AD[GT])==210", "query.93.out"),
         ("FMT/AD[0:GT]==30", "query.94.out"),
     ] {
         let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
