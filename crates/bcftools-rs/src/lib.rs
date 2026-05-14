@@ -23,6 +23,7 @@ pub mod regidx;
 pub mod smpl_ilist;
 pub mod synced;
 pub mod tsv2vcf;
+pub mod vcf_compat;
 pub mod vcfbuf;
 pub mod version;
 

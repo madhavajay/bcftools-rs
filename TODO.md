@@ -1,3 +1,188 @@
+# bcftools-rs Fixes Needed For BioScript VNtyper
+
+This file tracks `bcftools-rs` changes currently needed by the BioScript VNtyper
+port. These should be fixed in `bcftools-rs` rather than worked around in
+BioScript unless we explicitly decide otherwise.
+
+## 1. Accept Kestrel Java-style `VCF4.2` headers ✅
+
+Resolved in `bcftools-rs` (no submodule changes). A `Read` adapter and a
+companion in-place text normalizer in `crates/bcftools-rs/src/vcf_compat.rs`
+rewrite a non-canonical `##fileformat=VCF<x>.<y>` first line to
+`##fileformat=VCFv<x>.<y>` and emit the upstream-style warning
+(`[W::bcf_get_version] Couldn't get VCF version, considering as <ver>`).
+Wired into:
+- `bcftools-rs sort` text + BGZF/gzip read paths
+  (`crates/bcftools-rs/src/commands/sort.rs`).
+- `bcftools-rs head` `-s/-n` record-emitting paths
+  (`crates/bcftools-rs/src/commands/head.rs::write_n_records`). Header-text
+  output already preserves raw bytes via line-by-line read.
+- `bcftools-rs view` text passthrough, filtered passthrough, structured
+  VCF/BCF writer paths, and `read_header`
+  (`crates/bcftools-rs/src/commands/view.rs`).
+- `bcftools-rs query` `-l/-s/-S` sample-list parser path
+  (`crates/bcftools-rs/src/commands/query.rs::header_sample_names_from_path`).
+  Query's text-mode formatter never validates the fileformat line, so
+  Kestrel input naturally passes through.
+
+`bcftools-rs reheader` reads VCF text line-by-line without invoking the
+strict parser, so Kestrel headers already round-trip and no wrapper was
+needed there.
+
+Covered by:
+- `crates/bcftools-rs/src/vcf_compat.rs` unit tests (`tests` module).
+- `crates/bcftools-rs/tests/sort.rs::sort_accepts_kestrel_non_canonical_fileformat_header`.
+- `crates/bcftools-rs/tests/sort.rs::sort_accepts_kestrel_header_with_compressed_write_index`.
+- `crates/bcftools-rs/tests/sort.rs::sort_does_not_warn_for_canonical_fileformat_header`.
+- `crates/bcftools-rs/tests/head.rs::head_with_s_accepts_kestrel_non_canonical_fileformat_header`.
+- `crates/bcftools-rs/tests/view.rs::view_accepts_kestrel_non_canonical_fileformat_header`.
+
+### Original notes (kept for context)
+
+### Problem
+
+Java Kestrel emits VCF files with this first line:
+
+```text
+##fileformat=VCF4.2
+```
+
+That is not the canonical VCF spelling, which is:
+
+```text
+##fileformat=VCFv4.2
+```
+
+However, current upstream `bcftools 1.23.1` still accepts the Kestrel form with
+a warning and treats it as VCF 4.2.
+
+### Upstream bcftools behavior
+
+Verified with:
+
+```bash
+ports/vntyper/test-data/tools/local/bin/bcftools --version
+```
+
+Output:
+
+```text
+bcftools 1.23.1
+Using htslib 1.23.1
+```
+
+Reproduction:
+
+```bash
+tmpdir=$(mktemp -d)
+cat > "$tmpdir/kestrel-style.vcf" <<'VCF'
+##fileformat=VCF4.2
+##contig=<ID=chr1,length=10>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	1	.	A	C	.	PASS	.
+VCF
+
+ports/vntyper/test-data/tools/local/bin/bcftools sort \
+  "$tmpdir/kestrel-style.vcf" \
+  -o "$tmpdir/kestrel-style.sorted.vcf.gz" \
+  -W \
+  -O z
+```
+
+Observed upstream behavior:
+
+```text
+[W::bcf_get_version] Couldn't get VCF version, considering as 4.2
+```
+
+The command exits `0`.
+
+### Current bcftools-rs behavior
+
+Reproduction:
+
+```bash
+tmpdir=$(mktemp -d)
+cat > "$tmpdir/kestrel-style.vcf" <<'VCF'
+##fileformat=VCF4.2
+##contig=<ID=chr1,length=10>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	1	.	A	C	.	PASS	.
+VCF
+
+cd vendor/rust/bcftools-rs
+CC=cc AR=ar cargo run -q -p bcftools-rs-cli -- sort \
+  "$tmpdir/kestrel-style.vcf" \
+  -o "$tmpdir/kestrel-style.sorted.vcf" \
+  -O v
+```
+
+Observed current behavior:
+
+```text
+[E::main_vcfsort] invalid record
+```
+
+The command exits `1`.
+
+### Expected bcftools-rs behavior
+
+`bcftools-rs sort` should match upstream `bcftools` for this case:
+
+- Accept `##fileformat=VCF4.2`.
+- Warn that the version could not be parsed, if warning parity is feasible.
+- Treat the file as VCF 4.2.
+- Continue sorting/compressing/indexing normally.
+- Exit `0` for otherwise valid input.
+
+### Likely fix location
+
+This probably belongs in the VCF reader/version handling layer used by
+`bcftools-rs sort`, not in BioScript.
+
+The Rust implementation appears stricter than HTSlib here, likely because it is
+parsing through a strict VCF parser path instead of reproducing HTSlib's
+`bcf_get_version` fallback behavior.
+
+Potential approaches:
+
+- Add a compatibility path in `bcftools-rs sort` before strict VCF parsing that
+  treats `##fileformat=VCF4.2` as `VCFv4.2`.
+- Preferably, add the fallback in the shared `htslib-rs`/VCF compatibility layer
+  if other commands also parse VCF headers through the same path.
+
+### Test to add
+
+Add a reduced test in `bcftools-rs` that writes the VCF shown above and asserts:
+
+- `bcftools-rs sort input.vcf -o output.vcf -O v` exits successfully.
+- The output VCF exists and contains the record.
+- If warning capture is practical, the warning matches upstream intent:
+  unable to parse version, considering as 4.2.
+
+Also keep an existing canonical-header test:
+
+```text
+##fileformat=VCFv4.2
+```
+
+so the compatibility path does not regress normal VCF parsing.
+
+### BioScript VNtyper impact
+
+BioScript native VNtyper runs:
+
+```text
+kestrel.run_native -> bcftools.sort_native -> bcftools.index_native
+```
+
+Kestrel Java-compatible output currently uses `##fileformat=VCF4.2`, so
+`bcftools-rs` rejecting this blocks sorting/indexing raw Kestrel VCF output.
+
+BioScript could normalize the header before calling `bcftools-rs`, but that
+would hide a real upstream parity gap. The correct parity behavior is for
+`bcftools-rs` to accept the file the same way upstream `bcftools` does.
+
 # TODO: Port bcftools to Pure Rust
 
 Goal: build a pure Rust replacement for the `bcftools` C program with full subcommand and plugin parity, then port and pass the upstream `test/test.pl` suite plus add Rust-native unit/integration tests. Implementation routes through `htslib-rs` (sibling submodule) for HTSlib-shaped APIs and may use `noodles` only where there is no HTSlib analogue.

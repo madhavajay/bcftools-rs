@@ -25,6 +25,7 @@ use htslib_rs::vcf::variant::io::Write as _;
 use crate::diagnostics::fmt_etag;
 use crate::getopt::{Getopt, HasArg, LongOpt};
 use crate::io::apply_verbosity;
+use crate::vcf_compat::NormalizeFileformat;
 
 const USAGE: &str = "\n\
 About: Displays VCF/BCF headers and optionally the first few variant records\n\
@@ -265,7 +266,8 @@ fn write_n_records<W: Write>(
     } else if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        let mut reader = vcf::io::Reader::new(BufReader::new(dec));
+        let normalized = NormalizeFileformat::new(BufReader::new(dec))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let header = reader.read_header()?;
         let mut writer = vcf::io::Writer::new(out);
         for (i, result) in reader.records().enumerate() {
@@ -276,9 +278,9 @@ fn write_n_records<W: Write>(
             writer.write_variant_record(&header, &rec)?;
         }
     } else {
-        let mut reader = File::open(path)
-            .map(BufReader::new)
-            .map(vcf::io::Reader::new)?;
+        let f = File::open(path)?;
+        let normalized = NormalizeFileformat::new(BufReader::new(f))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let header = reader.read_header()?;
         let mut writer = vcf::io::Writer::new(out);
         for (i, result) in reader.records().enumerate() {

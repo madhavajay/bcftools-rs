@@ -176,6 +176,32 @@ fn head_reads_bcf_from_stdin_pipe() {
 }
 
 #[test]
+fn head_with_s_accepts_kestrel_non_canonical_fileformat_header() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("kestrel.vcf");
+    let kestrel = "##fileformat=VCF4.2\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+chr1\t1\t.\tA\tC\t.\tPASS\t.\n";
+    std::fs::write(&path, kestrel).unwrap();
+
+    let (out, err, code) = run(&["head", "-s", "1", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "head -s rejected Kestrel header: {err}");
+    assert!(
+        err.contains("[W::bcf_get_version] Couldn't get VCF version, considering as 4.2"),
+        "missing upstream-style warning: {err}"
+    );
+    let lines: Vec<_> = out.lines().collect();
+    assert!(lines.iter().any(|l| l.starts_with("#CHROM\t")));
+    let records: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .copied()
+        .collect();
+    assert_eq!(records, ["chr1\t1\t.\tA\tC\t.\tPASS\t."]);
+}
+
+#[test]
 fn version_flag_prints_block() {
     let (out, _err, code) = run(&["--version"]);
     assert_eq!(code, 0);

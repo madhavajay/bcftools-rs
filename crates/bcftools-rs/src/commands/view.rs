@@ -1469,14 +1469,17 @@ fn vcf_text_from_path(path: &Path, fmt: format::Format) -> io::Result<String> {
     if fmt.exact == Exact::Bcf {
         return htslib_rs::variant_io_compat::view_bcf_as_vcf_text_from_path_with_limit(path, None);
     }
-    if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
+    let mut text = if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let mut dec = flate2::read::MultiGzDecoder::new(f);
         let mut text = String::new();
         dec.read_to_string(&mut text)?;
-        return Ok(text);
-    }
-    fs::read_to_string(path)
+        text
+    } else {
+        fs::read_to_string(path)?
+    };
+    crate::vcf_compat::normalize_vcf_text(&mut text);
+    Ok(text)
 }
 
 fn write_sample_subset_vcf_text<W: Write>(
@@ -2218,10 +2221,17 @@ fn write_vcf_text_passthrough<W: Write>(
     if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        return write_vcf_text_passthrough_reader(BufReader::new(dec), header_only, no_header, out);
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        return write_vcf_text_passthrough_reader(
+            BufReader::new(normalized),
+            header_only,
+            no_header,
+            out,
+        );
     }
-    let reader = File::open(path).map(BufReader::new)?;
-    write_vcf_text_passthrough_reader(reader, header_only, no_header, out)
+    let f = File::open(path)?;
+    let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+    write_vcf_text_passthrough_reader(BufReader::new(normalized), header_only, no_header, out)
 }
 
 fn write_vcf_text_filtered_passthrough<W: Write>(
@@ -2233,10 +2243,16 @@ fn write_vcf_text_filtered_passthrough<W: Write>(
     if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        return write_vcf_text_filtered_passthrough_reader(BufReader::new(dec), options, out);
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        return write_vcf_text_filtered_passthrough_reader(
+            BufReader::new(normalized),
+            options,
+            out,
+        );
     }
-    let reader = File::open(path).map(BufReader::new)?;
-    write_vcf_text_filtered_passthrough_reader(reader, options, out)
+    let f = File::open(path)?;
+    let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+    write_vcf_text_filtered_passthrough_reader(BufReader::new(normalized), options, out)
 }
 
 fn write_vcf_text_filtered_passthrough_reader<R, W>(
@@ -2337,17 +2353,18 @@ fn write_vcf_text_from_string<W: Write>(
 }
 
 fn read_header(path: &Path, fmt: format::Format) -> io::Result<htslib_rs::vcf::Header> {
-    use htslib_rs::variant_io_compat::{
-        read_bcf_header_from_path, read_vcf_header, read_vcf_header_from_path,
-    };
+    use htslib_rs::variant_io_compat::{read_bcf_header_from_path, read_vcf_header};
     if fmt.exact == Exact::Bcf {
         read_bcf_header_from_path(path)
     } else if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        read_vcf_header(BufReader::new(dec))
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        read_vcf_header(BufReader::new(normalized))
     } else {
-        read_vcf_header_from_path(path)
+        let f = File::open(path)?;
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+        read_vcf_header(BufReader::new(normalized))
     }
 }
 
@@ -2393,7 +2410,8 @@ fn write_records_into_vcf<W: Write>(
     } else if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        let mut reader = vcf::io::Reader::new(BufReader::new(dec));
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let _h = reader.read_header()?;
         for result in reader.records() {
             let rec = result?;
@@ -2402,9 +2420,9 @@ fn write_records_into_vcf<W: Write>(
             }
         }
     } else {
-        let mut reader = File::open(path)
-            .map(BufReader::new)
-            .map(vcf::io::Reader::new)?;
+        let f = File::open(path)?;
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let _h = reader.read_header()?;
         for result in reader.records() {
             let rec = result?;
@@ -2485,7 +2503,8 @@ fn write_bcf_content<W: Write>(
         use htslib_rs::vcf;
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        let mut reader = vcf::io::Reader::new(BufReader::new(dec));
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(dec))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let header = reader.read_header()?;
         writer.write_variant_header(&header)?;
         for result in reader.records() {
@@ -2497,9 +2516,9 @@ fn write_bcf_content<W: Write>(
         Ok(())
     } else {
         use htslib_rs::vcf;
-        let mut reader = File::open(path)
-            .map(BufReader::new)
-            .map(vcf::io::Reader::new)?;
+        let f = File::open(path)?;
+        let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let header = reader.read_header()?;
         writer.write_variant_header(&header)?;
         for result in reader.records() {

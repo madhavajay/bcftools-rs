@@ -27,6 +27,7 @@ use htslib_rs::vcf::variant::io::Write as _;
 
 use crate::diagnostics::fmt_etag;
 use crate::io::{VariantOutputFormat, apply_verbosity, init_index2, write_index_parse};
+use crate::vcf_compat::NormalizeFileformat;
 
 const USAGE: &str = "\n\
 About:   Sort VCF/BCF file.\n\
@@ -326,7 +327,8 @@ fn read_records(
     if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
         let f = File::open(path)?;
         let dec = flate2::read::MultiGzDecoder::new(f);
-        let mut reader = vcf::io::Reader::new(BufReader::new(dec));
+        let normalized = NormalizeFileformat::new(BufReader::new(dec))?;
+        let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
         let header = reader.read_header()?;
         let records = reader
             .records()
@@ -338,9 +340,9 @@ fn read_records(
         return Ok((header, records));
     }
 
-    let mut reader = File::open(path)
-        .map(BufReader::new)
-        .map(vcf::io::Reader::new)?;
+    let file = File::open(path)?;
+    let normalized = NormalizeFileformat::new(BufReader::new(file))?;
+    let mut reader = vcf::io::Reader::new(BufReader::new(normalized));
     let header = reader.read_header()?;
     let records = reader
         .records()
