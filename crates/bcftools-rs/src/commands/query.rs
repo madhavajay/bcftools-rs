@@ -580,6 +580,12 @@ struct QueryFilter {
 enum QueryFilterKind {
     Expr(String),
     SamplePredicateGroups(Vec<Vec<String>>),
+    FileMembership {
+        lhs: String,
+        op: PredicateOp,
+        values: Vec<String>,
+        sample_scoped: bool,
+    },
     FilterIdMatch {
         id: String,
         negate: bool,
@@ -625,6 +631,20 @@ enum PredicateOp {
 
 impl QueryFilter {
     fn from_spec(spec: &FilterSpec) -> io::Result<Self> {
+        if let Some((lhs, op, path)) = parse_file_membership(&spec.raw) {
+            let values = read_filter_values(path)?;
+            let sample_scoped = lhs.starts_with("FMT/") || lhs.starts_with("FORMAT/");
+            return Ok(Self {
+                kind: QueryFilterKind::FileMembership {
+                    lhs,
+                    op,
+                    values,
+                    sample_scoped,
+                },
+                exclude: spec.exclude,
+            });
+        }
+
         let kind = parse_filter_id_match(&spec.raw)
             .map(|(id, negate)| QueryFilterKind::FilterIdMatch { id, negate })
             .or_else(|| {
@@ -682,6 +702,20 @@ impl QueryFilter {
             )?
             .truthy(),
             QueryFilterKind::SamplePredicateGroups(_) => unreachable!("handled above"),
+            QueryFilterKind::FileMembership {
+                lhs,
+                op,
+                values,
+                sample_scoped,
+            } => {
+                if *sample_scoped {
+                    (0..record.sample_indices.len()).any(|sample_index| {
+                        file_membership_matches(lhs, *op, values, record, Some(sample_index))
+                    })
+                } else {
+                    file_membership_matches(lhs, *op, values, record, None)
+                }
+            }
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
@@ -715,6 +749,15 @@ impl QueryFilter {
         match &self.kind {
             QueryFilterKind::SamplePredicateGroups(groups) => {
                 sample_groups_match(groups, record, sample_index) != self.exclude
+            }
+            QueryFilterKind::FileMembership {
+                lhs,
+                op,
+                values,
+                sample_scoped: true,
+            } => {
+                file_membership_matches(lhs, *op, values, record, Some(sample_index))
+                    != self.exclude
             }
             _ => true,
         }
@@ -759,6 +802,12 @@ fn string_value_matches(value: &str, rhs: &str) -> bool {
         || rhs
             .split(',')
             .any(|rhs_part| value.split(',').any(|value_part| value_part == rhs_part))
+}
+
+fn string_value_matches_any(value: &str, rhs_values: &[String]) -> bool {
+    rhs_values
+        .iter()
+        .any(|rhs| string_value_matches(value, rhs))
 }
 
 fn string_value_regex_matches(value: &str, regex: &regex::Regex) -> bool {
@@ -905,6 +954,25 @@ fn parse_n_pass_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
 
 fn parse_count_comparison(raw: &str) -> Option<(String, PredicateOp, f64)> {
     parse_function_count_comparison(raw, "COUNT")
+}
+
+fn parse_file_membership(raw: &str) -> Option<(String, PredicateOp, &str)> {
+    let (lhs, op, rhs) = split_sample_predicate(raw)?;
+    if !matches!(op, PredicateOp::Eq | PredicateOp::Ne) {
+        return None;
+    }
+    let path = rhs.trim().strip_prefix('@')?;
+    Some((lhs.trim().to_string(), op, path))
+}
+
+fn read_filter_values(path: &str) -> io::Result<Vec<String>> {
+    let text = fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 fn parse_function_count_comparison(raw: &str, name: &str) -> Option<(String, PredicateOp, f64)> {
@@ -1793,6 +1861,32 @@ fn sample_groups_match(
             .iter()
             .all(|predicate| sample_predicate_matches(predicate, record, sample_index))
     })
+}
+
+fn file_membership_matches(
+    lhs: &str,
+    op: PredicateOp,
+    values: &[String],
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+) -> bool {
+    let matched = if let Some(sample_index) = sample_index {
+        let lhs = lhs
+            .strip_prefix("FMT/")
+            .or_else(|| lhs.strip_prefix("FORMAT/"))
+            .unwrap_or(lhs);
+        string_value_matches_any(&render_token(lhs, record, Some(sample_index)), values)
+    } else {
+        record
+            .predicate_values(lhs, true)
+            .iter()
+            .any(|value| string_value_matches_any(value, values))
+    };
+    match op {
+        PredicateOp::Eq => matched,
+        PredicateOp::Ne => !matched,
+        _ => false,
+    }
 }
 
 fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: usize) -> bool {

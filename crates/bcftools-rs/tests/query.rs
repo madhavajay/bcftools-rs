@@ -355,6 +355,37 @@ fn query_string_info_filters_match_upstream_fixtures() {
 }
 
 #[test]
+fn query_string_file_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.string.2.vcf");
+    let info_list = fixture_path("query.string.2.1.txt");
+    let format_list = fixture_path("query.string.2.2.txt");
+    for (format, expression, expected_fixture) in [
+        (
+            "%CHROM\\t%POS\\t%INFO/STR\\n",
+            format!("INFO/STR=@{}", info_list.display()),
+            "query.string.2.1.out",
+        ),
+        (
+            "%CHROM\\t%POS[\\t%STR]\\n",
+            format!("FMT/STR=@{}", format_list.display()),
+            "query.string.2.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            format,
+            "-i",
+            &expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_computed_n_alt_filter_matches_upstream_fixture() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.6.out")).unwrap();
