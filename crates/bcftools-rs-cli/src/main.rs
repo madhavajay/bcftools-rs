@@ -115,7 +115,7 @@ const CMDS: &[Cmd] = &[
         help: "SNP/indel calling",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::consensus::main),
         alias: "consensus",
         help: "create consensus sequence by applying VCF variants",
     },

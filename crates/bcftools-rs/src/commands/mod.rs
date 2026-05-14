@@ -11,6 +11,7 @@
 //! convention where `argv[0]` is e.g. `"view"`).
 
 pub mod concat;
+pub mod consensus;
 pub mod convert;
 pub mod filter;
 pub mod head;
