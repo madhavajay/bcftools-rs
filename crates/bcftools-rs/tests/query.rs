@@ -182,6 +182,52 @@ fn query_print_header_twice_omits_column_indices() {
 }
 
 #[test]
+fn query_header_formats_match_upstream_fixtures() {
+    let path = fixture_path("query.header.vcf");
+    for (args, expected_fixture) in [
+        (
+            vec!["-H", "-f", "[%CHROM %POS  %SAMPLE %DP %GT\\n]"],
+            "query.95.out",
+        ),
+        (
+            vec!["-H", "-f", "[%CHROM %POS  %SAMPLE %DP %GT\\t]\\n"],
+            "query.96.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE %DP %GT]\\n"],
+            "query.97.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE %DP %GT]"],
+            "query.97.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]\\n"],
+            "query.98.out",
+        ),
+        (
+            vec!["-H", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]"],
+            "query.98.out",
+        ),
+        (
+            vec!["-HH", "-f", "%CHROM %POS[ %SAMPLE][ %DP][ %GT]"],
+            "query.98.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let mut command = vec!["query"];
+        command.extend(args);
+        command.push(path.to_str().unwrap());
+        let (out, err, code) = run(&command);
+        assert_eq!(
+            code, 0,
+            "query header fixture {expected_fixture} failed: {err}"
+        );
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_regions_file_filters_records() {
     let path = fixture_path("regions.vcf");
     let regions = fixture_path("regions.tab");
