@@ -828,13 +828,15 @@ fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>>
 }
 
 fn parse_sample_predicate_groups(raw: &str) -> Option<Vec<Vec<String>>> {
-    let groups = split_simple_or(raw)
+    let allow_bare_format_tags = has_single_sample_binary(raw);
+    let groups = split_sample_or(raw)
         .into_iter()
         .map(|term| {
-            split_simple_and(term)
+            split_sample_and(term)
                 .into_iter()
                 .map(|predicate| {
-                    sample_predicate_is_supported(predicate).then_some(predicate.to_string())
+                    sample_predicate_is_supported(predicate, allow_bare_format_tags)
+                        .then_some(predicate.to_string())
                 })
                 .collect::<Option<Vec<_>>>()
         })
@@ -842,7 +844,7 @@ fn parse_sample_predicate_groups(raw: &str) -> Option<Vec<Vec<String>>> {
     (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
 }
 
-fn sample_predicate_is_supported(raw: &str) -> bool {
+fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> bool {
     let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
         return false;
     };
@@ -859,7 +861,110 @@ fn sample_predicate_is_supported(raw: &str) -> bool {
                     | PredicateOp::Le
             );
     }
-    lhs == "GT" || lhs.starts_with("FMT/") || lhs.starts_with("FORMAT/")
+    sample_rhs_is_simple(rhs)
+        && (lhs == "GT"
+            || lhs.starts_with("FMT/")
+            || lhs.starts_with("FORMAT/")
+            || (allow_bare_format_tags && !is_record_scoped_filter_lhs(lhs)))
+}
+
+fn has_single_sample_binary(raw: &str) -> bool {
+    has_single_binary(raw, b'|') || has_single_binary(raw, b'&')
+}
+
+fn has_single_binary(raw: &str, delimiter: u8) -> bool {
+    let mut in_string = false;
+    let bytes = raw.as_bytes();
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'"' => in_string = !in_string,
+            ch if ch == delimiter
+                && !in_string
+                && bytes.get(i + 1).copied() != Some(delimiter)
+                && i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied() != Some(delimiter) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn sample_rhs_is_simple(rhs: &str) -> bool {
+    let rhs = rhs.trim();
+    if rhs.starts_with('"') {
+        return parse_quoted_rhs(rhs).is_some();
+    }
+    !rhs.is_empty()
+        && !rhs
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '&' || ch == '|')
+}
+
+fn is_record_scoped_filter_lhs(lhs: &str) -> bool {
+    let lhs = lhs
+        .strip_prefix('%')
+        .unwrap_or(lhs)
+        .split(['[', ':'])
+        .next()
+        .unwrap_or(lhs)
+        .to_ascii_uppercase();
+    lhs.starts_with("INFO/")
+        || matches!(
+            lhs.as_str(),
+            "CHROM"
+                | "POS"
+                | "ID"
+                | "REF"
+                | "ALT"
+                | "QUAL"
+                | "FILTER"
+                | "INFO"
+                | "TYPE"
+                | "N_ALT"
+                | "N_SAMPLES"
+                | "ILEN"
+                | "PCT_ILEN"
+        )
+}
+
+fn split_sample_or(raw: &str) -> Vec<&str> {
+    split_single_binary(raw, b'|')
+}
+
+fn split_sample_and(raw: &str) -> Vec<&str> {
+    split_single_binary(raw, b'&')
+}
+
+fn split_single_binary(raw: &str, delimiter: u8) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut in_string = false;
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                in_string = !in_string;
+                i += 1;
+            }
+            ch if ch == delimiter && !in_string => {
+                if bytes.get(i + 1).copied() == Some(delimiter)
+                    || i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied() == Some(delimiter)
+                {
+                    i += 1;
+                    continue;
+                }
+                parts.push(raw[start..i].trim());
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    parts.push(raw[start..].trim());
+    parts
 }
 
 fn split_simple_or(raw: &str) -> Vec<&str> {
