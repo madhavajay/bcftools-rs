@@ -189,6 +189,20 @@ Goal: build a pure Rust replacement for the `bcftools` C program with full subco
 
 Current goal: keep momentum inside `bcftools-rs` only. If a TODO item requires changes to underlying libraries (`htslib-rs`, `noodles`, or their submodules), move that dependency work to the end of this file under the rolling dependency-blocker list, continue with other `bcftools-rs` items that can be completed locally, and then stop once the remaining work is blocked. Do not change the underlying libraries during this goal.
 
+Latest landed progress:
+
+- 2026-05-14: PR #8 (`progress/todo-local-bcftools-parity`, merge commit
+  `8742124`) landed the first broad local-only parity batch for `concat`,
+  `convert`, `filter`, `isec`, and `stats`, plus the dispatcher exports,
+  command integration tests, TSV-to-VCF ALT normalization, and the snapshot
+  coverage notes below.
+- Validation before merge: `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo test --workspace`.
+- Next local-only queue: continue upstream fixture parity for `convert`, then
+  tighten `concat`, `filter`, `stats`, and `isec` edge cases that do not
+  require changes in `htslib-rs`, `noodles`, or their submodules.
+
 ## Current Inputs
 
 - `bcftools/`: upstream C bcftools source and test suite. 59 C files (~60k LOC) plus 41 plugin `.c` files under `plugins/`. ~28 built-in subcommands dispatched from `main.c:73-201`. A 2406-line Perl test harness (`bcftools/test/test.pl`) with ~1098 `run_test()` invocations and expected-output fixtures under `bcftools/test/<subcommand-or-plugin>/`.
