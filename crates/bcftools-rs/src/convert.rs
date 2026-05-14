@@ -94,7 +94,7 @@ fn render_function(
             let numbers = numeric_function_values(function, argument, record, sample_index)?;
             Ok(format_number(numbers.iter().sum()))
         }
-        "AVG" | "SAVG" | "SMPL_AVG" => {
+        "AVG" | "MEAN" | "SAVG" | "SMEAN" | "SMPL_AVG" | "SMPL_MEAN" => {
             let numbers = numeric_function_values(function, argument, record, sample_index)?;
             if numbers.is_empty() {
                 Ok(".".into())
@@ -103,6 +103,13 @@ fn render_function(
                     numbers.iter().sum::<f64>() / numbers.len() as f64,
                 ))
             }
+        }
+        "ABS" => {
+            let numbers = numeric_function_values(function, argument, record, sample_index)?;
+            Ok(numbers
+                .first()
+                .map(|value| format_number(value.abs()))
+                .unwrap_or_else(|| ".".into()))
         }
         "MIN" | "SMIN" | "SMPL_MIN" => {
             let numbers = numeric_function_values(function, argument, record, sample_index)?;
@@ -622,11 +629,29 @@ mod tests {
 
         assert_eq!(
             render_format(
-                "%sum(FORMAT/AD)\\t%SMPL_MAX(FMT/DP)\\t%smpl_avg(FORMAT/DP)\\n",
+                "%sum(FORMAT/AD)\\t%SMPL_MAX(FMT/DP)\\t%smpl_mean(FORMAT/DP)\\n",
                 &record,
             )
             .unwrap(),
             "13\t11\t9\n"
+        );
+    }
+
+    #[test]
+    fn renders_mean_aliases_and_abs_function() {
+        let record = MockRecord::default()
+            .with_value("INFO/AD", "3,4,5")
+            .with_value("DELTA", "-7")
+            .with_sample(&[("AD", "1,2")])
+            .with_sample(&[("AD", "4,6")]);
+
+        assert_eq!(
+            render_format(
+                "%MEAN(INFO/AD)\\t%ABS(DELTA)\\t%sMEAN(FORMAT/AD)\\n",
+                &record,
+            )
+            .unwrap(),
+            "4\t7\t3.25\n"
         );
     }
 

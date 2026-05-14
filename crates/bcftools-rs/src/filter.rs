@@ -614,12 +614,12 @@ fn eval_call(
                     io::Error::new(io::ErrorKind::InvalidInput, "MIN requires numeric values")
                 })
         }
-        "SUM" => {
+        "SUM" | "SSUM" | "SMPL_SUM" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
             Ok(Value::Number(values.iter().sum()))
         }
-        "AVG" | "MEAN" => {
+        "AVG" | "MEAN" | "SAVG" | "SMEAN" | "SMPL_AVG" | "SMPL_MEAN" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
             if values.is_empty() {
@@ -631,6 +631,18 @@ fn eval_call(
                 Ok(Value::Number(
                     values.iter().sum::<f64>() / values.len() as f64,
                 ))
+            }
+        }
+        "STDEV" | "SSTDEV" | "SMPL_STDEV" => {
+            require_arity(function, args, 1)?;
+            let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+            if values.is_empty() {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{function} requires numeric values"),
+                ))
+            } else {
+                Ok(Value::Number(sample_standard_deviation(&values)))
             }
         }
         "ABS" => {
@@ -660,6 +672,20 @@ fn eval_call(
             format!("unsupported filter function {function}"),
         )),
     }
+}
+
+fn sample_standard_deviation(values: &[f64]) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+    variance.sqrt()
 }
 
 fn phred_score(probability: f64) -> f64 {
@@ -1297,16 +1323,20 @@ mod tests {
             .with("PVALUE", Value::Number(0.01));
 
         assert_eq!(
-            eval_expression("SUM(AD)", &context).unwrap(),
+            eval_expression("SMPL_SUM(AD)", &context).unwrap(),
             Value::Number(12.0)
         );
         assert_eq!(
-            eval_expression("AVG(AD)", &context).unwrap(),
+            eval_expression("sAVG(AD)", &context).unwrap(),
             Value::Number(6.0)
         );
         assert_eq!(
             eval_expression("MEAN(AD)", &context).unwrap(),
             Value::Number(6.0)
+        );
+        assert_eq!(
+            eval_expression("sSTDEV(AD)", &context).unwrap(),
+            Value::Number(3.0)
         );
         assert_eq!(
             eval_expression("ABS(DELTA)", &context).unwrap(),
