@@ -191,6 +191,20 @@ Current goal: keep momentum inside `bcftools-rs` only. If a TODO item requires c
 
 Latest landed progress:
 
+- 2026-05-14: PR #9 (`progress/convert-fixture-parity-2`, merge commit
+  `05f3c18`) landed another convert parity slice after PR #8: more upstream
+  GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE fixture-output parity, the
+  upstream `-h` alias for HAP/LEGEND/SAMPLE output, single-precision PL/GL
+  probability normalization, haploid missing HAP output parity, harness-style
+  BCF stdin input for forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE
+  output modes, upstream-style `--tsv2vcf -Ou | view` fixture pipes,
+  upstream-style reverse GEN/SAMPLE `-Ou | view` fixture coverage, the
+  whole-project progress estimate, and the BCF serialization blocker note for
+  HAP-family reverse `-Ou` pipes.
+- Validation before merge: `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, plus GitHub CI Rust tests and bcftools Perl parity
+  tests.
 - 2026-05-14: PR #8 (`progress/todo-local-bcftools-parity`, merge commit
   `8742124`) landed the first broad local-only parity batch for `concat`,
   `convert`, `filter`, `isec`, and `stats`, plus the dispatcher exports,
@@ -202,20 +216,6 @@ Latest landed progress:
 - Next local-only queue: continue upstream fixture parity for `convert`, then
   tighten `concat`, `filter`, `stats`, and `isec` edge cases that do not
   require changes in `htslib-rs`, `noodles`, or their submodules.
-
-Current in-flight local progress:
-
-- 2026-05-14: `progress/convert-fixture-parity-2` adds another convert parity
-  slice after PR #8: more upstream GEN/SAMPLE, HAP/SAMPLE, and
-  HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
-  HAP/LEGEND/SAMPLE output, single-precision PL/GL probability normalization,
-  haploid missing HAP output parity, and harness-style BCF stdin input for
-  forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE output modes,
-  upstream-style `--tsv2vcf -Ou | view` fixture pipes, and upstream-style
-  reverse GEN/SAMPLE `-Ou | view` fixture coverage. Local validation has
-  passed with `cargo fmt --all --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, and
-  `cargo test --workspace`.
 
 Current whole-project estimate:
 
@@ -457,10 +457,12 @@ This end-of-file list is filled as the subcommand surface mapping uncovers gaps 
   `convert --hapsample2vcf -Ou` and `convert -H -Ou` hit
   `[E::main_vcfconvert] invalid input parameter` on the upstream Oxford
   fixtures when a haploid missing genotype (`GT=.`) is serialized through the
-  current text-VCF-to-BCF writer path. Text VCF parity is correct, and
-  GEN/SAMPLE `-G -Ou | view` passes; the remaining HAP/SAMPLE and
-  HAP/LEGEND/SAMPLE upstream pipe fixtures need `htslib-rs`/writer support for
-  this genotype shape.
+  current text-VCF-to-BCF writer path. The upstream gVCF pipe
+  `convert --gvcf2vcf ... -Ou | view` hits the same class of failure on the
+  first expanded record (`GT=.`). Text VCF parity is correct, GEN/SAMPLE
+  `-G -Ou | view` passes, and TSV2VCF `-Ou | view` passes; the remaining
+  HAP/SAMPLE, HAP/LEGEND/SAMPLE, and gVCF upstream pipe fixtures need
+  `htslib-rs`/writer support for this genotype shape.
 
 ## Submodule Pinning
 
