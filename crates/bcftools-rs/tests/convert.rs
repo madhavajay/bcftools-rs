@@ -637,6 +637,40 @@ chr1\t5\trs2\tA\tG\t.\tPASS\tDP=2\tGT\t0|1\n",
 }
 
 #[test]
+fn convert_hapsample_matches_upstream_stdout_fixtures() {
+    let vcf = fixture_path("convert.vcf");
+    let expected_hap = std::fs::read_to_string(fixture_path("convert.hs.hap")).unwrap();
+    let expected_ids_hap = std::fs::read_to_string(fixture_path("convert.hs.ids.hap")).unwrap();
+    let expected_sample = std::fs::read_to_string(fixture_path("convert.hs.sample")).unwrap();
+
+    let (hap_out, hap_err, hap_code) =
+        run(&["convert", "--hapsample", "-,.", vcf.to_str().unwrap()]);
+    assert_eq!(hap_code, 0, "fixture --hapsample -,. failed: {hap_err}");
+    assert_eq!(hap_out, expected_hap);
+
+    let (ids_hap_out, ids_hap_err, ids_hap_code) = run(&[
+        "convert",
+        "--hapsample",
+        "-,.",
+        "--vcf-ids",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        ids_hap_code, 0,
+        "fixture --hapsample -,. --vcf-ids failed: {ids_hap_err}"
+    );
+    assert_eq!(ids_hap_out, expected_ids_hap);
+
+    let (sample_out, sample_err, sample_code) =
+        run(&["convert", "--hapsample", ".,-", vcf.to_str().unwrap()]);
+    assert_eq!(
+        sample_code, 0,
+        "fixture --hapsample .,- failed: {sample_err}"
+    );
+    assert_eq!(sample_out, expected_sample);
+}
+
+#[test]
 fn convert_hapsample2vcf_writes_vcf_from_hap_and_samples() {
     let dir = TempDir::new().unwrap();
     let hap = dir.path().join("in.hap");
@@ -826,7 +860,7 @@ chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0\t1\t.\n",
     )
     .read_to_string(&mut default_hap)
     .unwrap();
-    assert_eq!(default_hap, "chr1 chr1:2_C_T 2 C T 0 - 1 - ? ?\n");
+    assert_eq!(default_hap, "chr1 chr1:2_C_T 2 C T 0 - 1 - ? -\n");
 
     let (_out, err, code) = run(&[
         "convert",
@@ -1006,6 +1040,53 @@ chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0/1\t1|1\t0|0\n",
         std::fs::read_to_string(&legend).unwrap(),
         "id position a0 a1\nrs1 2 C T\n"
     );
+}
+
+#[test]
+fn convert_haplegendsample_matches_upstream_stdout_fixtures() {
+    let vcf = fixture_path("convert.vcf");
+    let hap_missing_vcf = fixture_path("convert.hap-missing.vcf");
+    let expected_haps = std::fs::read_to_string(fixture_path("convert.hls.haps")).unwrap();
+    let expected_legend = std::fs::read_to_string(fixture_path("convert.hls.legend")).unwrap();
+    let expected_ids_legend =
+        std::fs::read_to_string(fixture_path("convert.hls.ids.legend")).unwrap();
+    let expected_samples = std::fs::read_to_string(fixture_path("convert.hls.samples")).unwrap();
+    let expected_hap_missing =
+        std::fs::read_to_string(fixture_path("convert.hap-missing.haps")).unwrap();
+
+    let (haps_out, haps_err, haps_code) = run(&["convert", "-h", "-,.,.", vcf.to_str().unwrap()]);
+    assert_eq!(haps_code, 0, "fixture -h -,.,. failed: {haps_err}");
+    assert_eq!(haps_out, expected_haps);
+
+    let (legend_out, legend_err, legend_code) =
+        run(&["convert", "-h", ".,-,.", vcf.to_str().unwrap()]);
+    assert_eq!(legend_code, 0, "fixture -h .,-,. failed: {legend_err}");
+    assert_eq!(legend_out, expected_legend);
+
+    let (ids_legend_out, ids_legend_err, ids_legend_code) =
+        run(&["convert", "-h", ".,-,.", "--vcf-ids", vcf.to_str().unwrap()]);
+    assert_eq!(
+        ids_legend_code, 0,
+        "fixture -h .,-,. --vcf-ids failed: {ids_legend_err}"
+    );
+    assert_eq!(ids_legend_out, expected_ids_legend);
+
+    let (samples_out, samples_err, samples_code) =
+        run(&["convert", "-h", ".,.,-", vcf.to_str().unwrap()]);
+    assert_eq!(samples_code, 0, "fixture -h .,.,- failed: {samples_err}");
+    assert_eq!(samples_out, expected_samples);
+
+    let (hap_missing_out, hap_missing_err, hap_missing_code) = run(&[
+        "convert",
+        "--haplegendsample",
+        "-,.,.",
+        hap_missing_vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        hap_missing_code, 0,
+        "fixture --haplegendsample -,.,. missing GT failed: {hap_missing_err}"
+    );
+    assert_eq!(hap_missing_out, expected_hap_missing);
 }
 
 #[test]
@@ -1198,6 +1279,9 @@ fn convert_gensample_matches_upstream_stdout_fixtures() {
     let expected_ids = std::fs::read_to_string(fixture_path("convert.gs.gt.ids.gen")).unwrap();
     let expected_ids_3n6 = std::fs::read_to_string(fixture_path("convert.gs.gt.ids.gen6")).unwrap();
     let expected_samples = std::fs::read_to_string(fixture_path("convert.gs.gt.samples")).unwrap();
+    let expected_pl_gen = std::fs::read_to_string(fixture_path("convert.gs.pl.gen")).unwrap();
+    let expected_pl_samples =
+        std::fs::read_to_string(fixture_path("convert.gs.pl.samples")).unwrap();
 
     let (gen_out, gen_err, gen_code) = run(&["convert", "-g", "-,.", vcf.to_str().unwrap()]);
     assert_eq!(gen_code, 0, "fixture -g -,. failed: {gen_err}");
@@ -1226,6 +1310,61 @@ fn convert_gensample_matches_upstream_stdout_fixtures() {
         run(&["convert", "-g", ".,-", vcf.to_str().unwrap()]);
     assert_eq!(samples_code, 0, "fixture -g .,- failed: {samples_err}");
     assert_eq!(samples_out, expected_samples);
+
+    let (pl_gen_out, pl_gen_err, pl_gen_code) =
+        run(&["convert", "-g", "-,.", "--tag", "PL", vcf.to_str().unwrap()]);
+    assert_eq!(
+        pl_gen_code, 0,
+        "fixture -g -,. --tag PL failed: {pl_gen_err}"
+    );
+    assert_eq!(pl_gen_out, expected_pl_gen);
+
+    let (pl_samples_out, pl_samples_err, pl_samples_code) =
+        run(&["convert", "-g", ".,-", "--tag", "PL", vcf.to_str().unwrap()]);
+    assert_eq!(
+        pl_samples_code, 0,
+        "fixture -g .,- --tag PL failed: {pl_samples_err}"
+    );
+    assert_eq!(pl_samples_out, expected_pl_samples);
+}
+
+#[test]
+fn convert_gensample_matches_upstream_check_fixtures() {
+    let vcf = fixture_path("check.vcf");
+    let vcf = vcf.to_str().unwrap();
+    let cases = [
+        (
+            vec!["convert", "-g", "-,.", "--vcf-ids", vcf],
+            "check.gs.vcfids.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--vcf-ids", vcf],
+            "check.gs.vcfids.samples",
+        ),
+        (
+            vec!["convert", "-g", "-,.", "--3N6", vcf],
+            "check.gs.chrom.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--3N6", vcf],
+            "check.gs.chrom.samples",
+        ),
+        (
+            vec!["convert", "-g", "-,.", "--3N6", "--vcf-ids", vcf],
+            "check.gs.vcfids_chrom.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--3N6", "--vcf-ids", vcf],
+            "check.gs.vcfids_chrom.samples",
+        ),
+    ];
+
+    for (args, fixture) in cases {
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "fixture {fixture} failed: {err}");
+        assert_eq!(out, expected, "fixture {fixture} mismatch");
+    }
 }
 
 #[test]
