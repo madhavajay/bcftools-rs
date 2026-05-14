@@ -94,6 +94,64 @@ fn isec_collapse_any_matches_same_position_records() {
 }
 
 #[test]
+fn isec_collapse_snps_indels_and_both_are_class_specific() {
+    let dir = TempDir::new().unwrap();
+    let a = write_temp(
+        &dir,
+        "a.vcf",
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\t.\tA\tC\t.\t.\t.\n\
+1\t20\t.\tG\tGA\t.\t.\t.\n\
+1\t30\t.\tT\tG\t.\t.\t.\n",
+    );
+    let b = write_temp(
+        &dir,
+        "b.vcf",
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\t.\tA\tAC\t.\t.\t.\n\
+1\t20\t.\tG\tGT\t.\t.\t.\n\
+1\t30\t.\tT\tA\t.\t.\t.\n",
+    );
+
+    let (snps_out, snps_err, snps_code) = run(&[
+        "isec",
+        "-n=2",
+        "-c",
+        "snps",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(snps_code, 0, "isec -c snps failed: {snps_err}");
+    assert_eq!(snps_out, "1\t30\tT\tG\t11\n");
+
+    let (indels_out, indels_err, indels_code) = run(&[
+        "isec",
+        "-n=2",
+        "-c",
+        "indels",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(indels_code, 0, "isec -c indels failed: {indels_err}");
+    assert_eq!(indels_out, "1\t20\tG\tGA\t11\n");
+
+    let (both_out, both_err, both_code) = run(&[
+        "isec",
+        "-n=2",
+        "-c",
+        "both",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(both_code, 0, "isec -c both failed: {both_err}");
+    assert_eq!(both_out, "1\t20\tG\tGA\t11\n1\t30\tT\tG\t11\n");
+}
+
+#[test]
 fn isec_complement_reports_first_input_private_records() {
     let dir = TempDir::new().unwrap();
     let a = write_temp(&dir, "a.vcf", VCF_A);
