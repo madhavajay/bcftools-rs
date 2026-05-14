@@ -450,6 +450,29 @@ fn query_strlen_filter_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_allele_count_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.vcf");
+    for (expression, expected_fixture) in [
+        ("AC[0]=3", "query.10.out"),
+        ("AF[0]=3/4", "query.10.out"),
+        ("MAC[0]=1", "query.11.out"),
+        ("MAF[0]=1/4", "query.11.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%POS[ %GT]\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_vector_missing_predicates_match_upstream_fixtures() {
     let path = fixture_path("query.filter.15.vcf");
     let expected_missing = std::fs::read_to_string(fixture_path("query.filter.15.1.out")).unwrap();

@@ -901,6 +901,9 @@ fn parse_simple_predicate(raw: &str) -> Option<SimplePredicate> {
         .strip_suffix("[*]")
         .map(|lhs| (lhs, true))
         .unwrap_or((lhs, false));
+    if lhs.contains('[') || lhs.contains(']') {
+        return None;
+    }
     let rhs = parse_quoted_rhs(rhs.trim())?;
     Some(SimplePredicate {
         lhs: lhs.trim().to_string(),
@@ -1139,6 +1142,9 @@ fn filter_token_value(
                 .collect(),
         );
     }
+    if let Some(value) = record.computed_allele_metric(token) {
+        return value;
+    }
     if record
         .fields
         .get(8)
@@ -1268,6 +1274,34 @@ impl<'a> TextRecord<'a> {
             .map(|allele| (allele.len() as i32 - ref_len).abs())
             .max()
             .unwrap_or(0)
+    }
+
+    fn computed_allele_metric(&self, key: &str) -> Option<FilterValue> {
+        let key = key.to_ascii_uppercase();
+        if !matches!(key.as_str(), "AF" | "MAC" | "MAF") {
+            return None;
+        }
+
+        let an = self.info("AN").parse::<f64>().ok()?;
+        let ac_values = self
+            .info("AC")
+            .split(',')
+            .filter_map(|value| value.parse::<f64>().ok())
+            .collect::<Vec<_>>();
+        if an == 0.0 || ac_values.is_empty() {
+            return Some(FilterValue::Missing);
+        }
+
+        let values = ac_values
+            .into_iter()
+            .map(|ac| match key.as_str() {
+                "AF" => FilterValue::Number(ac / an),
+                "MAC" => FilterValue::Number(ac.min(an - ac)),
+                "MAF" => FilterValue::Number(ac.min(an - ac) / an),
+                _ => unreachable!("checked above"),
+            })
+            .collect();
+        Some(FilterValue::List(values))
     }
 
     fn info(&self, key: &str) -> String {

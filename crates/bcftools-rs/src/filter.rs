@@ -437,6 +437,7 @@ fn eval_with_trace(
                     Ok(values.get(index).cloned().unwrap_or(Value::Missing))
                 }
                 (value, Value::String(index)) if index == "*" => Ok(value),
+                (value, index) if number(&index).ok() == Some(0.0) => Ok(value),
                 _ => Ok(Value::Missing),
             }
         }
@@ -1377,6 +1378,14 @@ mod tests {
         assert_eq!(
             eval_expression("COUNT(FMT/DP[*] > 10)", &context).unwrap(),
             Value::Number(1.0)
+        );
+        assert_eq!(
+            eval_expression(
+                "SCALAR[0]",
+                &EvalContext::new().with("SCALAR", Value::Number(3.0))
+            )
+            .unwrap(),
+            Value::Number(3.0)
         );
     }
 
