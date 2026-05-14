@@ -79,6 +79,20 @@ fn without_meta_headers(text: &str) -> String {
         + "\n"
 }
 
+fn assert_bcf_stdout_matches(args: &[&str], expected: &str, label: &str) {
+    let (bcf, err, code) = run_bytes(args);
+    assert_eq!(code, 0, "{label} failed: {err}");
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of {label} BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(expected)
+    );
+}
+
 #[test]
 fn convert_tsv2vcf_explicit_columns_writes_vcf_records() {
     let dir = TempDir::new().unwrap();
@@ -1261,6 +1275,19 @@ fn convert_haplegendsample2vcf_matches_upstream_hap_legend_sample_fixture() {
     let (out, err, code) = run(&["convert", "-H", "--no-version", &input]);
     assert_eq!(code, 0, "fixture -H failed: {err}");
     assert_eq!(without_meta_headers(&out), expected);
+}
+
+#[test]
+fn convert_gensample2vcf_bcf_stdout_round_trips_like_upstream_harness() {
+    let gs_samples = fixture_path("convert.gs.gt.samples");
+    let gs_gen = fixture_path("convert.gs.gt.ids.gen");
+    let gs_expected = std::fs::read_to_string(fixture_path("convert.gs.vcf")).unwrap();
+    let gs_input = format!("{},{}", gs_gen.display(), gs_samples.display());
+    assert_bcf_stdout_matches(
+        &["convert", "--vcf-ids", "-G", "-Ou", &gs_input],
+        &gs_expected,
+        "convert --vcf-ids -G -Ou",
+    );
 }
 
 #[test]
