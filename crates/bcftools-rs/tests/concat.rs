@@ -375,6 +375,87 @@ fn concat_naive_force_allows_different_headers() {
 }
 
 #[test]
+fn concat_naive_allows_generated_bcftools_version_header_differences() {
+    let dir = TempDir::new().unwrap();
+    let a = write_temp(&dir, "a.vcf", VCF_A);
+    let b = write_temp(&dir, "b.vcf", VCF_B);
+    let a_gz = dir.path().join("a.vcf.gz");
+    let b_gz = dir.path().join("b.vcf.gz");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "-Oz",
+        "-o",
+        a_gz.to_str().unwrap(),
+        a.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Oz a failed: {err}");
+    let (_out, err, code) = run(&[
+        "view",
+        "-Oz",
+        "-o",
+        b_gz.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Oz b failed: {err}");
+
+    let (out, err, code) = run(&[
+        "concat",
+        "--naive",
+        a_gz.to_str().unwrap(),
+        b_gz.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "concat --naive VCF.gz failed: {err}");
+    assert_eq!(
+        out.lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn concat_naive_force_reads_bcf_inputs() {
+    let dir = TempDir::new().unwrap();
+    let a = write_temp(&dir, "a.vcf", VCF_A);
+    let b = write_temp(&dir, "b.vcf", VCF_B);
+    let a_bcf = dir.path().join("a.bcf");
+    let b_bcf = dir.path().join("b.bcf");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "-Ob",
+        "-o",
+        a_bcf.to_str().unwrap(),
+        a.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob a failed: {err}");
+    let (_out, err, code) = run(&[
+        "view",
+        "-Ob",
+        "-o",
+        b_bcf.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Ob b failed: {err}");
+
+    let (out, err, code) = run(&[
+        "concat",
+        "--naive-force",
+        a_bcf.to_str().unwrap(),
+        b_bcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "concat --naive-force BCF failed: {err}");
+    let records: Vec<_> = out
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0], "1\t100\t.\tA\tC\t100\tPASS\t.");
+    assert_eq!(records[3], "2\t20\t.\tC\tG\t100\tPASS\t.");
+}
+
+#[test]
 fn concat_regions_restricts_records_by_position() {
     let dir = TempDir::new().unwrap();
     let a = write_temp(&dir, "a.vcf", VCF_A);

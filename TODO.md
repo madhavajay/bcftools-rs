@@ -205,6 +205,12 @@ Latest landed progress:
 
 Current in-flight local progress:
 
+- 2026-05-15: `bcftools-rs concat --naive` now passes upstream Perl
+  `test_naive_concat`: VCF.gz naive header comparison tolerates generated
+  `##bcftools_*{Version,Command}` metadata differences, and `--naive-force`
+  accepts BCF inputs by decoding them through the Rust reader for the upstream
+  pipe-to-`view` fixture. Local validation has passed with
+  `scripts/run-bcftools-test-pl.sh -f '^test_naive_concat$'`.
 - 2026-05-14: `progress/convert-fixture-parity-2` adds another convert parity
   slice after PR #8: more upstream GEN/SAMPLE, HAP/SAMPLE, and
   HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
@@ -374,8 +380,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
         Full external-sort parity can come later, but this small-file path
         unblocks the BioScript VNtyper port.
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/concat.rs`): same-sample vertical concat for VCF/VCF.gz/BCF inputs, header preservation from first file, sample-column verification across inputs, `-o`/`--output`, `-O u|b|v|z[0-9]`, `-f`/`--file-list`, `-G`/`--drop-genotypes`, `-D`/`--remove-duplicates`, `-d`/`--rm-dups snps|indels|both|all|exact`, `-n`/`--naive` VCF body concatenation and `--naive-force`, `-r`/`-R` POS-based region restriction including BED coordinate conversion, `--regions-overlap 0|1|2` with record-span matching for 1/2, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_concat{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads. 26 integration tests in `crates/bcftools-rs/tests/concat.rs`.
-  - [ ] Remaining: `-a`/`--allow-overlaps` (depends on synced reader parity), `-l`/`--ligate` and ligate-force/warn variants, true BCF block-level `--naive` concat, `-c`/`--compact-PS`, `-q`/`--min-PQ`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/concat.rs`): same-sample vertical concat for VCF/VCF.gz/BCF inputs, header preservation from first file, sample-column verification across inputs, `-o`/`--output`, `-O u|b|v|z[0-9]`, `-f`/`--file-list`, `-G`/`--drop-genotypes`, `-D`/`--remove-duplicates`, `-d`/`--rm-dups snps|indels|both|all|exact`, `-n`/`--naive` VCF/VCF.gz body concatenation and `--naive-force`, upstream Perl `test_naive_concat` coverage for generated VCF.gz metadata-header differences and BCF inputs piped through `view`, `-r`/`-R` POS-based region restriction including BED coordinate conversion, `--regions-overlap 0|1|2` with record-span matching for 1/2, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_concat{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads. 28 integration tests in `crates/bcftools-rs/tests/concat.rs`.
+  - [ ] Remaining: `-a`/`--allow-overlaps` (depends on synced reader parity), `-l`/`--ligate` and ligate-force/warn variants, true BCF block-level `--naive` concat for byte-level BCF output parity, `-c`/`--compact-PS`, `-q`/`--min-PQ`.
 - [ ] `merge` (`vcfmerge.c`, 155k — largest single file in bcftools) — multi-sample merge across files, `-m none/snps/indels/both/all/id`, `--info-rules`, `-l`, `--regions`. Covered by `test_vcf_merge`, `test_vcf_merge_big`.
 - [ ] `reheader` (`reheader.c`, 27k) — header replacement, sample rename, FAI-driven contig fill, `--in-place` for BCF. Covered by `test_vcf_reheader`, `test_rename_chrs`.
   - [x] Snapshot coverage: VCF/BGZF VCF header replacement, sample rename via file/list, FAI contig updates with upstream-style attribute ordering, stdin handling, BCF output, BCF `--in-place`, and threaded BGZF/BCF output.
