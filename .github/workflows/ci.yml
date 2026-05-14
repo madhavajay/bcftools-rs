@@ -72,4 +72,4 @@ jobs:
         run: cargo build --release -p bcftools-rs-cli
 
       - name: test.pl enabled parity slices
-        run: scripts/run-bcftools-test-pl.sh -f '^(test_vcf_head|test_index|test_vcf_idxstats)$'
+        run: scripts/run-bcftools-test-pl.sh -f '^(test_vcf_head|test_vcf_head2|test_tabix|test_index|test_vcf_idxstats)$'

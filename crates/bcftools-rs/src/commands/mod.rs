@@ -10,6 +10,7 @@
 //! the subcommand name (matching upstream's `main_<name>(argc, argv)` calling
 //! convention where `argv[0]` is e.g. `"view"`).
 
+pub mod bgzip;
 pub mod concat;
 pub mod convert;
 pub mod filter;
