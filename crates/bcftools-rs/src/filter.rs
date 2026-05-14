@@ -656,6 +656,32 @@ fn eval_call(
             let value = number(&eval_with_trace(&args[0], context, resolver, trace)?)?;
             Ok(Value::Number(phred_score(value)))
         }
+        "BINOM" => {
+            if args.len() == 1 {
+                let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+                if values.len() < 2 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "binom requires at least two numeric values",
+                    ));
+                }
+                Ok(Value::Number(binom_two_sided(values[0], values[1], 0.5)))
+            } else if args.len() == 2 {
+                let lhs = number(&eval_with_trace(
+                    &args[0],
+                    context,
+                    resolver,
+                    trace.as_deref_mut(),
+                )?)?;
+                let rhs = number(&eval_with_trace(&args[1], context, resolver, trace)?)?;
+                Ok(Value::Number(binom_two_sided(lhs, rhs, 0.5)))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "binom expects one or two argument(s)",
+                ))
+            }
+        }
         "MAX" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
@@ -686,6 +712,32 @@ fn sample_standard_deviation(values: &[f64]) -> f64 {
         .sum::<f64>()
         / values.len() as f64;
     variance.sqrt()
+}
+
+fn binom_two_sided(a: f64, b: f64, probability: f64) -> f64 {
+    if a < 0.0 || b < 0.0 {
+        return 0.0;
+    }
+    let a = a.round() as i32;
+    let b = b.round() as i32;
+    if a == 0 && b == 0 {
+        return -1.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+
+    let n = (a + b) as usize;
+    let limit = a.min(b) as usize;
+    let mut term = (1.0 - probability).powi(n as i32);
+    let mut cdf = term;
+
+    for k in 0..limit {
+        term *= (n - k) as f64 / (k + 1) as f64 * probability / (1.0 - probability);
+        cdf += term;
+    }
+
+    (2.0 * cdf).min(1.0)
 }
 
 fn phred_score(probability: f64) -> f64 {
@@ -1347,6 +1399,24 @@ mod tests {
             panic!("PHRED should return a number");
         };
         assert!((phred - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn evaluates_simple_binomial_tail_function() {
+        let context = EvalContext::new().with(
+            "AD",
+            Value::List(vec![Value::Number(10.0), Value::Number(2.0)]),
+        );
+
+        let Value::Number(pvalue) = eval_expression("binom(AD)", &context).unwrap() else {
+            panic!("binom should return a number");
+        };
+        assert!((pvalue - 0.03857421875).abs() < f64::EPSILON);
+
+        let Value::Number(phred) = eval_expression("phred(binom(10,2))", &context).unwrap() else {
+            panic!("phred(binom()) should return a number");
+        };
+        assert!((phred - 14.137028).abs() < 0.001);
     }
 
     #[test]
