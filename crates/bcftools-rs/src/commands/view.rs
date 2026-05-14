@@ -598,6 +598,13 @@ impl OutputKind {
         if s.is_empty() {
             return None;
         }
+        if s.len() == 1 && s.as_bytes()[0].is_ascii_digit() {
+            return s
+                .parse::<u32>()
+                .ok()
+                .filter(|level| *level <= 9)
+                .map(|level| (OutputKind::VcfGz, Some(level)));
+        }
         let kind = match s.as_bytes()[0] {
             b'v' => OutputKind::VcfText,
             b'z' => OutputKind::VcfGz,

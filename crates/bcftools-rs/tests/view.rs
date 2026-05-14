@@ -1039,6 +1039,32 @@ fn view_threads_writes_bgzf_vcf_output() {
 }
 
 #[test]
+fn view_numeric_output_type_writes_bgzf_vcf_output() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("aa.vcf");
+    let output = tmp.path().join("aa.vcf.gz");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-O0",
+        "-o",
+        output.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -O0 failed: {err}");
+
+    let mut decoder = flate2::read::MultiGzDecoder::new(std::fs::File::open(output).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    let records = decoded
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .count();
+    assert_eq!(records, 21);
+}
+
+#[test]
 fn view_threads_writes_bcf_output() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
