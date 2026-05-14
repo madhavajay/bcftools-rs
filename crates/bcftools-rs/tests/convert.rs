@@ -45,6 +45,22 @@ fn run(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, out.status.code().unwrap_or(-1))
 }
 
+fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
+    ensure_binary_built();
+    let mut child = Command::new(bin_path())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bcftools");
+    child.stdin.as_mut().unwrap().write_all(input).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
 fn without_meta_headers(text: &str) -> String {
     text.lines()
         .filter(|line| !line.starts_with("##"))
@@ -608,7 +624,8 @@ chr1\t5\trs2\tA\tG\t.\tPASS\tDP=2\tGT\t0|1\n",
     let (_view_out, view_err, view_code) = run(&[
         "view",
         "--no-version",
-        "-Ob",
+        "-O",
+        "b",
         "-o",
         bcf.to_str().unwrap(),
         vcf.to_str().unwrap(),
@@ -1365,6 +1382,45 @@ fn convert_gensample_matches_upstream_check_fixtures() {
         assert_eq!(code, 0, "fixture {fixture} failed: {err}");
         assert_eq!(out, expected, "fixture {fixture} mismatch");
     }
+}
+
+#[test]
+fn convert_forward_modes_read_bcf_from_stdin_like_upstream_harness() {
+    let dir = TempDir::new().unwrap();
+    let vcf = dir.path().join("in.vcf");
+    let bcf = dir.path().join("convert.bcf");
+    std::fs::write(
+        &vcf,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
+chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0|1\t1|1\n",
+    )
+    .unwrap();
+    let (_view_out, view_err, view_code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(view_code, 0, "view -Ob failed: {view_err}");
+    let bcf_bytes = std::fs::read(&bcf).unwrap();
+
+    let (gen_out, gen_err, gen_code) = run_with_stdin(&["convert", "-g", "-,."], &bcf_bytes);
+    assert_eq!(gen_code, 0, "stdin BCF -g -,. failed: {gen_err}");
+    assert_eq!(gen_out, "chr1:2_C_T chr1:2_C_T 2 C T 0 1 0 0 0 1\n");
+
+    let (hap_out, hap_err, hap_code) =
+        run_with_stdin(&["convert", "--hapsample", "-,."], &bcf_bytes);
+    assert_eq!(hap_code, 0, "stdin BCF --hapsample -,. failed: {hap_err}");
+    assert_eq!(hap_out, "chr1 chr1:2_C_T 2 C T 0 1 1 1\n");
+
+    let (hls_out, hls_err, hls_code) = run_with_stdin(&["convert", "-h", "-,.,."], &bcf_bytes);
+    assert_eq!(hls_code, 0, "stdin BCF -h -,.,. failed: {hls_err}");
+    assert_eq!(hls_out, "0 1 1 1\n");
 }
 
 #[test]

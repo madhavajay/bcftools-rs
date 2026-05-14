@@ -364,30 +364,33 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         (None, true, None, false, None, false, None, false, None) => {
             ConvertMode::Gvcf2Vcf("-".into())
         }
-        (None, false, Some(_), false, None, false, None, false, None) => {
-            return Err(ParseOutcome::Error(
-                "--gensample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, Some(output), false, None, false, None, false, None) => {
+            ConvertMode::VcfToGenSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, true, None, false, None, false, None) => {
             return Err(ParseOutcome::Error(
                 "--gensample2vcf requires GEN/SAMPLE input".into(),
             ));
         }
-        (None, false, None, false, Some(_), false, None, false, None) => {
-            return Err(ParseOutcome::Error(
-                "--hapsample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, None, false, Some(output), false, None, false, None) => {
+            ConvertMode::VcfToHapSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, false, None, true, None, false, None) => {
             return Err(ParseOutcome::Error(
                 "--hapsample2vcf requires HAP/SAMPLE input".into(),
             ));
         }
-        (None, false, None, false, None, false, Some(_), false, None) => {
-            return Err(ParseOutcome::Error(
-                "--haplegendsample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, None, false, None, false, Some(output), false, None) => {
+            ConvertMode::VcfToHapLegendSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, false, None, false, None, true, None) => {
             return Err(ParseOutcome::Error(
