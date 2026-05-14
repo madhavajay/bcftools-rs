@@ -166,6 +166,33 @@ fn stats_include_expression_filters_records() {
 }
 
 #[test]
+fn stats_include_expression_filters_computed_variant_type() {
+    let dir = TempDir::new().unwrap();
+    let v = write_vcf(&dir, VCF);
+    let (out, err, code) = run(&["stats", "-i", "type=\"snp\"", v.to_str().unwrap()]);
+    assert_eq!(code, 0, "stats -i type failed: {err}");
+    assert_eq!(extract_value(&out, "SN\t0\tnumber of records:"), Some("3"));
+    assert_eq!(extract_value(&out, "SN\t0\tnumber of SNPs:"), Some("3"));
+    assert_eq!(extract_value(&out, "SN\t0\tnumber of indels:"), Some("0"));
+}
+
+#[test]
+fn stats_info_type_expression_prefers_info_namespace_when_explicit() {
+    let dir = TempDir::new().unwrap();
+    let body = "##fileformat=VCFv4.2\n\
+##INFO=<ID=TYPE,Number=1,Type=String,Description=\"Custom type tag\">\n\
+##contig=<ID=1,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t100\t.\tA\tG\t100\tPASS\tTYPE=custom\n\
+1\t200\t.\tA\tAT\t100\tPASS\tTYPE=other\n";
+    let v = write_vcf(&dir, body);
+    let (out, err, code) = run(&["stats", "-i", "INFO/TYPE=\"custom\"", v.to_str().unwrap()]);
+    assert_eq!(code, 0, "stats -i INFO/TYPE failed: {err}");
+    assert_eq!(extract_value(&out, "SN\t0\tnumber of records:"), Some("1"));
+    assert_eq!(extract_value(&out, "SN\t0\tnumber of SNPs:"), Some("1"));
+}
+
+#[test]
 fn stats_af_tag_uses_named_info_tag_for_af_bins() {
     let dir = TempDir::new().unwrap();
     let body = "##fileformat=VCFv4.2\n\

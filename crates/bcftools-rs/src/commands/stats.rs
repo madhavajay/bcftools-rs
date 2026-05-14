@@ -2939,8 +2939,60 @@ fn evaluate_expression(expr: &str, fields: &[&str]) -> io::Result<FilterValue> {
         if sample_index.is_some() {
             return None;
         }
-        super::filter::record_lookup(name, &owned)
+        stats_record_lookup(name, &owned)
     })
+}
+
+fn stats_record_lookup(token: &str, fields: &[String]) -> Option<FilterValue> {
+    if token.eq_ignore_ascii_case("TYPE") {
+        return Some(FilterValue::String(record_type_label(fields)));
+    }
+    if let Some(info_token) = token
+        .strip_prefix("INFO/")
+        .or_else(|| token.strip_prefix("Info/"))
+        .or_else(|| token.strip_prefix("info/"))
+    {
+        return super::filter::record_lookup(info_token, fields);
+    }
+    super::filter::record_lookup(token, fields)
+}
+
+fn record_type_label(fields: &[String]) -> String {
+    let reference = fields.get(3).map(String::as_str).unwrap_or(".");
+    let alt = fields.get(4).map(String::as_str).unwrap_or(".");
+    let mut saw_snp = false;
+    let mut saw_mnp = false;
+    let mut saw_indel = false;
+    let mut saw_other = false;
+
+    for allele in alt.split(',').filter(|allele| !allele.is_empty()) {
+        match classify(reference, allele) {
+            VariantKind::Snp => saw_snp = true,
+            VariantKind::Mnp => saw_mnp = true,
+            VariantKind::Indel => saw_indel = true,
+            VariantKind::Other => saw_other = true,
+        }
+    }
+
+    let mut labels = Vec::new();
+    if saw_snp {
+        labels.push("snp");
+    }
+    if saw_mnp {
+        labels.push("mnp");
+    }
+    if saw_indel {
+        labels.push("indel");
+    }
+    if saw_other {
+        labels.push("other");
+    }
+
+    if labels.is_empty() {
+        "ref".into()
+    } else {
+        labels.join(",")
+    }
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
