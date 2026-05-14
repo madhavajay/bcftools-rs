@@ -2193,6 +2193,20 @@ fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usiz
                 .collect::<Vec<_>>()
                 .join(",")
         }
+        SampleVectorSelector::SampleGenotypeAlleles(selector_sample_index) => {
+            if sample_index != selector_sample_index {
+                return ".".into();
+            }
+            let gt = record.format_value(selector_sample_index, "GT");
+            let Some(alleles) = parse_diploid_gt(&gt) else {
+                return ".".into();
+            };
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele).copied().unwrap_or("."))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
     }
 }
 
@@ -2200,9 +2214,21 @@ fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usiz
 enum SampleVectorSelector {
     Index(usize),
     GenotypeAlleles,
+    SampleGenotypeAlleles(usize),
 }
 
 fn parse_sample_vector_selector(lhs: &str) -> Option<(&str, SampleVectorSelector)> {
+    if let Some((key, sample_index)) = lhs.strip_suffix(":GT]").and_then(|lhs| {
+        let index_start = lhs.rfind('[')?;
+        let key = &lhs[..index_start];
+        let sample_index = lhs[index_start + 1..].parse().ok()?;
+        Some((key, sample_index))
+    }) {
+        return (!key.is_empty()).then_some((
+            key,
+            SampleVectorSelector::SampleGenotypeAlleles(sample_index),
+        ));
+    }
     if let Some(key) = lhs.strip_suffix("[GT]") {
         return (!key.is_empty()).then_some((key, SampleVectorSelector::GenotypeAlleles));
     }
@@ -2220,7 +2246,10 @@ fn parse_sample_vector_selector(lhs: &str) -> Option<(&str, SampleVectorSelector
 fn parse_sample_vector_index(lhs: &str) -> Option<(&str, usize)> {
     match parse_sample_vector_selector(lhs)? {
         (key, SampleVectorSelector::Index(index)) => Some((key, index)),
-        (_, SampleVectorSelector::GenotypeAlleles) => None,
+        (
+            _,
+            SampleVectorSelector::GenotypeAlleles | SampleVectorSelector::SampleGenotypeAlleles(_),
+        ) => None,
     }
 }
 
