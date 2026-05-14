@@ -861,6 +861,18 @@ fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> boo
                     | PredicateOp::Le
             );
     }
+    if parse_sample_ratio_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
     sample_rhs_is_simple(rhs)
         && (lhs == "GT"
             || lhs.starts_with("FMT/")
@@ -2075,6 +2087,15 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
             rhs,
         );
     }
+    if let Some((numerator, denominator)) = parse_sample_ratio_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_vector_ratio(numerator, denominator, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
     let lhs = lhs
         .trim()
         .strip_prefix("FMT/")
@@ -2105,6 +2126,43 @@ fn parse_sample_vector_index(lhs: &str) -> Option<(&str, usize)> {
     let key = &lhs[..index_start];
     let index = lhs[index_start + 2..].strip_suffix(']')?.parse().ok()?;
     (!key.is_empty()).then_some((key, index))
+}
+
+fn parse_sample_ratio_lhs(lhs: &str) -> Option<(&str, &str)> {
+    let (numerator, denominator) = lhs.split_once('/')?;
+    let numerator = numerator.trim();
+    let denominator = denominator.trim();
+    let argument = denominator
+        .strip_prefix("sum(")
+        .or_else(|| denominator.strip_prefix("SUM("))?
+        .strip_suffix(')')?
+        .trim();
+    parse_sample_vector_index(numerator)?;
+    parse_sample_vector_wildcard(argument)?;
+    Some((numerator, argument))
+}
+
+fn parse_sample_vector_wildcard(lhs: &str) -> Option<&str> {
+    lhs.strip_suffix("[*]")
+        .filter(|key| !key.is_empty())
+        .map(str::trim)
+}
+
+fn sample_vector_ratio(
+    numerator: &str,
+    denominator: &str,
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> Option<f64> {
+    let numerator = sample_predicate_value(numerator, record, sample_index)
+        .parse::<f64>()
+        .ok()?;
+    let denominator_key = parse_sample_vector_wildcard(denominator)?;
+    let denominator = render_token(denominator_key, record, Some(sample_index))
+        .split(',')
+        .filter_map(|value| value.parse::<f64>().ok())
+        .sum::<f64>();
+    (denominator != 0.0).then_some(numerator / denominator)
 }
 
 fn sample_predicate_rhs<'a>(

@@ -1289,3 +1289,19 @@ fn query_format_vector_index_sample_predicates_match_upstream_fixtures() {
         assert_eq!(out, expected, "fixture {expected_fixture}");
     }
 }
+
+#[test]
+fn query_sample_vector_ratio_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.13.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.84.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[ %AD\\n]",
+        "-i",
+        "AD[:1] / sum(AD[*]) > 0.5",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i AD ratio failed: {err}");
+    assert_eq!(out, expected);
+}
