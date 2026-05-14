@@ -643,6 +643,20 @@ fn query_format_token_respects_sample_reordering() {
 }
 
 #[test]
+fn query_tgt_token_translates_gt_alleles_to_bases() {
+    let path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM\\t%POS\\t%REF\\t%ALT\\t%DP4\\t%AN[\\t%GT\\t%TGT]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query %TGT failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_computed_type_filter_matches_upstream_exact_fixture() {
     let path = fixture_path("query.filter-type.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.26.out")).unwrap();
