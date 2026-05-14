@@ -822,6 +822,32 @@ fn query_pbinom_formatter_uses_sample_gt_alleles() {
 }
 
 #[test]
+fn query_filter_uses_native_binom_function() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("binom-filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n\
+1\t10\t.\tA\tC\t.\tPASS\t.\tAD\t10,2\n\
+1\t11\t.\tA\tC\t.\tPASS\t.\tAD\t50,0\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t[%AD]\\n",
+        "-i",
+        "phred(binom(FMT/AD)) < 50",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(binom()) failed: {err}");
+    assert_eq!(out, "10\t10,2\n");
+}
+
+#[test]
 fn query_numeric_format_functions_sum_record_and_sample_values() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("numeric-functions.vcf");

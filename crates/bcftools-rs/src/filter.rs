@@ -768,7 +768,7 @@ fn count_truthy(value: &Value) -> usize {
 
 fn numeric_values(value: &Value) -> Vec<f64> {
     match value {
-        Value::List(values) => values.iter().filter_map(Value::as_number).collect(),
+        Value::List(values) => values.iter().flat_map(numeric_values).collect(),
         value => value.as_number().into_iter().collect(),
     }
 }

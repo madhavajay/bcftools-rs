@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use htslib_rs::expr::{Filter, Value};
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::variant::{VariantType, classify_variant};
 
 use crate::diagnostics::fmt_etag;
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::getopt::{Getopt, HasArg, LongOpt};
 
 const USAGE: &str = "\n\
@@ -578,7 +578,7 @@ struct QueryFilter {
 
 #[derive(Debug, Clone)]
 enum QueryFilterKind {
-    Expr(Filter),
+    Expr(String),
     FilterIdMatch {
         id: String,
         negate: bool,
@@ -657,9 +657,7 @@ impl QueryFilter {
             .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
-            .unwrap_or_else(|| {
-                QueryFilterKind::Expr(Filter::new(normalize_filter_expr(&spec.raw)))
-            });
+            .unwrap_or_else(|| QueryFilterKind::Expr(normalize_filter_expr(&spec.raw)));
         Ok(Self {
             kind,
             exclude: spec.exclude,
@@ -668,12 +666,12 @@ impl QueryFilter {
 
     fn matches(&self, record: &TextRecord<'_>) -> io::Result<bool> {
         let matched = match &self.kind {
-            QueryFilterKind::Expr(filter) => {
-                let value = filter
-                    .eval_with(|src| lookup_filter_symbol(src, record))
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                value.truth()
-            }
+            QueryFilterKind::Expr(expression) => bcffilter::eval_expression_with(
+                expression,
+                &filter_eval_context(record),
+                |name, sample| filter_lookup_value(name, sample, record),
+            )?
+            .truthy(),
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
@@ -924,6 +922,11 @@ fn normalize_filter_expr(raw: &str) -> String {
             '~' if !matches!(prev_non_ws, Some('!' | '=')) => {
                 out.push_str("=~");
             }
+            '%' if next.is_some_and(is_identifier_start)
+                && !prev_non_ws.is_some_and(is_identifier_continue) =>
+            {
+                out.push_str("PCT_");
+            }
             _ => out.push(ch),
         }
         if !ch.is_whitespace() {
@@ -933,31 +936,79 @@ fn normalize_filter_expr(raw: &str) -> String {
     out
 }
 
-fn lookup_filter_symbol(src: &str, record: &TextRecord<'_>) -> Option<(Value, usize)> {
-    let had_percent = src.starts_with('%');
-    let token_src = src.strip_prefix('%').unwrap_or(src);
-    let len = token_src
-        .char_indices()
-        .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/'))
-        .map(|(idx, ch)| idx + ch.len_utf8())
-        .last()?;
-    if token_src[len..].starts_with('(') {
-        return None;
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ')' | ']')
+}
+
+fn filter_eval_context(record: &TextRecord<'_>) -> EvalContext {
+    let mut context = EvalContext::new();
+    for sample_index in 0..record.sample_indices.len() {
+        let values = record
+            .fields
+            .get(8)
+            .copied()
+            .unwrap_or(".")
+            .split(':')
+            .map(|key| {
+                (
+                    key.to_string(),
+                    filter_value(record.format_value(sample_index, key)),
+                )
+            })
+            .collect::<Vec<_>>();
+        context = context.with_sample(values);
     }
-    let token = &token_src[..len];
-    let value = filter_token_value(token, had_percent, record);
-    let consumed = len + usize::from(had_percent);
-    Some((value, consumed))
+    context
+}
+
+fn filter_lookup_value(
+    token: &str,
+    sample_index: Option<usize>,
+    record: &TextRecord<'_>,
+) -> Option<FilterValue> {
+    if let Some(sample_index) = sample_index {
+        let key = token
+            .strip_prefix("FMT/")
+            .or_else(|| token.strip_prefix("FORMAT/"))
+            .unwrap_or(token);
+        return Some(filter_value(record.format_value(sample_index, key)));
+    }
+
+    Some(filter_token_value(token, token.starts_with('%'), record))
 }
 
 fn filter_token_value(
     token: &str,
     explicit_formatter_token: bool,
     record: &TextRecord<'_>,
-) -> Value {
+) -> FilterValue {
+    let token = token.strip_prefix('%').unwrap_or(token);
+    if token.starts_with("FMT/") || token.starts_with("FORMAT/") {
+        return filter_list_value(
+            (0..record.sample_indices.len())
+                .map(|sample_index| render_token(token, record, Some(sample_index)))
+                .collect(),
+        );
+    }
+    if record
+        .fields
+        .get(8)
+        .is_some_and(|format| token == "GT" || format.split(':').any(|name| name == token))
+    {
+        return filter_list_value(
+            (0..record.sample_indices.len())
+                .map(|sample_index| record.format_value(sample_index, token))
+                .collect(),
+        );
+    }
+
     let raw = if token.eq_ignore_ascii_case("type") {
         record.core("TYPE")
-    } else if explicit_formatter_token && token == "ILEN" {
+    } else if (explicit_formatter_token && token == "ILEN") || token == "PCT_ILEN" {
         record.computed_ilen().to_string()
     } else {
         render_token(token, record, None)
@@ -965,13 +1016,24 @@ fn filter_token_value(
     filter_value(raw)
 }
 
-fn filter_value(raw: String) -> Value {
+fn filter_list_value(values: Vec<String>) -> FilterValue {
+    FilterValue::List(values.into_iter().map(filter_value).collect())
+}
+
+fn filter_value(raw: String) -> FilterValue {
     if raw == "." {
-        return Value::string(raw);
+        return FilterValue::Missing;
+    }
+    if raw.contains(',') {
+        return FilterValue::List(
+            raw.split(',')
+                .map(|value| filter_value(value.into()))
+                .collect(),
+        );
     }
     raw.parse::<f64>()
-        .map(Value::number)
-        .unwrap_or_else(|_| Value::string(raw))
+        .map(FilterValue::Number)
+        .unwrap_or(FilterValue::String(raw))
 }
 
 fn query_sample_indices(
