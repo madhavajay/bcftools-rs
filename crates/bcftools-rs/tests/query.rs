@@ -1120,7 +1120,7 @@ fn query_pbinom_formatter_uses_sample_gt_alleles() {
         input.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -f %PBINOM failed: {err}");
-    assert_eq!(out, "A:0/1:14.137028610125322\nB:0/0:0\nC:0/1:.\nD:./.:.\n");
+    assert_eq!(out, "A:0/1:14.137\nB:0/0:0\nC:0/1:.\nD:./.:.\n");
 }
 
 #[test]
@@ -1147,6 +1147,22 @@ fn query_filter_uses_native_binom_function() {
     ]);
     assert_eq!(code, 0, "query -i phred(binom()) failed: {err}");
     assert_eq!(out, "10\t10,2\n");
+}
+
+#[test]
+fn query_pbinom_filter_and_formatter_match_upstream_fixture() {
+    let path = fixture_path("query.pbinom.1.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.65.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS %SAMPLE %GT %AD %PBINOM(AD)\\n]",
+        "-i",
+        "phred(binom(FMT/AD))>=0",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(binom(FMT/AD)) failed: {err}");
+    assert_eq!(out, expected);
 }
 
 #[test]

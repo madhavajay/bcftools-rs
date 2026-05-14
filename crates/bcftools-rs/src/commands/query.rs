@@ -925,6 +925,18 @@ fn sample_predicate_is_supported(raw: &str, allow_bare_format_tags: bool) -> boo
                     | PredicateOp::Le
             );
     }
+    if parse_sample_phred_binom_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
     if parse_sample_binom_lhs(lhs).is_some() {
         return rhs.trim().parse::<f64>().is_ok()
             && matches!(
@@ -1969,8 +1981,25 @@ fn pbinom_from_gt_and_values(gt: &str, values: &str) -> Option<String> {
     } else if pval <= 0.0 {
         Some("99".into())
     } else {
-        Some(format_number(-4.34294481903 * pval.ln()))
+        Some(format_pbinom_score(-4.34294481903 * pval.ln()))
     }
+}
+
+fn format_pbinom_score(value: f64) -> String {
+    if value.fract() == 0.0 {
+        return format!("{value:.0}");
+    }
+    let abs = value.abs();
+    let digits_before_decimal = if abs >= 1.0 {
+        abs.log10().floor() as isize + 1
+    } else {
+        0
+    };
+    let decimals = (6 - digits_before_decimal).max(0) as usize;
+    format!("{value:.decimals$}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 fn parse_diploid_gt(gt: &str) -> Option<[usize; 2]> {
@@ -2036,10 +2065,17 @@ fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
         return None;
     }
     let mut in_string = false;
+    let mut depth = 1usize;
     for (idx, ch) in segment[open_idx + 1..].char_indices() {
         match ch {
             '"' => in_string = !in_string,
-            ')' if !in_string => return Some(open_idx + 1 + idx),
+            '(' if !in_string => depth += 1,
+            ')' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_idx + 1 + idx);
+                }
+            }
             _ => {}
         }
     }
@@ -2165,6 +2201,15 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
             return false;
         };
         let Some(value) = sample_vector_sum(argument, record, sample_index) else {
+            return false;
+        };
+        return compare_number(value, op, rhs);
+    }
+    if let Some(argument) = parse_sample_phred_binom_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        let Some(value) = sample_phred_binom(argument, record, sample_index) else {
             return false;
         };
         return compare_number(value, op, rhs);
@@ -2310,6 +2355,38 @@ fn parse_sample_sum_lhs(lhs: &str) -> Option<&str> {
     Some(argument)
 }
 
+fn parse_sample_phred_binom_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("PHRED") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    if !lhs[close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let inner = lhs[open_idx + 1..close_idx].trim();
+    let binom_open_idx = inner.find('(')?;
+    if !inner[..binom_open_idx].eq_ignore_ascii_case("BINOM") {
+        return None;
+    }
+    let binom_close_idx = find_function_end(inner, binom_open_idx)?;
+    if !inner[binom_close_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let argument = inner[binom_open_idx + 1..binom_close_idx].trim();
+    let key = argument
+        .strip_prefix("FMT/")
+        .or_else(|| argument.strip_prefix("FORMAT/"))?;
+    record_format_key_is_simple(key).then_some(argument)
+}
+
+fn record_format_key_is_simple(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+}
+
 fn parse_sample_vector_wildcard(lhs: &str) -> Option<&str> {
     lhs.strip_suffix("[*]")
         .filter(|key| !key.is_empty())
@@ -2375,6 +2452,19 @@ fn sample_vector_values(
                 .collect()
         }
     }
+}
+
+fn sample_phred_binom(argument: &str, record: &TextRecord<'_>, sample_index: usize) -> Option<f64> {
+    let gt = record.format_value(sample_index, "GT");
+    let values = sample_predicate_value(argument, record, sample_index);
+    if let Some(value) =
+        pbinom_from_gt_and_values(&gt, &values).and_then(|value| value.parse().ok())
+    {
+        return Some(value);
+    }
+    let values = parse_integer_values(&values)?;
+    let pval = binom_two_sided(*values.first()?, *values.get(1)?, 0.5);
+    (pval > 0.0).then(|| -4.34294481903 * pval.ln())
 }
 
 fn unique_gt_alleles(gt: &str) -> Option<Vec<usize>> {
