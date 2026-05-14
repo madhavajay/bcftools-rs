@@ -10,10 +10,15 @@
 //! the subcommand name (matching upstream's `main_<name>(argc, argv)` calling
 //! convention where `argv[0]` is e.g. `"view"`).
 
+pub mod concat;
+pub mod convert;
+pub mod filter;
 pub mod head;
 pub mod index;
+pub mod isec;
 pub mod query;
 pub mod reheader;
 pub mod sort;
+pub mod stats;
 pub mod tabix;
 pub mod view;
