@@ -695,6 +695,90 @@ fn query_info_type_still_prefers_info_namespace() {
 }
 
 #[test]
+fn query_core_string_and_large_position_filters_match_upstream_fixtures() {
+    let chrom_path = fixture_path("query.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.60.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%CHROM %POS\\n",
+        "-i",
+        "CHROM=\"4\"",
+        chrom_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i CHROM failed: {err}");
+    assert_eq!(out, expected);
+
+    let pos_path = fixture_path("query.filter.6.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.66.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\n",
+        "-i",
+        "POS==16777217 || POS==33554432 || POS=118673904",
+        pos_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i large POS values failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn query_negative_numeric_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.negative.vcf");
+    for (format, expression, expected_fixture) in [
+        (
+            "%POS\\t%TAG1\\n",
+            "(TAG1>=-129 && TAG1<=-120) || (TAG1>=-32769 && TAG1<=-32760)",
+            "query.61.out",
+        ),
+        (
+            "%POS\\t%TAGV1\\n",
+            "(TAGV1>=-129 && TAGV1<=-120) || (TAGV1>=-32769 && TAGV1<=-32760)",
+            "query.61.out",
+        ),
+        (
+            "%POS\\t%TAG2\\n",
+            "(TAG2>=-129 && TAG2<=-120) || (TAG2>=-32769 && TAG2<=-32760)",
+            "query.62.out",
+        ),
+        (
+            "%POS\\t%TAGV2\\n",
+            "(TAGV2>=-129 && TAGV2<=-120) || (TAGV2>=-32769 && TAGV2<=-32760)",
+            "query.62.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            format,
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
+fn query_ref_filter_matches_upstream_fixture() {
+    let path = fixture_path("filter.13.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.99.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-i",
+        "REF=\"N\"",
+        "-f",
+        "%CHROM %POS %REF %ALT %QUAL\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i REF failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_percent_ilen_filter_uses_computed_length() {
     let path = fixture_path("query.filter.8.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.69.out")).unwrap();
