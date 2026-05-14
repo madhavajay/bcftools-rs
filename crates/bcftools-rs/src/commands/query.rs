@@ -1132,7 +1132,7 @@ impl<'a> TextRecord<'a> {
         for field in info.split(';') {
             let (name, value) = field.split_once('=').unwrap_or((field, "1"));
             if name == key {
-                return value.to_string();
+                return value.trim().to_string();
             }
         }
         ".".into()
@@ -1170,9 +1170,7 @@ impl<'a> TextRecord<'a> {
             .strip_prefix("FMT/")
             .or_else(|| key.strip_prefix("FORMAT/"))
             .unwrap_or(key);
-        let format = self.fields.get(8).copied().unwrap_or(".");
-        let has_key = key == "GT" || format.split(':').any(|name| name == key);
-        if !has_key {
+        if !self.format_has_key(key) {
             return None;
         }
         Some(
@@ -1193,6 +1191,11 @@ impl<'a> TextRecord<'a> {
         (0..self.sample_indices.len())
             .filter_map(|sample_index| self.format_value(sample_index, key).parse::<f64>().ok())
             .collect()
+    }
+
+    fn format_has_key(&self, key: &str) -> bool {
+        let format = self.fields.get(8).copied().unwrap_or(".");
+        key == "GT" || format.split(':').any(|name| name == key)
     }
 
     fn format_value(&self, sample_index: usize, key: &str) -> String {
@@ -1447,18 +1450,27 @@ fn render_numeric_function(
     record: &TextRecord<'_>,
     sample_index: Option<usize>,
 ) -> String {
-    let values = numeric_format_values(argument.trim(), record, sample_index);
+    let sample_function = is_sample_numeric_function(function);
+    let values = numeric_format_values(argument.trim(), record, sample_index, sample_function);
     match function.to_ascii_uppercase().as_str() {
         "SUM" | "SSUM" | "SMPL_SUM" => {
             if values.is_empty() {
-                ".".into()
+                if sample_function {
+                    "nan".into()
+                } else {
+                    ".".into()
+                }
             } else {
                 format_number(values.iter().sum())
             }
         }
         "AVG" | "MEAN" | "SAVG" | "SMEAN" | "SMPL_AVG" | "SMPL_MEAN" => {
             if values.is_empty() {
-                ".".into()
+                if sample_function {
+                    "nan".into()
+                } else {
+                    ".".into()
+                }
             } else {
                 format_number(values.iter().sum::<f64>() / values.len() as f64)
             }
@@ -1481,14 +1493,30 @@ fn render_numeric_function(
     }
 }
 
+fn is_sample_numeric_function(function: &str) -> bool {
+    matches!(
+        function.to_ascii_uppercase().as_str(),
+        "SSUM"
+            | "SMPL_SUM"
+            | "SAVG"
+            | "SMEAN"
+            | "SMPL_AVG"
+            | "SMPL_MEAN"
+            | "SMIN"
+            | "SMPL_MIN"
+            | "SMAX"
+            | "SMPL_MAX"
+    )
+}
+
 fn numeric_format_values(
     argument: &str,
     record: &TextRecord<'_>,
     sample_index: Option<usize>,
+    sample_function: bool,
 ) -> Vec<f64> {
-    let rendered_values = if sample_index.is_none()
-        && (argument.starts_with("FORMAT/") || argument.starts_with("FMT/"))
-    {
+    let is_format_argument = argument.starts_with("FORMAT/") || argument.starts_with("FMT/");
+    let rendered_values = if is_format_argument && (!sample_function || sample_index.is_none()) {
         (0..record.sample_indices.len())
             .map(|i| render_token(argument, record, Some(i)))
             .collect::<Vec<_>>()
@@ -1770,11 +1798,11 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
             .map(|i| record.format_value(i, key))
             .unwrap_or_else(|| ".".into());
     }
-    if !force_record_namespace && let Some(i) = sample_index {
-        let value = record.format_value(i, token);
-        if value != "." {
-            return value;
-        }
+    if !force_record_namespace
+        && let Some(i) = sample_index
+        && record.format_has_key(token)
+    {
+        return record.format_value(i, token);
     }
     match token {
         "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "FORMAT"

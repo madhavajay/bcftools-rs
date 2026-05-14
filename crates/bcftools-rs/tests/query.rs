@@ -898,6 +898,34 @@ fn query_numeric_format_functions_sum_record_and_sample_values() {
 }
 
 #[test]
+fn query_numeric_format_functions_match_upstream_fixtures() {
+    let path = fixture_path("query.func.1.vcf");
+    for (format, expected_fixture) in [
+        (
+            "%CHROM:%POS\\t%INFO/AD\\t%SUM(INFO/AD)",
+            "query.func.1.1.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t%SUM(FORMAT/AD)",
+            "query.func.1.2.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t[ %SUM(FORMAT/AD)]",
+            "query.func.1.3.out",
+        ),
+        (
+            "%CHROM:%POS\\t[%AD ]\\t[ %sSUM(FORMAT/AD)]",
+            "query.func.1.4.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&["query", "-f", format, path.to_str().unwrap()]);
+        assert_eq!(code, 0, "query -f {format} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_n_pass_filter_counts_numeric_format_predicates() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.63.out")).unwrap();
