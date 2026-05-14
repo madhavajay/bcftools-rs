@@ -634,6 +634,25 @@ fn eval_call(
                 ))
             }
         }
+        "MEDIAN" | "SMEDIAN" | "SMPL_MEDIAN" => {
+            require_arity(function, args, 1)?;
+            let mut values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+            if values.is_empty() {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{function} requires numeric values"),
+                ))
+            } else {
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let mid = values.len() / 2;
+                let median = if values.len().is_multiple_of(2) {
+                    (values[mid - 1] + values[mid]) / 2.0
+                } else {
+                    values[mid]
+                };
+                Ok(Value::Number(median))
+            }
+        }
         "STDEV" | "SSTDEV" | "SMPL_STDEV" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
@@ -1491,6 +1510,10 @@ mod tests {
         );
         assert_eq!(
             eval_expression("MEAN(AD)", &context).unwrap(),
+            Value::Number(6.0)
+        );
+        assert_eq!(
+            eval_expression("MEDIAN(AD)", &context).unwrap(),
             Value::Number(6.0)
         );
         assert_eq!(
