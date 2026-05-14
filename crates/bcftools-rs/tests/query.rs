@@ -745,6 +745,38 @@ fn query_filter_negated_id_match_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_id_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.filter.id.vcf");
+    let list = fixture_path("query.filter.id.3.txt");
+    for (expression, expected_fixture) in [
+        ("ID~\"s12\"".to_string(), "query.filter.id.1.out"),
+        ("ID=\"rs123\"".to_string(), "query.filter.id.2.out"),
+        ("ID=\"abc\"".to_string(), "query.filter.id.3.out"),
+        (
+            format!("ID=@{}", list.to_string_lossy()),
+            "query.filter.id.3.out",
+        ),
+        ("ID!=\"abc\"".to_string(), "query.filter.id.4.out"),
+        (
+            format!("ID!=@{}", list.to_string_lossy()),
+            "query.filter.id.4.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%ID\\n",
+            "-i",
+            &expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_missing_integer_info_matches_upstream_fixtures() {
     let path = fixture_path("missing.vcf");
     let expected_missing = std::fs::read_to_string(fixture_path("query.18.out")).unwrap();

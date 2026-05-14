@@ -1332,6 +1332,16 @@ impl<'a> TextRecord<'a> {
         } else {
             render_token(key, self, None)
         };
+        if key == "ID" {
+            let mut values = vec![value.clone()];
+            values.extend(
+                value
+                    .split(';')
+                    .filter(|part| !part.is_empty() && *part != value)
+                    .map(ToOwned::to_owned),
+            );
+            return values;
+        }
         if vector_any || key == "ALT" {
             value.split(',').map(ToOwned::to_owned).collect()
         } else {
