@@ -725,12 +725,24 @@ impl SimplePredicate {
     fn matches(&self, record: &TextRecord<'_>) -> bool {
         let values = record.predicate_values(&self.lhs, self.vector_any);
         match self.op {
-            PredicateOp::Eq => values.iter().any(|value| value == &self.rhs),
+            PredicateOp::Eq => values.iter().any(|value| {
+                if self.lhs.eq_ignore_ascii_case("TYPE") {
+                    value == &self.rhs
+                } else {
+                    string_value_matches(value, &self.rhs)
+                }
+            }),
             PredicateOp::Ne if self.vector_any => values.iter().any(|value| value != &self.rhs),
-            PredicateOp::Ne => values.iter().all(|value| value != &self.rhs),
-            PredicateOp::Regex => values
-                .iter()
-                .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| re.is_match(value))),
+            PredicateOp::Ne => values.iter().all(|value| {
+                if self.lhs.eq_ignore_ascii_case("TYPE") {
+                    value != &self.rhs
+                } else {
+                    !string_value_matches(value, &self.rhs)
+                }
+            }),
+            PredicateOp::Regex => values.iter().any(|value| {
+                regex::Regex::new(&self.rhs).is_ok_and(|re| string_value_regex_matches(value, &re))
+            }),
             PredicateOp::NotRegex if self.vector_any => values
                 .iter()
                 .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
@@ -740,6 +752,17 @@ impl SimplePredicate {
             PredicateOp::Gt | PredicateOp::Ge | PredicateOp::Lt | PredicateOp::Le => false,
         }
     }
+}
+
+fn string_value_matches(value: &str, rhs: &str) -> bool {
+    value == rhs
+        || rhs
+            .split(',')
+            .any(|rhs_part| value.split(',').any(|value_part| value_part == rhs_part))
+}
+
+fn string_value_regex_matches(value: &str, regex: &regex::Regex) -> bool {
+    regex.is_match(value) || value.split(',').any(|part| regex.is_match(part))
 }
 
 fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>> {

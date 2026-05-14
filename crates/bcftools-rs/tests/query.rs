@@ -312,7 +312,7 @@ fn query_exclude_filters_string_info_fields() {
         "-f",
         "%POS\\t%CLNREVSTAT\\n",
         "-e",
-        "CLNREVSTAT=\"criteria_provided,_single_submitter\"",
+        "CLNREVSTAT=\"_single_submitter\"",
         path.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "query -e failed: {err}");
@@ -321,6 +321,37 @@ fn query_exclude_filters_string_info_fields() {
         "865568\tcriteria_provided,_conflicting_interpretations\n\
 865628\tcriteria_provided,_multiple_submitters,_no_conflicts\n"
     );
+}
+
+#[test]
+fn query_string_info_filters_match_upstream_fixtures() {
+    let path = fixture_path("query.string.vcf");
+    for (expression, expected_fixture) in [
+        (
+            "CLNREVSTAT=\"criteria_provided,_conflicting_interpretations\"",
+            "query.string.1.out",
+        ),
+        (
+            "CLNREVSTAT=\"criteria_provided\" || CLNREVSTAT=\"_conflicting_interpretations\"",
+            "query.string.1.out",
+        ),
+        (
+            "CLNREVSTAT=\"criteria_provided\" && CLNREVSTAT=\"_conflicting_interpretations\"",
+            "query.string.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%CHROM\\t%POS\\t%CLNREVSTAT\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
 }
 
 #[test]
