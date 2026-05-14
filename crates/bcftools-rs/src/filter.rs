@@ -400,6 +400,9 @@ fn eval_with_trace(
     mut trace: Option<&mut EvalTrace>,
 ) -> io::Result<Value> {
     match expr {
+        Expr::Identifier(name) if name.eq_ignore_ascii_case("F_MISSING") => {
+            f_missing(context, resolver).map(Value::Number)
+        }
         Expr::Identifier(name) => Ok(resolve_identifier(
             name,
             context,
@@ -543,12 +546,18 @@ fn eval_binary(
         ));
     }
 
+    let compare = if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && compares_gt_special(lhs, rhs) {
+        scalar_eq_with_gt_special
+    } else {
+        Value::scalar_eq
+    };
+
     let lhs = eval_with_trace(lhs, context, resolver, trace.as_deref_mut())?;
     let rhs = eval_with_trace(rhs, context, resolver, trace)?;
 
     match op {
-        BinaryOp::Eq => Ok(Value::Bool(compare_any(&lhs, &rhs, Value::scalar_eq))),
-        BinaryOp::Ne => Ok(Value::Bool(!compare_any(&lhs, &rhs, Value::scalar_eq))),
+        BinaryOp::Eq => Ok(Value::Bool(compare_any(&lhs, &rhs, compare))),
+        BinaryOp::Ne => Ok(Value::Bool(!compare_any(&lhs, &rhs, compare))),
         BinaryOp::Lt => compare_numbers(&lhs, &rhs, |lhs, rhs| lhs < rhs),
         BinaryOp::Le => compare_numbers(&lhs, &rhs, |lhs, rhs| lhs <= rhs),
         BinaryOp::Gt => compare_numbers(&lhs, &rhs, |lhs, rhs| lhs > rhs),
@@ -567,6 +576,28 @@ fn eval_binary(
         BinaryOp::Mod => Ok(Value::Number(number(&lhs)? % number(&rhs)?)),
         BinaryOp::And | BinaryOp::Or => unreachable!("handled before eager evaluation"),
     }
+}
+
+fn compares_gt_special(lhs: &Expr, rhs: &Expr) -> bool {
+    (expr_is_gt_identifier(lhs) && expr_is_gt_special_literal(rhs))
+        || (expr_is_gt_identifier(rhs) && expr_is_gt_special_literal(lhs))
+}
+
+fn expr_is_gt_identifier(expr: &Expr) -> bool {
+    let Expr::Identifier(name) = expr else {
+        return false;
+    };
+    name.strip_prefix("FMT/")
+        .or_else(|| name.strip_prefix("FORMAT/"))
+        .unwrap_or(name)
+        .eq_ignore_ascii_case("GT")
+}
+
+fn expr_is_gt_special_literal(expr: &Expr) -> bool {
+    let Expr::String(value) = expr else {
+        return false;
+    };
+    matches!(value.as_str(), "alt" | "ref" | "mis" | "het" | "hom")
 }
 
 fn eval_call(
@@ -603,6 +634,32 @@ fn eval_call(
                 }
             }
             Ok(Value::Number(count as f64))
+        }
+        "F_PASS" => {
+            require_arity(function, args, 1)?;
+            if context.sample_count() == 0 {
+                let value = eval_with_trace(&args[0], context, resolver, trace.as_deref_mut())?;
+                return Ok(Value::Number(if value.truthy() { 1.0 } else { 0.0 }));
+            }
+
+            let mut count = 0usize;
+            for sample in 0..context.sample_count() {
+                if eval_with_trace(
+                    &args[0],
+                    &context.for_sample(sample),
+                    resolver,
+                    trace.as_deref_mut(),
+                )?
+                .truthy()
+                {
+                    count += 1;
+                }
+            }
+            Ok(Value::Number(count as f64 / context.sample_count() as f64))
+        }
+        "F_MISSING" => {
+            require_arity(function, args, 0)?;
+            f_missing(context, resolver).map(Value::Number)
         }
         "MIN" => {
             require_arity(function, args, 1)?;
@@ -881,6 +938,65 @@ fn count_truthy(value: &Value) -> usize {
     match value {
         Value::List(values) => values.iter().filter(|value| value.truthy()).count(),
         value => usize::from(value.truthy()),
+    }
+}
+
+fn f_missing(
+    context: &EvalContext,
+    resolver: &mut impl FnMut(&str, Option<usize>) -> Option<Value>,
+) -> io::Result<f64> {
+    if context.sample_count() == 0 {
+        return Ok(0.0);
+    }
+
+    let missing = (0..context.sample_count())
+        .filter(|sample| {
+            let sample_context = context.for_sample(*sample);
+            gt_is_missing_value(&resolve_identifier("GT", &sample_context, resolver, None))
+        })
+        .count();
+    Ok(missing as f64 / context.sample_count() as f64)
+}
+
+fn scalar_eq_with_gt_special(lhs: &Value, rhs: &Value) -> bool {
+    match (lhs, rhs) {
+        (Value::String(lhs), Value::String(rhs)) => gt_special_matches(lhs, rhs)
+            .unwrap_or_else(|| gt_special_matches(rhs, lhs).unwrap_or_else(|| lhs == rhs)),
+        _ => lhs.scalar_eq(rhs),
+    }
+}
+
+fn gt_special_matches(value: &str, rhs: &str) -> Option<bool> {
+    Some(match rhs {
+        "alt" => gt_alleles(value).any(|allele| allele != "." && allele != "0"),
+        "ref" => !value.is_empty() && gt_alleles(value).all(|allele| allele == "0"),
+        "mis" => gt_alleles(value).any(|allele| allele == "."),
+        "het" => {
+            let alleles = gt_alleles(value).collect::<Vec<_>>();
+            alleles
+                .first()
+                .is_some_and(|first| *first != "." && alleles.iter().any(|allele| allele != first))
+        }
+        "hom" => {
+            let alleles = gt_alleles(value).collect::<Vec<_>>();
+            alleles
+                .first()
+                .is_some_and(|first| *first != "." && alleles.iter().all(|allele| allele == first))
+        }
+        _ => return None,
+    })
+}
+
+fn gt_alleles(value: &str) -> impl Iterator<Item = &str> {
+    value.split(['/', '|'])
+}
+
+fn gt_is_missing_value(value: &Value) -> bool {
+    match value {
+        Value::String(value) => gt_alleles(value).any(|allele| allele == "."),
+        Value::List(values) => values.iter().any(gt_is_missing_value),
+        Value::Missing => true,
+        _ => false,
     }
 }
 
@@ -1409,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluates_n_pass_against_sample_contexts() {
+    fn evaluates_sample_count_functions_against_sample_contexts() {
         let context = EvalContext::new()
             .with("QUAL", Value::Number(60.0))
             .with_sample([
@@ -1436,6 +1552,18 @@ mod tests {
         assert_eq!(
             eval_expression(r#"QUAL = 60 && N_PASS(FORMAT/DP > 10) = 2"#, &context).unwrap(),
             Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression(r#"F_PASS(FMT/DP > 10)"#, &context).unwrap(),
+            Value::Number(2.0 / 3.0)
+        );
+        assert_eq!(
+            eval_expression(r#"F_MISSING"#, &context).unwrap(),
+            Value::Number(1.0 / 3.0)
+        );
+        assert_eq!(
+            eval_expression(r#"F_PASS(GT = "mis")"#, &context).unwrap(),
+            Value::Number(1.0 / 3.0)
         );
     }
 

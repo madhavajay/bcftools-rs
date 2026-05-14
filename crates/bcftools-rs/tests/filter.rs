@@ -672,6 +672,61 @@ fn filter_threads_rejects_non_integer_argument() {
 }
 
 #[test]
+fn filter_sample_fraction_matches_sample_count_on_upstream_fixture() {
+    for expr in ["N_PASS(DP>32)=1", "F_PASS(DP>32)=0.5"] {
+        let (out, err, code) = run(&[
+            "filter",
+            "--no-version",
+            "-i",
+            expr,
+            "../../bcftools/test/filter.2.vcf",
+        ]);
+        assert_eq!(code, 0, "filter -i {expr} failed: {err}");
+        let records: Vec<Vec<&str>> = out
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .map(|line| line.split('\t').collect())
+            .collect();
+        assert_eq!(records.len(), 3, "unexpected records for {expr}:\n{out}");
+        assert_eq!(records[0][1], "3062915");
+        assert_eq!(records[0][9], "0/1:25:35:-20,-5,-20");
+        assert_eq!(records[0][10], "0/1:45:11:-20,-5,-20");
+        assert_eq!(records[1][1], "3106154");
+        assert_eq!(records[1][9], "0/1:245:32");
+        assert_eq!(records[1][10], "0/1:25:300");
+        assert_eq!(records[2][1], "3106154");
+        assert_eq!(records[2][9], "0/1:25:12");
+        assert_eq!(records[2][10], "0/1:245:310");
+    }
+}
+
+#[test]
+fn filter_missing_fraction_matches_upstream_filter_28_fixture() {
+    for expr in [
+        "F_MISSING>=1/5",
+        "F_MISSING>=0.2",
+        "F_PASS(GT==\"mis\")>=1/5",
+        "F_PASS(GT==\"mis\")>=0.2",
+    ] {
+        let (out, err, code) = run(&[
+            "filter",
+            "--no-version",
+            "-i",
+            expr,
+            "../../bcftools/test/filter.6.vcf",
+        ]);
+        assert_eq!(code, 0, "filter -i {expr} failed: {err}");
+        let records: Vec<Vec<&str>> = out
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .map(|line| line.split('\t').collect())
+            .collect();
+        assert_eq!(records.len(), 1, "unexpected records for {expr}:\n{out}");
+        assert_eq!(records[0][1], "3162007");
+    }
+}
+
+#[test]
 fn filter_no_args_prints_usage() {
     let (_out, err, code) = run(&["filter"]);
     assert_ne!(code, 0);
