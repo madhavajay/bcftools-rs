@@ -926,6 +926,20 @@ fn query_numeric_format_functions_match_upstream_fixtures() {
 }
 
 #[test]
+fn query_sample_count_formatter_matches_upstream_fixture() {
+    let path = fixture_path("smpl-count.vcf");
+    let expected = std::fs::read_to_string(fixture_path("smpl-count.1.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%CHROM\\t%POS\\t%GT\\t%LAA\\t%smpl_count(FMT/LAA)\\n]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %smpl_count failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_n_pass_filter_counts_numeric_format_predicates() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.63.out")).unwrap();

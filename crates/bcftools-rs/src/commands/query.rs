@@ -1384,6 +1384,18 @@ fn render_segment(
                             break;
                         }
                     }
+                } else if token.eq_ignore_ascii_case("SMPL_COUNT")
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&sample_count(argument, record, sample_index).to_string());
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
                 } else if is_numeric_format_function(token)
                     && let Some(function_end) = find_function_end(segment, token_end)
                 {
@@ -1641,6 +1653,27 @@ fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
 fn n_pass(expression: &str, record: &TextRecord<'_>) -> usize {
     (0..record.sample_indices.len())
         .filter(|&sample_index| sample_expression_matches(expression, record, sample_index))
+        .count()
+}
+
+fn sample_count(argument: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> usize {
+    let argument = argument.trim();
+    let values = if let Some(sample_index) = sample_index {
+        vec![render_token(argument, record, Some(sample_index))]
+    } else if argument.starts_with("FORMAT/") || argument.starts_with("FMT/") {
+        (0..record.sample_indices.len())
+            .map(|sample_index| render_token(argument, record, Some(sample_index)))
+            .collect()
+    } else {
+        vec![render_token(argument, record, None)]
+    };
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .filter(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "."
+        })
         .count()
 }
 
