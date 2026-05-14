@@ -82,6 +82,8 @@ These are used by nearly every subcommand and must exist before subcommands can 
 - [x] **Sample-list helpers** (`bcftools-rs/src/smpl_ilist.rs`): port `smpl_ilist.c` (sample subset, `^` exclusion, file-input form). Used by `view -s`, `call -s`, `stats -s`, many plugins.
 - [x] **Region/target index** (`bcftools-rs/src/regidx.rs`): thin wrapper over `htslib-rs::regidx::RegionIndex` with bcftools-specific BED/region parsing helpers. Used by `view -R/-T`, `filter -R/-T`, `annotate`, `isec`, etc.
 - [ ] **VCF buffer** (`bcftools-rs/src/vcfbuf.rs`): port `vcfbuf.c` (windowed buffer of `bcf1_t` records with overlap/window controls). Used by `+prune`, `+remove-overlaps`, `norm`, `+scatter`.
+  - [x] Snapshot coverage: record-shape-independent window buffer with sorted insertion, half-open span overlap queries, contig-aware flushing, and configurable look-ahead window flushing.
+  - [ ] Remaining: wire to concrete VCF/BCF record mutation paths in `norm`/plugins and audit behavior against upstream `vcfbuf.c` edge cases.
 - [ ] **`abuf` allele buffer** (`bcftools-rs/src/abuf.rs`): port `abuf.c` (allele-aware comparison buffer). Used by `norm`, `merge`, `+remove-overlaps`.
 - [ ] **`convert` formatter** (`bcftools-rs/src/convert/`): port `convert.c` (76k). The `-f` format-string mini-language used by `query`, `convert`, and several plugins. Decisively non-trivial: token grammar, FORMAT/INFO tag expansion, sample iteration, GT special forms.
 - [x] **gVCF helpers** (`bcftools-rs/src/gvcf.rs`): port `gvcf.c`. Used by `call`, `convert --gvcf2vcf`, `+gvcfz`.

@@ -20,6 +20,7 @@ pub mod regidx;
 pub mod smpl_ilist;
 pub mod synced;
 pub mod tsv2vcf;
+pub mod vcfbuf;
 pub mod version;
 
 pub use diagnostics::{error, error_errno};
