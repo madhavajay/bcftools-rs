@@ -7,8 +7,11 @@
 
 pub mod abuf;
 pub mod commands;
+pub mod convert;
 pub mod diagnostics;
+pub mod filter;
 pub mod getopt;
+pub mod gff;
 pub mod gvcf;
 pub mod header_version;
 pub mod hmm;
