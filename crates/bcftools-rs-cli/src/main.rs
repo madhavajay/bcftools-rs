@@ -50,7 +50,7 @@ const CMDS: &[Cmd] = &[
         help: "",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::annotate::main),
         alias: "annotate",
         help: "annotate and edit VCF/BCF files",
     },
