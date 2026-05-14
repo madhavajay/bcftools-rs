@@ -87,11 +87,15 @@ fn render_function(
     sample_index: Option<usize>,
 ) -> io::Result<String> {
     let function_key = function.to_ascii_uppercase();
-    let numbers = numeric_function_values(function, argument, record, sample_index)?;
 
     match function_key.as_str() {
-        "SUM" | "SSUM" | "SMPL_SUM" => Ok(format_number(numbers.iter().sum())),
+        "PBINOM" => Ok(render_pbinom(argument, record, sample_index)),
+        "SUM" | "SSUM" | "SMPL_SUM" => {
+            let numbers = numeric_function_values(function, argument, record, sample_index)?;
+            Ok(format_number(numbers.iter().sum()))
+        }
         "AVG" | "SAVG" | "SMPL_AVG" => {
+            let numbers = numeric_function_values(function, argument, record, sample_index)?;
             if numbers.is_empty() {
                 Ok(".".into())
             } else {
@@ -100,21 +104,113 @@ fn render_function(
                 ))
             }
         }
-        "MIN" | "SMIN" | "SMPL_MIN" => Ok(numbers
-            .into_iter()
-            .reduce(f64::min)
-            .map(format_number)
-            .unwrap_or_else(|| ".".into())),
-        "MAX" | "SMAX" | "SMPL_MAX" => Ok(numbers
-            .into_iter()
-            .reduce(f64::max)
-            .map(format_number)
-            .unwrap_or_else(|| ".".into())),
+        "MIN" | "SMIN" | "SMPL_MIN" => {
+            let numbers = numeric_function_values(function, argument, record, sample_index)?;
+            Ok(numbers
+                .into_iter()
+                .reduce(f64::min)
+                .map(format_number)
+                .unwrap_or_else(|| ".".into()))
+        }
+        "MAX" | "SMAX" | "SMPL_MAX" => {
+            let numbers = numeric_function_values(function, argument, record, sample_index)?;
+            Ok(numbers
+                .into_iter()
+                .reduce(f64::max)
+                .map(format_number)
+                .unwrap_or_else(|| ".".into()))
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("unsupported format function %{function}"),
         )),
     }
+}
+
+fn render_pbinom(
+    argument: &str,
+    record: &impl FormatRecord,
+    sample_index: Option<usize>,
+) -> String {
+    let Some(sample_index) = sample_index else {
+        return ".".into();
+    };
+    let Some(gt) = record.value("GT", Some(sample_index)) else {
+        return ".".into();
+    };
+    let values =
+        render_token(argument.trim(), record, Some(sample_index)).unwrap_or_else(|_| ".".into());
+
+    pbinom_from_gt_and_values(&gt, &values).unwrap_or_else(|| ".".into())
+}
+
+fn pbinom_from_gt_and_values(gt: &str, values: &str) -> Option<String> {
+    let alleles = parse_diploid_gt(gt)?;
+    let values = parse_integer_values(values)?;
+    let counts = [*values.get(alleles[0])?, *values.get(alleles[1])?];
+
+    if counts[0] == counts[1] {
+        return Some(if counts[0] == 0 { "." } else { "0" }.into());
+    }
+
+    let pval = binom_two_sided(counts[0], counts[1], 0.5);
+    if pval >= 1.0 {
+        Some("0".into())
+    } else if pval <= 0.0 {
+        Some("99".into())
+    } else {
+        Some(format_number(-4.34294481903 * pval.ln()))
+    }
+}
+
+fn parse_diploid_gt(gt: &str) -> Option<[usize; 2]> {
+    let mut alleles = gt.split(['/', '|']);
+    let first = parse_gt_allele(alleles.next()?)?;
+    let second = parse_gt_allele(alleles.next()?)?;
+    alleles.next().is_none().then_some([first, second])
+}
+
+fn parse_gt_allele(allele: &str) -> Option<usize> {
+    let allele = allele.split(':').next()?.trim();
+    (!allele.is_empty() && allele != ".")
+        .then(|| allele.parse().ok())
+        .flatten()
+}
+
+fn parse_integer_values(values: &str) -> Option<Vec<i32>> {
+    values
+        .split(',')
+        .map(|value| {
+            let value = value.trim();
+            (!value.is_empty() && value != ".")
+                .then(|| value.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn binom_two_sided(a: i32, b: i32, probability: f64) -> f64 {
+    if a < 0 || b < 0 {
+        return 0.0;
+    }
+    if a == 0 && b == 0 {
+        return -1.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+
+    let n = (a + b) as usize;
+    let limit = a.min(b) as usize;
+    let mut term = (1.0 - probability).powi(n as i32);
+    let mut cdf = term;
+
+    for k in 0..limit {
+        term *= (n - k) as f64 / (k + 1) as f64 * probability / (1.0 - probability);
+        cdf += term;
+    }
+
+    (2.0 * cdf).min(1.0)
 }
 
 fn numeric_function_values(
@@ -532,6 +628,33 @@ mod tests {
             .unwrap(),
             "13\t11\t9\n"
         );
+    }
+
+    #[test]
+    fn renders_pbinom_for_diploid_sample_loop() {
+        let record = MockRecord::default()
+            .with_sample(&[("GT", "0/1"), ("AD", "10,2")])
+            .with_sample(&[("GT", "0/0"), ("AD", "5,5")])
+            .with_sample(&[("GT", "0/1"), ("AD", "0,0")])
+            .with_sample(&[("GT", "./."), ("AD", "3,4")]);
+
+        assert_eq!(
+            render_format("[%SAMPLE:%GT:%PBINOM(AD)\\n]", &record).unwrap(),
+            "S1:0/1:14.137028610125322\nS2:0/0:0\nS3:0/1:.\nS4:./.:.\n"
+        );
+    }
+
+    #[test]
+    fn computes_pbinom_from_gt_allele_indexes() {
+        assert_eq!(
+            pbinom_from_gt_and_values("1/2", "9,10,2").unwrap(),
+            "14.137028610125322"
+        );
+        assert_eq!(pbinom_from_gt_and_values("0|1", "5,5").unwrap(), "0");
+        assert_eq!(pbinom_from_gt_and_values("0/1", "0,0").unwrap(), ".");
+        assert!(pbinom_from_gt_and_values("0/1/2", "1,2,3").is_none());
+        assert!(pbinom_from_gt_and_values("./.", "1,2").is_none());
+        assert!(pbinom_from_gt_and_values("0/2", "1,2").is_none());
     }
 
     #[test]

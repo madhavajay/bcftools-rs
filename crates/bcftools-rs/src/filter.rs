@@ -614,6 +614,36 @@ fn eval_call(
                     io::Error::new(io::ErrorKind::InvalidInput, "MIN requires numeric values")
                 })
         }
+        "SUM" => {
+            require_arity(function, args, 1)?;
+            let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+            Ok(Value::Number(values.iter().sum()))
+        }
+        "AVG" | "MEAN" => {
+            require_arity(function, args, 1)?;
+            let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+            if values.is_empty() {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{function} requires numeric values"),
+                ))
+            } else {
+                Ok(Value::Number(
+                    values.iter().sum::<f64>() / values.len() as f64,
+                ))
+            }
+        }
+        "ABS" => {
+            require_arity(function, args, 1)?;
+            Ok(Value::Number(
+                number(&eval_with_trace(&args[0], context, resolver, trace)?)?.abs(),
+            ))
+        }
+        "PHRED" => {
+            require_arity(function, args, 1)?;
+            let value = number(&eval_with_trace(&args[0], context, resolver, trace)?)?;
+            Ok(Value::Number(phred_score(value)))
+        }
         "MAX" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
@@ -630,6 +660,14 @@ fn eval_call(
             format!("unsupported filter function {function}"),
         )),
     }
+}
+
+fn phred_score(probability: f64) -> f64 {
+    if probability == 0.0 {
+        return 99.0;
+    }
+
+    (-4.3429 * probability.ln()).min(99.0)
 }
 
 fn require_arity(function: &str, args: &[Expr], expected: usize) -> io::Result<()> {
@@ -1246,6 +1284,39 @@ mod tests {
             eval_expression("0 && UNKNOWN > 1", &context).unwrap(),
             Value::Bool(false)
         );
+    }
+
+    #[test]
+    fn evaluates_common_numeric_functions() {
+        let context = EvalContext::new()
+            .with(
+                "AD",
+                Value::List(vec![Value::Number(3.0), Value::Number(9.0)]),
+            )
+            .with("DELTA", Value::Number(-4.0))
+            .with("PVALUE", Value::Number(0.01));
+
+        assert_eq!(
+            eval_expression("SUM(AD)", &context).unwrap(),
+            Value::Number(12.0)
+        );
+        assert_eq!(
+            eval_expression("AVG(AD)", &context).unwrap(),
+            Value::Number(6.0)
+        );
+        assert_eq!(
+            eval_expression("MEAN(AD)", &context).unwrap(),
+            Value::Number(6.0)
+        );
+        assert_eq!(
+            eval_expression("ABS(DELTA)", &context).unwrap(),
+            Value::Number(4.0)
+        );
+
+        let Value::Number(phred) = eval_expression("PHRED(PVALUE)", &context).unwrap() else {
+            panic!("PHRED should return a number");
+        };
+        assert!((phred - 20.0).abs() < 0.001);
     }
 
     #[test]

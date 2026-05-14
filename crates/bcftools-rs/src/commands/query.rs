@@ -1319,12 +1319,217 @@ fn render_segment(
                             break;
                         }
                     }
+                } else if is_numeric_format_function(token)
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&render_numeric_function(
+                        token,
+                        argument,
+                        record,
+                        sample_index,
+                    ));
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                } else if token == "PBINOM"
+                    && let Some(function_end) = find_function_end(segment, token_end)
+                {
+                    let argument = &segment[token_end + 1..function_end];
+                    out.push_str(&pbinom(argument, record, sample_index));
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        if next_idx <= function_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
                 } else {
                     out.push_str(&render_token(token, record, sample_index));
                 }
             }
             _ => out.push(ch),
         }
+    }
+}
+
+fn is_numeric_format_function(token: &str) -> bool {
+    matches!(
+        token.to_ascii_uppercase().as_str(),
+        "SUM"
+            | "SSUM"
+            | "SMPL_SUM"
+            | "AVG"
+            | "MEAN"
+            | "SAVG"
+            | "SMEAN"
+            | "SMPL_AVG"
+            | "SMPL_MEAN"
+            | "MIN"
+            | "SMIN"
+            | "SMPL_MIN"
+            | "MAX"
+            | "SMAX"
+            | "SMPL_MAX"
+            | "ABS"
+    )
+}
+
+fn render_numeric_function(
+    function: &str,
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+) -> String {
+    let values = numeric_format_values(argument.trim(), record, sample_index);
+    match function.to_ascii_uppercase().as_str() {
+        "SUM" | "SSUM" | "SMPL_SUM" => {
+            if values.is_empty() {
+                ".".into()
+            } else {
+                format_number(values.iter().sum())
+            }
+        }
+        "AVG" | "MEAN" | "SAVG" | "SMEAN" | "SMPL_AVG" | "SMPL_MEAN" => {
+            if values.is_empty() {
+                ".".into()
+            } else {
+                format_number(values.iter().sum::<f64>() / values.len() as f64)
+            }
+        }
+        "MIN" | "SMIN" | "SMPL_MIN" => values
+            .into_iter()
+            .reduce(f64::min)
+            .map(format_number)
+            .unwrap_or_else(|| ".".into()),
+        "MAX" | "SMAX" | "SMPL_MAX" => values
+            .into_iter()
+            .reduce(f64::max)
+            .map(format_number)
+            .unwrap_or_else(|| ".".into()),
+        "ABS" => values
+            .first()
+            .map(|value| format_number(value.abs()))
+            .unwrap_or_else(|| ".".into()),
+        _ => ".".into(),
+    }
+}
+
+fn numeric_format_values(
+    argument: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+) -> Vec<f64> {
+    let rendered_values = if sample_index.is_none()
+        && (argument.starts_with("FORMAT/") || argument.starts_with("FMT/"))
+    {
+        (0..record.sample_indices.len())
+            .map(|i| render_token(argument, record, Some(i)))
+            .collect::<Vec<_>>()
+    } else {
+        vec![render_token(argument, record, sample_index)]
+    };
+
+    rendered_values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| {
+            let value = value.trim();
+            (!value.is_empty() && value != ".")
+                .then(|| value.parse::<f64>().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn pbinom(argument: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {
+    let Some(sample_index) = sample_index else {
+        return ".".into();
+    };
+    let gt = record.format_value(sample_index, "GT");
+    let values = render_token(argument.trim(), record, Some(sample_index));
+
+    pbinom_from_gt_and_values(&gt, &values).unwrap_or_else(|| ".".into())
+}
+
+fn pbinom_from_gt_and_values(gt: &str, values: &str) -> Option<String> {
+    let alleles = parse_diploid_gt(gt)?;
+    let values = parse_integer_values(values)?;
+    let counts = [*values.get(alleles[0])?, *values.get(alleles[1])?];
+
+    if counts[0] == counts[1] {
+        return Some(if counts[0] == 0 { "." } else { "0" }.into());
+    }
+
+    let pval = binom_two_sided(counts[0], counts[1], 0.5);
+    if pval >= 1.0 {
+        Some("0".into())
+    } else if pval <= 0.0 {
+        Some("99".into())
+    } else {
+        Some(format_number(-4.34294481903 * pval.ln()))
+    }
+}
+
+fn parse_diploid_gt(gt: &str) -> Option<[usize; 2]> {
+    let mut alleles = gt.split(['/', '|']);
+    let first = parse_gt_allele(alleles.next()?)?;
+    let second = parse_gt_allele(alleles.next()?)?;
+    alleles.next().is_none().then_some([first, second])
+}
+
+fn parse_gt_allele(allele: &str) -> Option<usize> {
+    let allele = allele.split(':').next()?.trim();
+    (!allele.is_empty() && allele != ".")
+        .then(|| allele.parse().ok())
+        .flatten()
+}
+
+fn parse_integer_values(values: &str) -> Option<Vec<i32>> {
+    values
+        .split(',')
+        .map(|value| {
+            let value = value.trim();
+            (!value.is_empty() && value != ".")
+                .then(|| value.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn binom_two_sided(a: i32, b: i32, probability: f64) -> f64 {
+    if a < 0 || b < 0 {
+        return 0.0;
+    }
+    if a == 0 && b == 0 {
+        return -1.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+
+    let n = (a + b) as usize;
+    let limit = a.min(b) as usize;
+    let mut term = (1.0 - probability).powi(n as i32);
+    let mut cdf = term;
+
+    for k in 0..limit {
+        term *= (n - k) as f64 / (k + 1) as f64 * probability / (1.0 - probability);
+        cdf += term;
+    }
+
+    (2.0 * cdf).min(1.0)
+}
+
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
     }
 }
 

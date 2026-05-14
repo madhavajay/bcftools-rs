@@ -798,6 +798,54 @@ fn query_n_pass_formatter_counts_selected_samples_matching_predicate() {
 }
 
 #[test]
+fn query_pbinom_formatter_uses_sample_gt_alleles() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("pbinom.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\tC\tD\n\
+1\t10\t.\tA\tC\t.\tPASS\t.\tGT:AD\t0/1:10,2\t0/0:5,5\t0/1:0,0\t./.:3,4\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%SAMPLE:%GT:%PBINOM(AD)\\n]",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f %PBINOM failed: {err}");
+    assert_eq!(out, "A:0/1:14.137028610125322\nB:0/0:0\nC:0/1:.\nD:./.:.\n");
+}
+
+#[test]
+fn query_numeric_format_functions_sum_record_and_sample_values() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("numeric-functions.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
+1\t10\t.\tA\tC\t.\tPASS\tAD=3,4,5\tAD\t1,2\t4,6\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%SUM(INFO/AD) %AVG(INFO/AD) %MIN(INFO/AD) %MAX(INFO/AD) %SUM(FORMAT/AD)[ %sSUM(AD)]\\n",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f numeric functions failed: {err}");
+    assert_eq!(out, "12 4 3 5 13 3 10\n");
+}
+
+#[test]
 fn query_n_pass_filter_counts_numeric_format_predicates() {
     let path = fixture_path("query.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.63.out")).unwrap();
