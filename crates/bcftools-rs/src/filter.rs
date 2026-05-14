@@ -682,6 +682,42 @@ fn eval_call(
                 ))
             }
         }
+        "FISHER" => {
+            if args.len() == 1 {
+                let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
+                if values.len() != 4 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "fisher with one argument requires four numeric values",
+                    ));
+                }
+                Ok(Value::Number(fisher_two_sided(
+                    values[0], values[1], values[2], values[3],
+                )))
+            } else if args.len() == 2 {
+                let lhs = numeric_values(&eval_with_trace(
+                    &args[0],
+                    context,
+                    resolver,
+                    trace.as_deref_mut(),
+                )?);
+                let rhs = numeric_values(&eval_with_trace(&args[1], context, resolver, trace)?);
+                if lhs.len() < 2 || rhs.len() < 2 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "fisher with two arguments requires two numeric values in each argument",
+                    ));
+                }
+                Ok(Value::Number(fisher_two_sided(
+                    lhs[0], rhs[0], lhs[1], rhs[1],
+                )))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "fisher expects one or two argument(s)",
+                ))
+            }
+        }
         "MAX" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
@@ -738,6 +774,55 @@ fn binom_two_sided(a: f64, b: f64, probability: f64) -> f64 {
     }
 
     (2.0 * cdf).min(1.0)
+}
+
+fn fisher_two_sided(n11: f64, n12: f64, n21: f64, n22: f64) -> f64 {
+    if [n11, n12, n21, n22].iter().any(|value| *value < 0.0) {
+        return 0.0;
+    }
+
+    let n11 = n11.round() as i32;
+    let n12 = n12.round() as i32;
+    let n21 = n21.round() as i32;
+    let n22 = n22.round() as i32;
+    let row1 = n11 + n12;
+    let row2 = n21 + n22;
+    let col1 = n11 + n21;
+    let total = row1 + row2;
+    if total == 0 {
+        return 1.0;
+    }
+
+    let min_a = 0.max(col1 - row2);
+    let max_a = row1.min(col1);
+    let observed = hypergeom_table_probability(n11, row1, col1, total);
+    let epsilon = observed * 1e-12 + 1e-15;
+
+    (min_a..=max_a)
+        .map(|a| hypergeom_table_probability(a, row1, col1, total))
+        .filter(|probability| *probability <= observed + epsilon)
+        .sum::<f64>()
+        .min(1.0)
+}
+
+fn hypergeom_table_probability(a: i32, row1: i32, col1: i32, total: i32) -> f64 {
+    let b = row1 - a;
+    let c = col1 - a;
+    let d = total - row1 - c;
+    (ln_factorial(row1)
+        + ln_factorial(total - row1)
+        + ln_factorial(col1)
+        + ln_factorial(total - col1)
+        - ln_factorial(total)
+        - ln_factorial(a)
+        - ln_factorial(b)
+        - ln_factorial(c)
+        - ln_factorial(d))
+    .exp()
+}
+
+fn ln_factorial(value: i32) -> f64 {
+    (1..=value).map(|i| (i as f64).ln()).sum()
 }
 
 fn phred_score(probability: f64) -> f64 {
@@ -1417,6 +1502,38 @@ mod tests {
             panic!("phred(binom()) should return a number");
         };
         assert!((phred - 14.137028).abs() < 0.001);
+    }
+
+    #[test]
+    fn evaluates_simple_fisher_exact_function() {
+        let context = EvalContext::new()
+            .with(
+                "DP4",
+                Value::List(vec![
+                    Value::Number(1.0),
+                    Value::Number(9.0),
+                    Value::Number(11.0),
+                    Value::Number(3.0),
+                ]),
+            )
+            .with(
+                "ADF",
+                Value::List(vec![Value::Number(1.0), Value::Number(11.0)]),
+            )
+            .with(
+                "ADR",
+                Value::List(vec![Value::Number(9.0), Value::Number(3.0)]),
+            );
+
+        let Value::Number(pvalue) = eval_expression("fisher(DP4)", &context).unwrap() else {
+            panic!("fisher should return a number");
+        };
+        assert!((pvalue - 0.0027594561852200836).abs() < 1e-12);
+
+        let Value::Number(two_arg) = eval_expression("fisher(ADF,ADR)", &context).unwrap() else {
+            panic!("fisher with two arguments should return a number");
+        };
+        assert!((two_arg - pvalue).abs() < 1e-12);
     }
 
     #[test]

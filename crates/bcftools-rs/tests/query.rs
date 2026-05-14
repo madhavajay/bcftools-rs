@@ -848,6 +848,32 @@ fn query_filter_uses_native_binom_function() {
 }
 
 #[test]
+fn query_filter_uses_native_fisher_function() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("fisher-filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=DP4,Number=4,Type=Integer,Description=\"Strand depths\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\t.\tA\tC\t.\tPASS\tDP4=1,9,11,3\n\
+1\t11\t.\tA\tC\t.\tPASS\tDP4=5,5,5,5\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS\\t%INFO/DP4\\n",
+        "-i",
+        "phred(fisher(INFO/DP4)) > 20",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i phred(fisher()) failed: {err}");
+    assert_eq!(out, "10\t1,9,11,3\n");
+}
+
+#[test]
 fn query_numeric_format_functions_sum_record_and_sample_values() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("numeric-functions.vcf");
