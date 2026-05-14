@@ -1751,6 +1751,34 @@ chr1\t2\trs1\tC\tT\t.\tPASS\t.\n",
 }
 
 #[test]
+fn convert_gensample_rejects_unsupported_tag_cleanly() {
+    let dir = TempDir::new().unwrap();
+    let vcf = dir.path().join("in.vcf");
+    std::fs::write(
+        &vcf,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n\
+chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0/1\n",
+    )
+    .unwrap();
+    let outputs = format!("{},.", dir.path().join("out.gen").display());
+    let (_out, err, code) = run(&[
+        "convert",
+        "--gensample",
+        &outputs,
+        "--tag",
+        "AD",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(
+        err.contains("unsupported --tag AD for --gensample output; expected GT, GP, PL, or GL"),
+        "got: {err}"
+    );
+}
+
+#[test]
 fn convert_tsv2vcf_rejects_include_exclude_filters() {
     let dir = TempDir::new().unwrap();
     let tsv = dir.path().join("in.tsv");
