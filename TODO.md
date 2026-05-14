@@ -408,7 +408,18 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 
 ### Wave F — Plugins
 
-All 41 plugins are ported as in-process modules under `crates/bcftools-rs/src/commands/plugins/<name>.rs`. They are invoked through `bcftools plugin <name>` and `bcftools +<name>`. The `+name` dispatch lives in the CLI crate; the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
+All 41 plugins are in scope as in-process Rust implementations rather than
+`dlopen`-loaded shared objects. They are invoked through `bcftools plugin
+<name>` and `bcftools +<name>`. The `+name` dispatch lives in the CLI crate;
+the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
+registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
+
+Current local slice:
+
+- [x] Static registry/listing surface (`bcftools plugin -l`, `bcftools plugin -lv`,
+  `bcftools +<name> --help`) covers all 41 upstream plugin names from
+  `bcftools/plugins/*.c` without `dlopen` or `BCFTOOLS_PLUGINS` scanning.
+  Individual plugin record-processing implementations remain below.
 
 Grouped roughly by complexity / shared dependencies:
 

@@ -165,7 +165,7 @@ const CMDS: &[Cmd] = &[
         help: "",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::plugin::main),
         alias: "plugin",
         help: "user-defined plugins",
     },
@@ -203,6 +203,18 @@ fn usage<W: Write>(out: &mut W) -> std::io::Result<()> {
         }
     }
     writeln!(out)?;
+    let nplugins = commands::plugin::count_plugins();
+    if nplugins > 0 {
+        writeln!(
+            out,
+            "    {nplugins} plugins available, run \"bcftools plugin -lv\" to see a complete list"
+        )?;
+    } else {
+        writeln!(
+            out,
+            "    0 plugins available, run \"bcftools plugin -l\" for help"
+        )?;
+    }
     writeln!(
         out,
         " Most commands accept VCF, bgzipped VCF, and BCF with the file type detected"
