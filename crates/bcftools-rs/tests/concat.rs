@@ -51,6 +51,14 @@ const VCF_B: &str = "##fileformat=VCFv4.2\n\
 2\t10\t.\tT\tA\t100\tPASS\t.\n\
 2\t20\t.\tC\tG\t100\tPASS\t.\n";
 
+const VCF_OVERLAP_B: &str = "##fileformat=VCFv4.2\n\
+##FILTER=<ID=PASS,Description=\"All filters passed\">\n\
+##contig=<ID=1,length=1000>\n\
+##contig=<ID=2,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t150\t.\tT\tA\t100\tPASS\t.\n\
+2\t20\t.\tC\tG\t100\tPASS\t.\n";
+
 const VCF_DIFF_SAMPLES: &str = "##fileformat=VCFv4.2\n\
 ##FILTER=<ID=PASS,Description=\"All filters passed\">\n\
 ##contig=<ID=1,length=1000>\n\
@@ -88,6 +96,46 @@ fn concat_two_text_vcfs_emits_records_in_input_order() {
             "1\t100\t.\tA\tC\t100\tPASS\t.",
             "1\t200\t.\tG\tT\t100\tPASS\t.",
             "2\t10\t.\tT\tA\t100\tPASS\t.",
+            "2\t20\t.\tC\tG\t100\tPASS\t.",
+        ]
+    );
+}
+
+#[test]
+fn concat_rejects_overlapping_inputs_unless_allow_overlaps() {
+    let dir = TempDir::new().unwrap();
+    let a = write_temp(&dir, "a.vcf", VCF_A);
+    let b = write_temp(&dir, "b.vcf", VCF_OVERLAP_B);
+    let (_out, err, code) = run(&[
+        "concat",
+        "--no-version",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(
+        err.contains("Input files overlap at 1:150"),
+        "expected overlap error, got: {err}"
+    );
+
+    let (out, err, code) = run(&[
+        "concat",
+        "--no-version",
+        "--allow-overlaps",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "concat --allow-overlaps failed: {err}");
+    let records: Vec<&str> = out
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .collect();
+    assert_eq!(
+        records,
+        [
+            "1\t100\t.\tA\tC\t100\tPASS\t.",
+            "1\t200\t.\tG\tT\t100\tPASS\t.",
+            "1\t150\t.\tT\tA\t100\tPASS\t.",
             "2\t20\t.\tC\tG\t100\tPASS\t.",
         ]
     );

@@ -13,14 +13,15 @@
 //! - `-G`/`--drop-genotypes` — strip FORMAT and sample columns.
 //! - `-D`/`--remove-duplicates` — alias for `-d exact`.
 //! - `-d`/`--rm-dups STRING` — drop duplicate records: `snps|indels|both|all|exact`.
+//! - `-a`/`--allow-overlaps` — allow adjacent input files to overlap.
 //! - `-n`/`--naive` — fast text VCF concatenation preserving the first header.
 //! - `--naive-force` — skip header equality checks in naive mode.
 //! - `--no-version` — suppress the per-command header lines.
 //!
-//! Deferred (intentional gaps tracked in TODO.md): `-a/--allow-overlaps`,
-//! `-l/--ligate`, `--ligate-force`, `--ligate-warn`, `-c/--compact-PS`,
-//! `-q/--min-PQ`. Some of these depend on synced reader parity in `htslib-rs`
-//! and are tracked at the bottom of TODO.md.
+//! Deferred (intentional gaps tracked in TODO.md): `-l/--ligate`,
+//! `--ligate-force`, `--ligate-warn`, `-c/--compact-PS`, `-q/--min-PQ`.
+//! Some of these depend on synced reader parity in `htslib-rs` and are tracked
+//! at the bottom of TODO.md.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -49,6 +50,7 @@ About: Concatenate or combine VCF/BCF files.\n\
 Usage: bcftools concat [options] <A.vcf.gz> [<B.vcf.gz> [...]]\n\
 \n\
 Options:\n\
+   -a, --allow-overlaps           Allow records from adjacent input files to overlap\n\
    -d, --rm-dups STRING           Output duplicate records present in multiple files only once: <snps|indels|both|all|exact>\n\
    -D, --remove-duplicates        Alias for -d exact\n\
    -f, --file-list FILE           Read the list of files from a file.\n\
@@ -127,6 +129,7 @@ struct Args {
     output_kind: OutputKind,
     drop_genotypes: bool,
     rm_dups: Option<DupMode>,
+    allow_overlaps: bool,
     naive: bool,
     naive_force: bool,
     no_version: bool,
@@ -176,6 +179,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut explicit_kind: Option<OutputKind> = None;
     let mut drop_genotypes = false;
     let mut rm_dups: Option<DupMode> = None;
+    let mut allow_overlaps = false;
     let mut naive = false;
     let mut naive_force = false;
     let mut no_version = false;
@@ -191,6 +195,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-h" | "--help" | "-?" => return Err(ParseOutcome::Usage),
             "--no-version" => no_version = true,
             "-G" | "--drop-genotypes" => drop_genotypes = true,
+            "-a" | "--allow-overlaps" => allow_overlaps = true,
             "-n" | "--naive" => naive = true,
             "--naive-force" => {
                 naive = true;
@@ -309,6 +314,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output_kind,
         drop_genotypes,
         rm_dups,
+        allow_overlaps,
         naive,
         naive_force,
         no_version,
@@ -365,16 +371,20 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
 
     let mut writer = writer;
     let mut seen: Option<DupSet> = args.rm_dups.map(|_| DupSet::default());
+    let mut previous_file_last: Option<RecordSpan> = None;
 
     for (i, input) in args.inputs.iter().enumerate() {
         let input_header = read_header(input)?;
         if i > 0 {
             check_sample_columns(&header, &input_header, input)?;
         }
+        let mut current_file_last = None;
+        let mut checked_first_emitted = false;
         for_each_record(input, &input_header, |rec| {
             if !record_in_regions(rec, &args.regions, args.regions_overlap) {
                 return Ok(());
             }
+            let span = RecordSpan::from(rec);
             if args.drop_genotypes {
                 let projected = strip_format_and_samples(rec);
                 if let Some(seen) = seen.as_mut()
@@ -383,6 +393,13 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
                 {
                     return Ok(());
                 }
+                check_file_overlap(
+                    args.allow_overlaps,
+                    &mut checked_first_emitted,
+                    previous_file_last.as_ref(),
+                    &span,
+                )?;
+                current_file_last = Some(span);
                 writer.write_record(&projected)
             } else {
                 if let Some(seen) = seen.as_mut()
@@ -391,9 +408,19 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
                 {
                     return Ok(());
                 }
+                check_file_overlap(
+                    args.allow_overlaps,
+                    &mut checked_first_emitted,
+                    previous_file_last.as_ref(),
+                    &span,
+                )?;
+                current_file_last = Some(span);
                 writer.write_record(rec)
             }
         })?;
+        if current_file_last.is_some() {
+            previous_file_last = current_file_last;
+        }
     }
 
     writer.finish()?;
@@ -402,6 +429,30 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
         write_index(path, args.output_kind, index_format)?;
     }
 
+    Ok(())
+}
+
+fn check_file_overlap(
+    allow_overlaps: bool,
+    checked_first_emitted: &mut bool,
+    previous_file_last: Option<&RecordSpan>,
+    span: &RecordSpan,
+) -> io::Result<()> {
+    if allow_overlaps || *checked_first_emitted {
+        return Ok(());
+    }
+    *checked_first_emitted = true;
+    if let Some(previous) = previous_file_last
+        && previous.overlaps(span)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Input files overlap at {}:{}; use -a/--allow-overlaps to concatenate overlapping files",
+                span.chrom, span.start
+            ),
+        ));
+    }
     Ok(())
 }
 
@@ -794,6 +845,35 @@ impl ConcatWriter for BcfWriter {
 #[derive(Default)]
 struct DupSet {
     seen: std::collections::HashSet<DupKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordSpan {
+    chrom: String,
+    start: i64,
+    end: i64,
+}
+
+impl RecordSpan {
+    fn from(record: &vcf::variant::RecordBuf) -> Self {
+        let start = record
+            .variant_start()
+            .map(|p| {
+                let raw: usize = p.get();
+                raw as i64
+            })
+            .unwrap_or(0);
+        let ref_len = record.reference_bases().len().max(1) as i64;
+        Self {
+            chrom: record.reference_sequence_name().to_owned(),
+            start,
+            end: start + ref_len - 1,
+        }
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.chrom == other.chrom && other.start <= self.end
+    }
 }
 
 impl DupSet {
