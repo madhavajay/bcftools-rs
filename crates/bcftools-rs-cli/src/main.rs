@@ -55,12 +55,12 @@ const CMDS: &[Cmd] = &[
         help: "annotate and edit VCF/BCF files",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::concat::main),
         alias: "concat",
         help: "concatenate VCF/BCF files from the same set of samples",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::convert::main),
         alias: "convert",
         help: "convert VCF/BCF files to different formats and back",
     },
@@ -70,7 +70,7 @@ const CMDS: &[Cmd] = &[
         help: "view VCF/BCF file headers",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::isec::main),
         alias: "isec",
         help: "intersections of VCF/BCF files",
     },
@@ -130,7 +130,7 @@ const CMDS: &[Cmd] = &[
         help: "call variation consequences",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::filter::main),
         alias: "filter",
         help: "filter VCF/BCF files using fixed thresholds",
     },
@@ -150,7 +150,7 @@ const CMDS: &[Cmd] = &[
         help: "identify runs of autozygosity (HMM)",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::stats::main),
         alias: "stats",
         help: "produce VCF/BCF stats",
     },

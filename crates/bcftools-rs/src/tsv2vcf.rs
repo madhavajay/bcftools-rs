@@ -140,7 +140,17 @@ pub fn default_setters() -> SetterMap<TsvRecord> {
     setters.insert(
         "ALT".to_string(),
         Box::new(|record, field| {
-            record.alt_alleles = field.split(',').map(ToOwned::to_owned).collect();
+            record.alt_alleles = field
+                .split(',')
+                .filter(|allele| {
+                    *allele != "."
+                        && record
+                            .ref_allele
+                            .as_deref()
+                            .is_none_or(|ref_allele| *allele != ref_allele)
+                })
+                .map(ToOwned::to_owned)
+                .collect();
             Ok(())
         }),
     );
