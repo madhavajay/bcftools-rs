@@ -205,6 +205,11 @@ Latest landed progress:
 
 Current in-flight local progress:
 
+- 2026-05-15: `bcftools-rs sort` now accepts the upstream Perl harness option
+  forms exercised by `test_vcf_sort`: `-m 0` as unbounded in-memory sorting and
+  attached BCF output selection with `-Ob`, including BCF stdout piping through
+  `view`. Local validation has passed with
+  `scripts/run-bcftools-test-pl.sh -f '^test_vcf_sort$'`.
 - 2026-05-14: `progress/convert-fixture-parity-2` adds another convert parity
   slice after PR #8: more upstream GEN/SAMPLE, HAP/SAMPLE, and
   HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
@@ -373,6 +378,11 @@ The waves are ordered to land foundational machinery first (read/write/index, th
         output for `-O z`, and honoring `-W` by creating the matching VCF index.
         Full external-sort parity can come later, but this small-file path
         unblocks the BioScript VNtyper port.
+  - [x] Snapshot coverage: upstream Perl `test_vcf_sort` option forms including
+        `-m 0`, tiny `-m 1000` external-sort spills, attached `-Ob` BCF output,
+        and BCF stdout piping through `view`; plus Rust integration coverage for
+        Kestrel-compatible headers, BGZF output/indexing, threaded BGZF output,
+        temp-dir cleanup, and BCF file output.
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
   - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/concat.rs`): same-sample vertical concat for VCF/VCF.gz/BCF inputs, header preservation from first file, sample-column verification across inputs, `-o`/`--output`, `-O u|b|v|z[0-9]`, `-f`/`--file-list`, `-G`/`--drop-genotypes`, `-D`/`--remove-duplicates`, `-d`/`--rm-dups snps|indels|both|all|exact`, `-n`/`--naive` VCF body concatenation and `--naive-force`, `-r`/`-R` POS-based region restriction including BED coordinate conversion, `--regions-overlap 0|1|2` with record-span matching for 1/2, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_concat{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads. 26 integration tests in `crates/bcftools-rs/tests/concat.rs`.
   - [ ] Remaining: `-a`/`--allow-overlaps` (depends on synced reader parity), `-l`/`--ligate` and ligate-force/warn variants, true BCF block-level `--naive` concat, `-c`/`--compact-PS`, `-q`/`--min-PQ`.

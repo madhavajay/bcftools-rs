@@ -45,6 +45,7 @@ Options:\n\
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
+    Bcf,
     VcfText,
     VcfGz,
 }
@@ -53,6 +54,7 @@ impl OutputKind {
     fn parse(raw: &str) -> Option<Self> {
         let ty = raw.chars().next()?;
         match ty {
+            'u' | 'b' => Some(Self::Bcf),
             'v' => Some(Self::VcfText),
             'z' => Some(Self::VcfGz),
             '0'..='9' => Some(Self::VcfGz),
@@ -219,7 +221,7 @@ fn run(args: &Args) -> io::Result<()> {
 
     match args.output.as_deref() {
         Some(path) => write_to_path(path, args.output_kind, &header, &records, args.thread_count)?,
-        None => write_vcf(io::stdout().lock(), &header, &records)?,
+        None => write_to_stdout(args.output_kind, &header, &records)?,
     }
 
     if let (Some(index_format), Some(path)) = (args.write_index, args.output.as_deref()) {
@@ -391,6 +393,7 @@ fn write_to_path(
 ) -> io::Result<()> {
     let file = File::create(path)?;
     match output_kind {
+        OutputKind::Bcf => write_bcf(file, header, records),
         OutputKind::VcfText => write_vcf(file, header, records),
         OutputKind::VcfGz => {
             if let Some(thread_count) = thread_count {
@@ -410,6 +413,31 @@ fn write_to_path(
             Ok(())
         }
     }
+}
+
+fn write_to_stdout(
+    output_kind: OutputKind,
+    header: &vcf::Header,
+    records: &[vcf::variant::RecordBuf],
+) -> io::Result<()> {
+    let stdout = io::stdout().lock();
+    match output_kind {
+        OutputKind::Bcf => write_bcf(stdout, header, records),
+        OutputKind::VcfText | OutputKind::VcfGz => write_vcf(stdout, header, records),
+    }
+}
+
+fn write_bcf<W: Write>(
+    out: W,
+    header: &vcf::Header,
+    records: &[vcf::variant::RecordBuf],
+) -> io::Result<()> {
+    let mut writer = htslib_rs::bcf::io::Writer::new(out);
+    writer.write_variant_header(header)?;
+    for record in records {
+        writer.write_variant_record(header, record)?;
+    }
+    writer.try_finish()
 }
 
 fn write_vcf<W: Write>(
@@ -467,9 +495,12 @@ fn parse_max_mem(raw: &str) -> Result<usize, ParseOutcome> {
     let value = number
         .parse::<f64>()
         .map_err(|_| ParseOutcome::Error(format!("Could not parse --max-mem {raw}")))?;
-    if value <= 0.0 {
+    if value == 0.0 {
+        return Ok(usize::MAX);
+    }
+    if value < 0.0 {
         return Err(ParseOutcome::Error(format!(
-            "--max-mem must be positive: {raw}"
+            "--max-mem must be non-negative: {raw}"
         )));
     }
     Ok((value * multiplier) as usize)
