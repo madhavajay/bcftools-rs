@@ -210,12 +210,24 @@ Current in-flight local progress:
   HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
   HAP/LEGEND/SAMPLE output, single-precision PL/GL probability normalization,
   haploid missing HAP output parity, and harness-style BCF stdin input for
-  forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE output modes. Local
+  forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE output modes,
   upstream-style `--tsv2vcf -Ou | view` fixture pipes, and upstream-style
   reverse GEN/SAMPLE `-Ou | view` fixture coverage. Local validation has
   passed with `cargo fmt --all --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, and
   `cargo test --workspace`.
+
+Current whole-project estimate:
+
+- 2026-05-14: approximately 20% complete toward the full stated goal of a pure
+  Rust bcftools replacement with full subcommand, plugin, upstream `test.pl`,
+  Rust integration-test, and parity-polishing coverage. The raw checklist is
+  roughly half checked, but setup/foundation items are smaller than the
+  remaining implementation surface. The estimate weights the unfinished large
+  subcommands (`annotate`, `merge`, `norm`, `mpileup`, `call`, `csq`), most
+  plugins, full upstream byte-for-byte parity, exit-code parity, and performance
+  triage more heavily than scaffolding. The narrower BioScript VNtyper-useful
+  local parity slice is much further along, roughly 60-70%+.
 
 ## Current Inputs
 
