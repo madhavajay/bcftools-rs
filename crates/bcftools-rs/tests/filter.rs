@@ -209,6 +209,30 @@ fn filter_mask_soft_filters_overlapping_records() {
 }
 
 #[test]
+fn filter_mask_file_and_negated_mask_match_upstream_shapes() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_vcf(&dir, VCF);
+    let mask = dir.path().join("mask.bed");
+    std::fs::write(&mask, "1\t149\t250\n").unwrap();
+    let mask_arg = format!("^{}", mask.display());
+    let (out, err, code) = run(&[
+        "filter",
+        "--mask-file",
+        &mask_arg,
+        "-s",
+        "Outside",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "filter --mask-file ^file failed: {err}");
+    let pos100 = out.lines().find(|l| l.starts_with("1\t100\t")).unwrap();
+    let pos200 = out.lines().find(|l| l.starts_with("1\t200\t")).unwrap();
+    let pos300 = out.lines().find(|l| l.starts_with("1\t300\t")).unwrap();
+    assert_eq!(pos100.split('\t').nth(6), Some("Outside"));
+    assert_eq!(pos200.split('\t').nth(6), Some("PASS"));
+    assert_eq!(pos300.split('\t').nth(6), Some("Outside"));
+}
+
+#[test]
 fn filter_mask_overlap_record_span_can_include_deletions() {
     let dir = TempDir::new().unwrap();
     let body = "##fileformat=VCFv4.2\n\
