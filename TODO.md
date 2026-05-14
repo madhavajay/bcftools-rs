@@ -203,6 +203,32 @@ Latest landed progress:
   tighten `concat`, `filter`, `stats`, and `isec` edge cases that do not
   require changes in `htslib-rs`, `noodles`, or their submodules.
 
+Current in-flight local progress:
+
+- 2026-05-14: `progress/convert-fixture-parity-2` adds another convert parity
+  slice after PR #8: more upstream GEN/SAMPLE, HAP/SAMPLE, and
+  HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
+  HAP/LEGEND/SAMPLE output, single-precision PL/GL probability normalization,
+  haploid missing HAP output parity, and harness-style BCF stdin input for
+  forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE output modes,
+  upstream-style `--tsv2vcf -Ou | view` fixture pipes, and upstream-style
+  reverse GEN/SAMPLE `-Ou | view` fixture coverage. Local validation has
+  passed with `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo test --workspace`.
+
+Current whole-project estimate:
+
+- 2026-05-14: approximately 20% complete toward the full stated goal of a pure
+  Rust bcftools replacement with full subcommand, plugin, upstream `test.pl`,
+  Rust integration-test, and parity-polishing coverage. The raw checklist is
+  roughly half checked, but setup/foundation items are smaller than the
+  remaining implementation surface. The estimate weights the unfinished large
+  subcommands (`annotate`, `merge`, `norm`, `mpileup`, `call`, `csq`), most
+  plugins, full upstream byte-for-byte parity, exit-code parity, and performance
+  triage more heavily than scaffolding. The narrower BioScript VNtyper-useful
+  local parity slice is much further along, roughly 60-70%+.
+
 ## Current Inputs
 
 - `bcftools/`: upstream C bcftools source and test suite. 59 C files (~60k LOC) plus 41 plugin `.c` files under `plugins/`. ~28 built-in subcommands dispatched from `main.c:73-201`. A 2406-line Perl test harness (`bcftools/test/test.pl`) with ~1098 `run_test()` invocations and expected-output fixtures under `bcftools/test/<subcommand-or-plugin>/`.
@@ -355,7 +381,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
   - [x] Snapshot coverage: VCF/BGZF VCF header replacement, sample rename via file/list, FAI contig updates with upstream-style attribute ordering, stdin handling, BCF output, BCF `--in-place`, and threaded BGZF/BCF output.
   - [ ] Remaining: BCF header serialization order/quoting parity and `test_rename_chrs` dependencies on `annotate`/full `query`.
 - [ ] `convert` (`vcfconvert.c`, 76k) — VCF ↔ {HAP/LEGEND/SAMPLE, GEN, HAPS-SAMPLE, TSV, gVCF, 23andMe}. Plus `--tsv2vcf`. Covered by `test_vcf_convert*`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/convert.rs`): explicit-column `--tsv2vcf` for TSV inputs with `CHROM,POS,ID,REF,ALT`, ignored `-` input columns, REF-matching ALT normalization to sites-only `.`, checked text-output parity for upstream `convert.tsv.vcf` and `convert.23andme.vcf` fixtures, optional `-s`/`--samples` and `-S`/`--samples-file` GT output from trailing VCF-style GT fields or allele-letter pairs, FASTA-backed `AA` columns for common 23andMe-style SNP genotypes with reference-derived REF/ALT alleles and contig headers, skipped AA insertion/deletion rows, malformed data-row recovery with skip warnings and row/site counters, upstream-style row/site and genotype-class stderr counters, FASTA-backed `--gvcf2vcf` expansion of VCF/VCF.gz/BCF reference blocks with `INFO/END`, upstream mode-flag `--gvcf2vcf` argument shape plus legacy `--gvcf2vcf FILE`, BCF stdin input for gVCF conversion, upstream-style `--gvcf2vcf` filter-as-expansion-gate behavior where failing records are emitted unchanged, checked text-output parity for upstream `convert.gvcf.out`, basic VCF/BCF to `--gensample`, `--hapsample`, and `--haplegendsample` output with `.gen.gz`/`.hap.gz`/`.legend.gz`/`.samples`, stdout output for GEN/SAMPLE/HAP/LEGEND sinks named `-`, checked text-output parity for upstream `convert.gs.gt.gen`, `convert.gs.gt.ids.gen`, `convert.gs.gt.ids.gen6`, and `convert.gs.gt.samples` fixtures, `--gensample2vcf` back-conversion with GT/GP reconstruction, first-max GT tie handling, upstream-style GP number formatting, reversed marker/ID GEN columns, `--3N6`, VCF IDs, checked text-output parity for upstream `convert.gs.vcf` and `convert.gs.noids.vcf` fixtures, VCF/VCF.gz/BCF output and indexing, basic `--hapsample2vcf` back-conversion with GT reconstruction, VCF IDs, checked text-output parity for upstream `convert.gt.noHead.vcf` and `convert.gt.noHead.ids.vcf` fixtures, VCF/VCF.gz/BCF output and indexing, basic `--haplegendsample2vcf` back-conversion with GT reconstruction, checked text-output parity for the upstream HAP/LEGEND/SAMPLE `convert.gt.noHead.vcf` fixture, VCF/VCF.gz/BCF output and indexing, GT/GP/PL/GL-backed GEN probability triples, deprecated `--chrom` diagnostics, `--vcf-ids`, `--keep-duplicates`, `--haploid2diploid`, `--sex`, `-i`/`-e`, and `-s`/`-S` sample selection including `^` exclusion, VCF/VCF.gz/BCF output, `-o`/`-O u|b|v|z[0-9]`, `-W` indexing for VCF.gz/BCF outputs, `--threads`, and `--no-version`. 43 integration tests in `crates/bcftools-rs/tests/convert.rs`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/convert.rs`): explicit-column `--tsv2vcf` for TSV inputs with `CHROM,POS,ID,REF,ALT`, ignored `-` input columns, REF-matching ALT normalization to sites-only `.`, checked text-output parity for upstream `convert.tsv.vcf` and `convert.23andme.vcf` fixtures, upstream-style `--tsv2vcf -Ou | view` fixture pipes, optional `-s`/`--samples` and `-S`/`--samples-file` GT output from trailing VCF-style GT fields or allele-letter pairs, FASTA-backed `AA` columns for common 23andMe-style SNP genotypes with reference-derived REF/ALT alleles and contig headers, skipped AA insertion/deletion rows, malformed data-row recovery with skip warnings and row/site counters, upstream-style row/site and genotype-class stderr counters, FASTA-backed `--gvcf2vcf` expansion of VCF/VCF.gz/BCF reference blocks with `INFO/END`, upstream mode-flag `--gvcf2vcf` argument shape plus legacy `--gvcf2vcf FILE`, BCF stdin input for gVCF conversion, upstream-style `--gvcf2vcf` filter-as-expansion-gate behavior where failing records are emitted unchanged, checked text-output parity for upstream `convert.gvcf.out`, basic VCF/BCF to `--gensample`, `--hapsample`, and `--haplegendsample` output with `.gen.gz`/`.hap.gz`/`.legend.gz`/`.samples`, upstream harness-style BCF stdin input for forward GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE output modes, stdout output for GEN/SAMPLE/HAP/LEGEND sinks named `-`, checked text-output parity for upstream `convert.gs.gt.gen`, `convert.gs.gt.ids.gen`, `convert.gs.gt.ids.gen6`, `convert.gs.gt.samples`, `convert.gs.pl.gen`, `convert.gs.pl.samples`, `check.gs.vcfids.gen`, `check.gs.vcfids.samples`, `check.gs.chrom.gen`, `check.gs.chrom.samples`, `check.gs.vcfids_chrom.gen`, `check.gs.vcfids_chrom.samples`, `convert.hs.hap`, `convert.hs.ids.hap`, `convert.hs.sample`, `convert.hls.haps`, `convert.hls.legend`, `convert.hls.ids.legend`, `convert.hls.samples`, and `convert.hap-missing.haps` fixtures, upstream-style single-precision PL/GL likelihood normalization and haploid missing HAP output (`? -`), upstream `-h` alias for HAP/LEGEND/SAMPLE output, `--gensample2vcf` back-conversion with GT/GP reconstruction, first-max GT tie handling, upstream-style GP number formatting, reversed marker/ID GEN columns, `--3N6`, VCF IDs, checked text-output parity for upstream `convert.gs.vcf` and `convert.gs.noids.vcf` fixtures, upstream-style reverse GEN/SAMPLE `-Ou | view` fixture pipe, VCF/VCF.gz/BCF output and indexing, basic `--hapsample2vcf` back-conversion with GT reconstruction, VCF IDs, checked text-output parity for upstream `convert.gt.noHead.vcf` and `convert.gt.noHead.ids.vcf` fixtures, VCF/VCF.gz/BCF output and indexing, basic `--haplegendsample2vcf` back-conversion with GT reconstruction, checked text-output parity for the upstream HAP/LEGEND/SAMPLE `convert.gt.noHead.vcf` fixture, VCF/VCF.gz/BCF output and indexing, GT/GP/PL/GL-backed GEN probability triples, deprecated `--chrom` diagnostics, `--vcf-ids`, `--keep-duplicates`, `--haploid2diploid`, `--sex`, `-i`/`-e`, and `-s`/`-S` sample selection including `^` exclusion, VCF/VCF.gz/BCF output, `-o`/`-O u|b|v|z[0-9]`, `-W` indexing for VCF.gz/BCF outputs, `--threads`, and `--no-version`. 49 integration tests in `crates/bcftools-rs/tests/convert.rs`.
   - [ ] Remaining: VCF/BCF to TSV, 23andMe and full GEN/SAMPLE/HAPS/SAMPLE/HAP-LEGEND-SAMPLE edge-case parity; advanced gVCF2VCF filter-expression parity, full `--tsv2vcf` 23andMe edge-case parity and exact diagnostics; full upstream `test_vcf_convert*` parity.
 
 ### Wave C — Filtering & Annotation
@@ -427,6 +453,14 @@ This end-of-file list is filled as the subcommand surface mapping uncovers gaps 
 - [x] **CSI index 64-bit coordinate support** — `large_chrom_csi_limit` test in `test.pl:39` asserts the 2^31-1 boundary. Confirm htslib-rs CSI handles it.
 - [x] **`hts_expr` vs bcftools filter** — `htslib-rs::expr` is the HTSlib expression language. bcftools has its own. Decide whether to also expose helpers from htslib-rs that bcftools's filter engine can reuse (numeric helpers, token utilities) or keep them fully separate. Document the decision.
 - [x] **Region-with-target arithmetic** — `htslib-rs::region` covers HTSlib's grammar; confirm `-r`/`-R`/`-t`/`-T` semantics including the difference between regions (index-driven) and targets (streaming-filter) match upstream.
+- [ ] **BCF serialization of haploid missing `GT=.`** — reverse
+  `convert --hapsample2vcf -Ou` and `convert -H -Ou` hit
+  `[E::main_vcfconvert] invalid input parameter` on the upstream Oxford
+  fixtures when a haploid missing genotype (`GT=.`) is serialized through the
+  current text-VCF-to-BCF writer path. Text VCF parity is correct, and
+  GEN/SAMPLE `-G -Ou | view` passes; the remaining HAP/SAMPLE and
+  HAP/LEGEND/SAMPLE upstream pipe fixtures need `htslib-rs`/writer support for
+  this genotype shape.
 
 ## Submodule Pinning
 

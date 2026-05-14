@@ -36,7 +36,7 @@ Options:\n\
    -g, --gensample PREFIX         Convert VCF/BCF to PREFIX.gen.gz and PREFIX.samples\n\
    -G, --gensample2vcf            Convert GEN/SAMPLE input back to VCF\n\
        --hapsample PREFIX         Convert VCF/BCF to PREFIX.hap.gz and PREFIX.samples\n\
-       --haplegendsample PREFIX   Convert VCF/BCF to PREFIX.hap.gz, PREFIX.legend.gz, PREFIX.samples\n\
+   -h, --haplegendsample PREFIX   Convert VCF/BCF to PREFIX.hap.gz, PREFIX.legend.gz, PREFIX.samples\n\
        --hapsample2vcf            Convert HAP/SAMPLE input back to VCF\n\
    -H, --haplegendsample2vcf      Convert HAP/LEGEND/SAMPLE input back to VCF\n\
        --3N6                      Use 3*N+6 GEN columns by adding CHROM first\n\
@@ -178,7 +178,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     while let Some(arg) = iter.next() {
         let raw = arg.to_string_lossy();
         match raw.as_ref() {
-            "-h" | "--help" | "-?" => return Err(ParseOutcome::Usage),
+            "--help" | "-?" => return Err(ParseOutcome::Usage),
             "--no-version" => no_version = true,
             "--tsv2vcf" => tsv2vcf = Some(PathBuf::from(next_string(&mut iter, "--tsv2vcf")?)),
             "--gvcf2vcf" => gvcf2vcf = true,
@@ -186,7 +186,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-G" | "--gensample2vcf" => gensample2vcf = true,
             "--hapsample" => hapsample = Some(next_string(&mut iter, "--hapsample")?),
             "--hapsample2vcf" => hapsample2vcf = true,
-            "--haplegendsample" => {
+            "-h" | "--haplegendsample" => {
                 haplegendsample = Some(next_string(&mut iter, "--haplegendsample")?)
             }
             "-H" | "--haplegendsample2vcf" => haplegendsample2vcf = true,
@@ -290,6 +290,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-e") && raw.len() > 2 => exclude_expr = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-g") && raw.len() > 2 => gensample = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-h") && raw.len() > 2 => {
+                haplegendsample = Some(raw[2..].to_owned())
+            }
             _ if raw.starts_with("-s") && raw.len() > 2 => samples = parse_sample_list(&raw[2..]),
             _ if raw.starts_with("-S") && raw.len() > 2 => samples = read_sample_file(&raw[2..])?,
             _ if raw.starts_with("-W=") => write_index = parse_write_index(Some(&raw[3..]))?,
@@ -361,30 +364,33 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         (None, true, None, false, None, false, None, false, None) => {
             ConvertMode::Gvcf2Vcf("-".into())
         }
-        (None, false, Some(_), false, None, false, None, false, None) => {
-            return Err(ParseOutcome::Error(
-                "--gensample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, Some(output), false, None, false, None, false, None) => {
+            ConvertMode::VcfToGenSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, true, None, false, None, false, None) => {
             return Err(ParseOutcome::Error(
                 "--gensample2vcf requires GEN/SAMPLE input".into(),
             ));
         }
-        (None, false, None, false, Some(_), false, None, false, None) => {
-            return Err(ParseOutcome::Error(
-                "--hapsample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, None, false, Some(output), false, None, false, None) => {
+            ConvertMode::VcfToHapSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, false, None, true, None, false, None) => {
             return Err(ParseOutcome::Error(
                 "--hapsample2vcf requires HAP/SAMPLE input".into(),
             ));
         }
-        (None, false, None, false, None, false, Some(_), false, None) => {
-            return Err(ParseOutcome::Error(
-                "--haplegendsample requires an input VCF/BCF file".into(),
-            ));
+        (None, false, None, false, None, false, Some(output), false, None) => {
+            ConvertMode::VcfToHapLegendSample {
+                input: "-".into(),
+                output,
+            }
         }
         (None, false, None, false, None, false, None, true, None) => {
             return Err(ParseOutcome::Error(
@@ -1895,7 +1901,17 @@ fn write_bytes_auto_gzip(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 fn gt_to_hap_pair(raw: &str, haploid2diploid: bool) -> (String, String) {
     let gt = raw.split(':').next().unwrap_or(raw);
-    if gt == "." || gt == "./." || gt == ".|." || gt.contains('.') {
+    if gt == "." {
+        return (
+            "?".to_owned(),
+            if haploid2diploid {
+                "?".to_owned()
+            } else {
+                "-".to_owned()
+            },
+        );
+    }
+    if gt == "./." || gt == ".|." || gt.contains('.') {
         return ("?".to_owned(), "?".to_owned());
     }
     let phased = gt.contains('|');
@@ -1994,48 +2010,33 @@ fn gp_to_prob3(raw: &str, chrom: &str, pos: &str) -> io::Result<(String, String,
 
 fn pl_to_prob3(raw: &str) -> io::Result<(String, String, String)> {
     let values = parse_float_vector(raw)?;
-    let weights: Vec<f64> = values
+    let weights: Vec<f32> = values
         .iter()
         .take(3)
-        .map(|value| 10f64.powf(-0.1 * value))
-        .collect();
-    let sum: f64 = weights.iter().sum();
-    if sum == 0.0 || weights.is_empty() {
-        return Ok(("0.33".to_owned(), "0.33".to_owned(), "0.33".to_owned()));
-    }
-    if weights.len() == 2 {
-        return Ok((
-            format_prob(weights[0] / sum),
-            format_prob(0.0),
-            format_prob(weights[1] / sum),
-        ));
-    }
-    Ok((
-        format_prob(weights.first().copied().unwrap_or(0.0) / sum),
-        format_prob(weights.get(1).copied().unwrap_or(0.0) / sum),
-        format_prob(weights.get(2).copied().unwrap_or(0.0) / sum),
-    ))
-}
-
-fn gl_to_prob3(raw: &str) -> io::Result<(String, String, String)> {
-    let values = parse_float_vector(raw)?;
-    let weights: Vec<f64> = values
-        .iter()
-        .take(3)
-        .map(|value| 10f64.powf(*value))
+        .map(|value| 10f32.powf(-0.1 * *value as f32))
         .collect();
     normalize_likelihood_weights(&weights)
 }
 
-fn normalize_likelihood_weights(weights: &[f64]) -> io::Result<(String, String, String)> {
-    let sum: f64 = weights.iter().sum();
+fn gl_to_prob3(raw: &str) -> io::Result<(String, String, String)> {
+    let values = parse_float_vector(raw)?;
+    let weights: Vec<f32> = values
+        .iter()
+        .take(3)
+        .map(|value| 10f32.powf(*value as f32))
+        .collect();
+    normalize_likelihood_weights(&weights)
+}
+
+fn normalize_likelihood_weights(weights: &[f32]) -> io::Result<(String, String, String)> {
+    let sum: f32 = weights.iter().sum();
     if sum == 0.0 || weights.is_empty() {
         return Ok(("0.33".to_owned(), "0.33".to_owned(), "0.33".to_owned()));
     }
     if weights.len() == 2 {
         return Ok((
             format_prob(weights[0] / sum),
-            format_prob(0.0),
+            "0".to_owned(),
             format_prob(weights[1] / sum),
         ));
     }
@@ -2063,7 +2064,8 @@ fn parse_float_vector(raw: &str) -> io::Result<Vec<f64>> {
         .collect()
 }
 
-fn format_prob(value: f64) -> String {
+fn format_prob<T: Into<f64>>(value: T) -> String {
+    let value = value.into();
     format!("{value:.6}")
 }
 

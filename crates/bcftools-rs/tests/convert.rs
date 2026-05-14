@@ -45,12 +45,52 @@ fn run(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, out.status.code().unwrap_or(-1))
 }
 
+fn run_bytes(args: &[&str]) -> (Vec<u8>, String, i32) {
+    ensure_binary_built();
+    let out = Command::new(bin_path())
+        .args(args)
+        .output()
+        .expect("spawn bcftools");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (out.stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
+fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
+    ensure_binary_built();
+    let mut child = Command::new(bin_path())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bcftools");
+    child.stdin.as_mut().unwrap().write_all(input).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
 fn without_meta_headers(text: &str) -> String {
     text.lines()
         .filter(|line| !line.starts_with("##"))
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+fn assert_bcf_stdout_matches(args: &[&str], expected: &str, label: &str) {
+    let (bcf, err, code) = run_bytes(args);
+    assert_eq!(code, 0, "{label} failed: {err}");
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of {label} BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(expected)
+    );
 }
 
 #[test]
@@ -139,6 +179,59 @@ fn convert_tsv2vcf_writes_bcf_and_index() {
         run(&["view", "--no-version", out_path.to_str().unwrap()]);
     assert_eq!(view_code, 0, "view of BCF failed: {view_err}");
     assert!(view_out.contains("chr1\t10\trs1\tA\tC\t.\t.\t."));
+}
+
+#[test]
+fn convert_tsv2vcf_bcf_stdout_round_trips_through_view_like_upstream_harness() {
+    let tsv = fixture_path("convert.tsv");
+    let expected_tsv = std::fs::read_to_string(fixture_path("convert.tsv.vcf")).unwrap();
+    let (bcf, err, code) = run_bytes(&[
+        "convert",
+        "-Ou",
+        "-c",
+        "-,CHROM,POS,REF,ALT",
+        "--tsv2vcf",
+        tsv.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "convert -Ou --tsv2vcf convert.tsv failed: {err}");
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of tsv2vcf BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(&expected_tsv)
+    );
+
+    let input_23andme = fixture_path("convert.23andme");
+    let fasta_23andme = fixture_path("23andme.fa");
+    let expected_23andme = std::fs::read_to_string(fixture_path("convert.23andme.vcf")).unwrap();
+    let (bcf, err, code) = run_bytes(&[
+        "convert",
+        "-Ou",
+        "-c",
+        "ID,CHROM,POS,AA",
+        "-s",
+        "SAMPLE1",
+        "-f",
+        fasta_23andme.to_str().unwrap(),
+        "--tsv2vcf",
+        input_23andme.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "convert -Ou --tsv2vcf convert.23andme failed: {err}"
+    );
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of 23andMe tsv2vcf BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(&expected_23andme)
+    );
 }
 
 #[test]
@@ -608,7 +701,8 @@ chr1\t5\trs2\tA\tG\t.\tPASS\tDP=2\tGT\t0|1\n",
     let (_view_out, view_err, view_code) = run(&[
         "view",
         "--no-version",
-        "-Ob",
+        "-O",
+        "b",
         "-o",
         bcf.to_str().unwrap(),
         vcf.to_str().unwrap(),
@@ -634,6 +728,40 @@ chr1\t5\trs2\tA\tG\t.\tPASS\tDP=2\tGT\t0|1\n",
         std::fs::read_to_string(&hap).unwrap(),
         "chr1:2_C_T rs1 2 C T 0* 1*\n"
     );
+}
+
+#[test]
+fn convert_hapsample_matches_upstream_stdout_fixtures() {
+    let vcf = fixture_path("convert.vcf");
+    let expected_hap = std::fs::read_to_string(fixture_path("convert.hs.hap")).unwrap();
+    let expected_ids_hap = std::fs::read_to_string(fixture_path("convert.hs.ids.hap")).unwrap();
+    let expected_sample = std::fs::read_to_string(fixture_path("convert.hs.sample")).unwrap();
+
+    let (hap_out, hap_err, hap_code) =
+        run(&["convert", "--hapsample", "-,.", vcf.to_str().unwrap()]);
+    assert_eq!(hap_code, 0, "fixture --hapsample -,. failed: {hap_err}");
+    assert_eq!(hap_out, expected_hap);
+
+    let (ids_hap_out, ids_hap_err, ids_hap_code) = run(&[
+        "convert",
+        "--hapsample",
+        "-,.",
+        "--vcf-ids",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        ids_hap_code, 0,
+        "fixture --hapsample -,. --vcf-ids failed: {ids_hap_err}"
+    );
+    assert_eq!(ids_hap_out, expected_ids_hap);
+
+    let (sample_out, sample_err, sample_code) =
+        run(&["convert", "--hapsample", ".,-", vcf.to_str().unwrap()]);
+    assert_eq!(
+        sample_code, 0,
+        "fixture --hapsample .,- failed: {sample_err}"
+    );
+    assert_eq!(sample_out, expected_sample);
 }
 
 #[test]
@@ -826,7 +954,7 @@ chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0\t1\t.\n",
     )
     .read_to_string(&mut default_hap)
     .unwrap();
-    assert_eq!(default_hap, "chr1 chr1:2_C_T 2 C T 0 - 1 - ? ?\n");
+    assert_eq!(default_hap, "chr1 chr1:2_C_T 2 C T 0 - 1 - ? -\n");
 
     let (_out, err, code) = run(&[
         "convert",
@@ -1009,6 +1137,53 @@ chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0/1\t1|1\t0|0\n",
 }
 
 #[test]
+fn convert_haplegendsample_matches_upstream_stdout_fixtures() {
+    let vcf = fixture_path("convert.vcf");
+    let hap_missing_vcf = fixture_path("convert.hap-missing.vcf");
+    let expected_haps = std::fs::read_to_string(fixture_path("convert.hls.haps")).unwrap();
+    let expected_legend = std::fs::read_to_string(fixture_path("convert.hls.legend")).unwrap();
+    let expected_ids_legend =
+        std::fs::read_to_string(fixture_path("convert.hls.ids.legend")).unwrap();
+    let expected_samples = std::fs::read_to_string(fixture_path("convert.hls.samples")).unwrap();
+    let expected_hap_missing =
+        std::fs::read_to_string(fixture_path("convert.hap-missing.haps")).unwrap();
+
+    let (haps_out, haps_err, haps_code) = run(&["convert", "-h", "-,.,.", vcf.to_str().unwrap()]);
+    assert_eq!(haps_code, 0, "fixture -h -,.,. failed: {haps_err}");
+    assert_eq!(haps_out, expected_haps);
+
+    let (legend_out, legend_err, legend_code) =
+        run(&["convert", "-h", ".,-,.", vcf.to_str().unwrap()]);
+    assert_eq!(legend_code, 0, "fixture -h .,-,. failed: {legend_err}");
+    assert_eq!(legend_out, expected_legend);
+
+    let (ids_legend_out, ids_legend_err, ids_legend_code) =
+        run(&["convert", "-h", ".,-,.", "--vcf-ids", vcf.to_str().unwrap()]);
+    assert_eq!(
+        ids_legend_code, 0,
+        "fixture -h .,-,. --vcf-ids failed: {ids_legend_err}"
+    );
+    assert_eq!(ids_legend_out, expected_ids_legend);
+
+    let (samples_out, samples_err, samples_code) =
+        run(&["convert", "-h", ".,.,-", vcf.to_str().unwrap()]);
+    assert_eq!(samples_code, 0, "fixture -h .,.,- failed: {samples_err}");
+    assert_eq!(samples_out, expected_samples);
+
+    let (hap_missing_out, hap_missing_err, hap_missing_code) = run(&[
+        "convert",
+        "--haplegendsample",
+        "-,.,.",
+        hap_missing_vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        hap_missing_code, 0,
+        "fixture --haplegendsample -,.,. missing GT failed: {hap_missing_err}"
+    );
+    assert_eq!(hap_missing_out, expected_hap_missing);
+}
+
+#[test]
 fn convert_haplegendsample2vcf_writes_vcf_from_hap_legend_and_samples() {
     let dir = TempDir::new().unwrap();
     let hap = dir.path().join("in.hap");
@@ -1100,6 +1275,19 @@ fn convert_haplegendsample2vcf_matches_upstream_hap_legend_sample_fixture() {
     let (out, err, code) = run(&["convert", "-H", "--no-version", &input]);
     assert_eq!(code, 0, "fixture -H failed: {err}");
     assert_eq!(without_meta_headers(&out), expected);
+}
+
+#[test]
+fn convert_gensample2vcf_bcf_stdout_round_trips_like_upstream_harness() {
+    let gs_samples = fixture_path("convert.gs.gt.samples");
+    let gs_gen = fixture_path("convert.gs.gt.ids.gen");
+    let gs_expected = std::fs::read_to_string(fixture_path("convert.gs.vcf")).unwrap();
+    let gs_input = format!("{},{}", gs_gen.display(), gs_samples.display());
+    assert_bcf_stdout_matches(
+        &["convert", "--vcf-ids", "-G", "-Ou", &gs_input],
+        &gs_expected,
+        "convert --vcf-ids -G -Ou",
+    );
 }
 
 #[test]
@@ -1198,6 +1386,9 @@ fn convert_gensample_matches_upstream_stdout_fixtures() {
     let expected_ids = std::fs::read_to_string(fixture_path("convert.gs.gt.ids.gen")).unwrap();
     let expected_ids_3n6 = std::fs::read_to_string(fixture_path("convert.gs.gt.ids.gen6")).unwrap();
     let expected_samples = std::fs::read_to_string(fixture_path("convert.gs.gt.samples")).unwrap();
+    let expected_pl_gen = std::fs::read_to_string(fixture_path("convert.gs.pl.gen")).unwrap();
+    let expected_pl_samples =
+        std::fs::read_to_string(fixture_path("convert.gs.pl.samples")).unwrap();
 
     let (gen_out, gen_err, gen_code) = run(&["convert", "-g", "-,.", vcf.to_str().unwrap()]);
     assert_eq!(gen_code, 0, "fixture -g -,. failed: {gen_err}");
@@ -1226,6 +1417,100 @@ fn convert_gensample_matches_upstream_stdout_fixtures() {
         run(&["convert", "-g", ".,-", vcf.to_str().unwrap()]);
     assert_eq!(samples_code, 0, "fixture -g .,- failed: {samples_err}");
     assert_eq!(samples_out, expected_samples);
+
+    let (pl_gen_out, pl_gen_err, pl_gen_code) =
+        run(&["convert", "-g", "-,.", "--tag", "PL", vcf.to_str().unwrap()]);
+    assert_eq!(
+        pl_gen_code, 0,
+        "fixture -g -,. --tag PL failed: {pl_gen_err}"
+    );
+    assert_eq!(pl_gen_out, expected_pl_gen);
+
+    let (pl_samples_out, pl_samples_err, pl_samples_code) =
+        run(&["convert", "-g", ".,-", "--tag", "PL", vcf.to_str().unwrap()]);
+    assert_eq!(
+        pl_samples_code, 0,
+        "fixture -g .,- --tag PL failed: {pl_samples_err}"
+    );
+    assert_eq!(pl_samples_out, expected_pl_samples);
+}
+
+#[test]
+fn convert_gensample_matches_upstream_check_fixtures() {
+    let vcf = fixture_path("check.vcf");
+    let vcf = vcf.to_str().unwrap();
+    let cases = [
+        (
+            vec!["convert", "-g", "-,.", "--vcf-ids", vcf],
+            "check.gs.vcfids.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--vcf-ids", vcf],
+            "check.gs.vcfids.samples",
+        ),
+        (
+            vec!["convert", "-g", "-,.", "--3N6", vcf],
+            "check.gs.chrom.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--3N6", vcf],
+            "check.gs.chrom.samples",
+        ),
+        (
+            vec!["convert", "-g", "-,.", "--3N6", "--vcf-ids", vcf],
+            "check.gs.vcfids_chrom.gen",
+        ),
+        (
+            vec!["convert", "-g", ".,-", "--3N6", "--vcf-ids", vcf],
+            "check.gs.vcfids_chrom.samples",
+        ),
+    ];
+
+    for (args, fixture) in cases {
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "fixture {fixture} failed: {err}");
+        assert_eq!(out, expected, "fixture {fixture} mismatch");
+    }
+}
+
+#[test]
+fn convert_forward_modes_read_bcf_from_stdin_like_upstream_harness() {
+    let dir = TempDir::new().unwrap();
+    let vcf = dir.path().join("in.vcf");
+    let bcf = dir.path().join("convert.bcf");
+    std::fs::write(
+        &vcf,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+##contig=<ID=chr1,length=10>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
+chr1\t2\trs1\tC\tT\t.\tPASS\t.\tGT\t0|1\t1|1\n",
+    )
+    .unwrap();
+    let (_view_out, view_err, view_code) = run(&[
+        "view",
+        "--no-version",
+        "-Ob",
+        "-o",
+        bcf.to_str().unwrap(),
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(view_code, 0, "view -Ob failed: {view_err}");
+    let bcf_bytes = std::fs::read(&bcf).unwrap();
+
+    let (gen_out, gen_err, gen_code) = run_with_stdin(&["convert", "-g", "-,."], &bcf_bytes);
+    assert_eq!(gen_code, 0, "stdin BCF -g -,. failed: {gen_err}");
+    assert_eq!(gen_out, "chr1:2_C_T chr1:2_C_T 2 C T 0 1 0 0 0 1\n");
+
+    let (hap_out, hap_err, hap_code) =
+        run_with_stdin(&["convert", "--hapsample", "-,."], &bcf_bytes);
+    assert_eq!(hap_code, 0, "stdin BCF --hapsample -,. failed: {hap_err}");
+    assert_eq!(hap_out, "chr1 chr1:2_C_T 2 C T 0 1 1 1\n");
+
+    let (hls_out, hls_err, hls_code) = run_with_stdin(&["convert", "-h", "-,.,."], &bcf_bytes);
+    assert_eq!(hls_code, 0, "stdin BCF -h -,.,. failed: {hls_err}");
+    assert_eq!(hls_out, "0 1 1 1\n");
 }
 
 #[test]
