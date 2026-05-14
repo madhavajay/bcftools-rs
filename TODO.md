@@ -205,6 +205,15 @@ Latest landed progress:
 
 Current in-flight local progress:
 
+- 2026-05-15: `progress/view-options-after-input` adds another `view` parity
+  slice: upstream-style option parsing when `view` options appear after the
+  input path (for example `view in.vcf -H` and `view in.vcf -Ou`), simple text
+  VCF passthrough with textual `##bcftools_view{Version,Command}` injection so
+  header-only/no-header text output avoids unnecessary structured INFO parsing,
+  and HTSlib-style text normalization for Integer/Float INFO/FORMAT fields with
+  64-bit/out-of-range values. This raises upstream `test_vcf_64bit` from 2/14
+  passing to 10/14 passing locally; the remaining `-Ou` BCF cases are recorded
+  in the dependency-blocker list.
 - 2026-05-14: `progress/convert-fixture-parity-2` adds another convert parity
   slice after PR #8: more upstream GEN/SAMPLE, HAP/SAMPLE, and
   HAP/LEGEND/SAMPLE fixture-output parity, the upstream `-h` alias for
@@ -348,8 +357,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave A — Read/Write/Index Foundation
 
 - [ ] `view` (`vcfview.c`, 41k) — VCF↔BCF conversion, filtering (`-i`/`-e`/`-f`/`-G`/`-m`/`-M`/`-q`/`-Q`/`-v`/`-V`), sample/region restriction, `--no-version`. Anchor subcommand for parity testing. Covered by `test_vcf_view`. Depends on Phase 1 filter engine + synced reader wrapper.
-  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, simple positional region filtering including `-r`/`-R` and braced contig names, text VCF region overlap modes via `--regions-overlap 0|1|2`, simple target filtering including `-t`/`-T` and `^` exclusion, text VCF target overlap modes via `--targets-overlap 0|1|2`, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, BCF-output sample subsetting via the VCF projection path, text VCF `-G` genotype-column dropping, simple text VCF FILTER-list filtering via `-f`, limited text VCF expression filtering via `-i`/`-e` for core fields plus scalar and indexed INFO fields, simple text VCF type filtering via `-v`/`-V`, simple text VCF allele-count filtering via `-m`/`-M`, simple text VCF allele count/frequency filtering via `-c`/`-C`/`-q`/`-Q`, simple text VCF known/novel filtering via `-k`/`-n`, simple text VCF uncalled-site filtering via `-u`/`-U`, simple text VCF genotype-class filtering via `-g`, simple text VCF phased-site filtering via `-p`/`-P`, and threaded BGZF VCF/BCF writes.
-  - [ ] Remaining: full filter expression handling including FORMAT/sample expressions and advanced vector/sample slicing, complete FILTER/frequency/count/allele/type/genotype/phasing/known-novel/uncalled filter semantics across structured VCF/BCF writer paths, overlap-aware indexed region semantics, structured BCF/VCF writer overlap filtering, and full upstream `test_vcf_view` parity.
+  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, upstream-style option parsing when options appear after the input path, simple text VCF passthrough with textual version-header injection, HTSlib-style text normalization for Integer/Float INFO/FORMAT values outside BCF output, simple positional region filtering including `-r`/`-R` and braced contig names, text VCF region overlap modes via `--regions-overlap 0|1|2`, simple target filtering including `-t`/`-T` and `^` exclusion, text VCF target overlap modes via `--targets-overlap 0|1|2`, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, BCF-output sample subsetting via the VCF projection path, text VCF `-G` genotype-column dropping, simple text VCF FILTER-list filtering via `-f`, limited text VCF expression filtering via `-i`/`-e` for core fields plus scalar and indexed INFO fields, simple text VCF type filtering via `-v`/`-V`, simple text VCF allele-count filtering via `-m`/`-M`, simple text VCF allele count/frequency filtering via `-c`/`-C`/`-q`/`-Q`, simple text VCF known/novel filtering via `-k`/`-n`, simple text VCF uncalled-site filtering via `-u`/`-U`, simple text VCF genotype-class filtering via `-g`, simple text VCF phased-site filtering via `-p`/`-P`, and threaded BGZF VCF/BCF writes.
+  - [ ] Remaining: full filter expression handling including FORMAT/sample expressions and advanced vector/sample slicing, complete FILTER/frequency/count/allele/type/genotype/phasing/known-novel/uncalled filter semantics across structured VCF/BCF writer paths, overlap-aware indexed region semantics, structured BCF/VCF writer overlap filtering, BCF output parity for 64-bit/out-of-range integer and missing INFO/FORMAT values, and full upstream `test_vcf_view` parity.
 - [x] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`.
 - [x] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.
 - [x] `tabix` (`tabix.c`) — generic BGZF index/query for BED/GFF/SAM/VCF. Marked "do not advertise" upstream (`main.c:85`) but kept for tests. Covered by `test_tabix`.
@@ -461,6 +470,14 @@ This end-of-file list is filled as the subcommand surface mapping uncovers gaps 
   GEN/SAMPLE `-G -Ou | view` passes; the remaining HAP/SAMPLE and
   HAP/LEGEND/SAMPLE upstream pipe fixtures need `htslib-rs`/writer support for
   this genotype shape.
+- [ ] **BCF serialization of 64-bit/out-of-range typed VCF values** —
+  upstream `test_vcf_64bit` now passes all simple text-output cases in
+  `bcftools-rs`, but the `view input.vcf -Ou | view -H` cases still fail while
+  encoding or re-reading BCF. Failures include out-of-range Integer INFO/FORMAT
+  values that HTSlib maps to missing, `INFO` missing-value arrays currently
+  reaching an unimplemented `noodles-bcf` encoder path, and invalid `END`
+  position handling. This needs `htslib-rs`/writer support for HTSlib's integer
+  sentinel and missing-vector BCF semantics.
 
 ## Submodule Pinning
 

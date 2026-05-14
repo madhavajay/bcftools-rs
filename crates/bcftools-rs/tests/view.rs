@@ -43,6 +43,16 @@ fn run(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, out.status.code().unwrap_or(-1))
 }
 
+fn run_bytes(args: &[&str]) -> (Vec<u8>, String, i32) {
+    ensure_binary_built();
+    let out = Command::new(bin_path())
+        .args(args)
+        .output()
+        .expect("spawn bcftools");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (out.stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
 fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
     ensure_binary_built();
     let mut child = Command::new(bin_path())
@@ -143,6 +153,39 @@ fn view_no_header_drops_header() {
     assert!(header_lines.is_empty(), "header leaked: {header_lines:?}");
     let record_lines: Vec<_> = out.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(record_lines.len(), 21);
+}
+
+#[test]
+fn view_accepts_no_header_after_input_path() {
+    let path = fixture_path("aa.vcf");
+    let (out, err, code) = run(&["view", "--no-version", path.to_str().unwrap(), "-H"]);
+    assert_eq!(code, 0, "view trailing -H failed: {err}");
+    let header_lines: Vec<_> = out.lines().filter(|line| line.starts_with('#')).collect();
+    assert!(header_lines.is_empty(), "header leaked: {header_lines:?}");
+    let record_lines: Vec<_> = out.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(record_lines.len(), 21);
+}
+
+#[test]
+fn view_accepts_output_type_after_input_path_for_bcf_stdout() {
+    let path = fixture_path("aa.vcf");
+    let (bcf, err, code) = run_bytes(&["view", "--no-version", path.to_str().unwrap(), "-Ou"]);
+    assert_eq!(code, 0, "view trailing -Ou failed: {err}");
+    assert!(!bcf.is_empty(), "trailing -Ou produced no BCF bytes");
+
+    let (out, err, code) = run_with_stdin(&["view", "--no-version", "-H"], &bcf);
+    assert_eq!(code, 0, "view failed to read trailing -Ou output: {err}");
+    let records: Vec<_> = out.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(records.len(), 21);
+}
+
+#[test]
+fn view_text_output_normalizes_out_of_range_integer_fields() {
+    let path = fixture_path("view64bit.5.vcf");
+    let expected = std::fs::read_to_string(fixture_path("view64bit.5.out")).unwrap();
+    let (out, err, code) = run(&["view", path.to_str().unwrap(), "-H"]);
+    assert_eq!(code, 0, "view 64-bit text normalization failed: {err}");
+    assert_eq!(out, expected);
 }
 
 #[test]

@@ -18,6 +18,7 @@
 //! Positional region arguments support the common `CHROM` and `CHROM:START-END`
 //! forms by streaming and filtering records.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, BufRead as _, BufReader, Cursor, Read as _, Write};
@@ -619,6 +620,7 @@ impl OutputKind {
 
 /// Subcommand entry point. `argv[0]` is `"view"`.
 pub fn main(argv: &[OsString]) -> ExitCode {
+    let parse_argv = normalize_options_anywhere(argv);
     let long_opts = [
         LongOpt::new("output", HasArg::Required, b'o' as i32),
         LongOpt::new("output-file", HasArg::Required, b'o' as i32),
@@ -691,7 +693,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut g = Getopt::new(
         "o:O:l:f:g:i:e:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGv:V:",
         &long_opts,
-        argv,
+        &parse_argv,
     );
     loop {
         match g.next() {
@@ -1091,6 +1093,102 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     }
 }
 
+fn normalize_options_anywhere(argv: &[OsString]) -> Vec<OsString> {
+    let Some((program, rest)) = argv.split_first() else {
+        return Vec::new();
+    };
+    let mut normalized = vec![program.clone()];
+    let mut options = Vec::new();
+    let mut positionals = Vec::new();
+    let mut iter = rest.iter().peekable();
+
+    while let Some(arg) = iter.next() {
+        let raw = arg.to_string_lossy();
+        if is_view_option_token(&raw) {
+            let consumes_next = option_consumes_next_value(&raw);
+            options.push(arg.clone());
+            if consumes_next && let Some(value) = iter.next() {
+                options.push(value.clone());
+            }
+        } else {
+            positionals.push(arg.clone());
+        }
+    }
+
+    normalized.extend(options);
+    normalized.extend(positionals);
+    normalized
+}
+
+fn is_view_option_token(raw: &str) -> bool {
+    raw != "-"
+        && raw.starts_with('-')
+        && (raw.starts_with("--") || raw.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic))
+}
+
+fn option_consumes_next_value(raw: &str) -> bool {
+    if !raw.starts_with('-') || raw == "-" {
+        return false;
+    }
+    if let Some(name) = raw.strip_prefix("--") {
+        if name.contains('=') {
+            return false;
+        }
+        return matches!(
+            name,
+            "output"
+                | "output-file"
+                | "output-type"
+                | "compression-level"
+                | "apply-filters"
+                | "genotype"
+                | "include"
+                | "exclude"
+                | "min-ac"
+                | "max-ac"
+                | "min-alleles"
+                | "max-alleles"
+                | "min-af"
+                | "max-af"
+                | "regions"
+                | "regions-file"
+                | "regions-overlap"
+                | "samples"
+                | "samples-file"
+                | "targets"
+                | "targets-file"
+                | "targets-overlap"
+                | "types"
+                | "exclude-types"
+                | "threads"
+        );
+    }
+
+    matches!(
+        raw,
+        "-o" | "-O"
+            | "-l"
+            | "-f"
+            | "-g"
+            | "-i"
+            | "-e"
+            | "-c"
+            | "-C"
+            | "-m"
+            | "-M"
+            | "-q"
+            | "-Q"
+            | "-r"
+            | "-R"
+            | "-s"
+            | "-S"
+            | "-t"
+            | "-T"
+            | "-v"
+            | "-V"
+    )
+}
+
 fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<()> {
     if path == Path::new("-") {
         let tmp = stdin_tmp_path();
@@ -1140,12 +1238,89 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
         return run_sample_subset(path, in_fmt, options, argv);
     }
 
-    let mut header = read_header(path, in_fmt)?;
-
-    if !options.no_version {
+    let version_lines = if options.no_version {
+        None
+    } else {
         let mut prog_argv: Vec<OsString> = vec!["bcftools".into()];
         prog_argv.extend(argv.iter().cloned());
-        let lines = build_lines("bcftools_view", &prog_argv, command_time());
+        Some(build_lines("bcftools_view", &prog_argv, command_time()))
+    };
+
+    if options.output_kind == OutputKind::VcfText
+        && options.regions.is_empty()
+        && options.targets.is_empty()
+        && !has_line_filters
+        && in_fmt.exact != Exact::Bcf
+    {
+        return match options.output_file {
+            Some("-") | None => write_vcf_text_passthrough(
+                path,
+                in_fmt,
+                options.header_only,
+                options.no_header,
+                version_lines.as_ref(),
+                io::stdout().lock(),
+            ),
+            Some(p) => write_vcf_text_passthrough(
+                path,
+                in_fmt,
+                options.header_only,
+                options.no_header,
+                version_lines.as_ref(),
+                File::create(p)?,
+            ),
+        };
+    }
+
+    if options.output_kind == OutputKind::VcfText
+        && options.no_version
+        && has_text_filters
+        && in_fmt.exact != Exact::Bcf
+    {
+        return match options.output_file {
+            Some("-") | None => {
+                write_vcf_text_filtered_passthrough(path, in_fmt, options, io::stdout().lock())
+            }
+            Some(p) => write_vcf_text_filtered_passthrough(path, in_fmt, options, File::create(p)?),
+        };
+    }
+
+    if options.output_kind == OutputKind::VcfGz
+        && options.no_version
+        && options.regions.is_empty()
+        && options.targets.is_empty()
+        && !has_line_filters
+        && in_fmt.exact != Exact::Bcf
+    {
+        return match options.output_file {
+            Some(p) if p != "-" => {
+                let bgzf = htslib_rs::bgzf::io::Writer::new(File::create(p)?);
+                write_vcf_text_passthrough(
+                    path,
+                    in_fmt,
+                    options.header_only,
+                    options.no_header,
+                    None,
+                    bgzf,
+                )
+            }
+            _ => {
+                let bgzf = htslib_rs::bgzf::io::Writer::new(io::stdout().lock());
+                write_vcf_text_passthrough(
+                    path,
+                    in_fmt,
+                    options.header_only,
+                    options.no_header,
+                    None,
+                    bgzf,
+                )
+            }
+        };
+    }
+
+    let mut header = read_header(path, in_fmt)?;
+
+    if let Some(lines) = &version_lines {
         // Strip the "##" prefix and the "key=" delimiter from each rendered
         // line, then route both into the header via htslib-rs's typed-wrapper
         // helper. Mirrors upstream `bcf_hdr_append_version` which appends
@@ -1180,11 +1355,6 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
     match options.output_kind {
         OutputKind::VcfText => match options.output_file {
             Some("-") | None
-                if options.no_version && has_text_filters && in_fmt.exact != Exact::Bcf =>
-            {
-                write_vcf_text_filtered_passthrough(path, in_fmt, options, io::stdout().lock())
-            }
-            Some("-") | None
                 if options.no_version
                     && options.regions.is_empty()
                     && options.targets.is_empty()
@@ -1195,6 +1365,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    None,
                     io::stdout().lock(),
                 )
             }
@@ -1207,9 +1378,6 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 filters,
                 io::stdout().lock(),
             ),
-            Some(p) if options.no_version && has_text_filters && in_fmt.exact != Exact::Bcf => {
-                write_vcf_text_filtered_passthrough(path, in_fmt, options, File::create(p)?)
-            }
             Some(p)
                 if options.no_version
                     && options.regions.is_empty()
@@ -1221,6 +1389,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    None,
                     File::create(p)?,
                 )
             }
@@ -1261,6 +1430,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                         in_fmt,
                         options.header_only,
                         options.no_header,
+                        None,
                         bgzf,
                     )
                 }
@@ -1271,6 +1441,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                         in_fmt,
                         options.header_only,
                         options.no_header,
+                        None,
                         bgzf,
                     )
                 }
@@ -2216,6 +2387,7 @@ fn write_vcf_text_passthrough<W: Write>(
     fmt: format::Format,
     header_only: bool,
     no_header: bool,
+    version_lines: Option<&crate::header_version::HeaderVersionLines>,
     out: W,
 ) -> io::Result<()> {
     if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
@@ -2226,12 +2398,19 @@ fn write_vcf_text_passthrough<W: Write>(
             BufReader::new(normalized),
             header_only,
             no_header,
+            version_lines,
             out,
         );
     }
     let f = File::open(path)?;
     let normalized = crate::vcf_compat::NormalizeFileformat::new(BufReader::new(f))?;
-    write_vcf_text_passthrough_reader(BufReader::new(normalized), header_only, no_header, out)
+    write_vcf_text_passthrough_reader(
+        BufReader::new(normalized),
+        header_only,
+        no_header,
+        version_lines,
+        out,
+    )
 }
 
 fn write_vcf_text_filtered_passthrough<W: Write>(
@@ -2292,6 +2471,7 @@ fn write_vcf_text_passthrough_reader<R, W>(
     mut reader: R,
     header_only: bool,
     no_header: bool,
+    version_lines: Option<&crate::header_version::HeaderVersionLines>,
     mut out: W,
 ) -> io::Result<()>
 where
@@ -2299,6 +2479,8 @@ where
     W: Write,
 {
     let mut line = String::new();
+    let mut wrote_version_lines = false;
+    let mut field_types = VcfFieldTypes::default();
     loop {
         line.clear();
         let n = reader.read_line(&mut line)?;
@@ -2306,7 +2488,18 @@ where
             break;
         }
         if line.starts_with('#') {
+            field_types.observe_header_line(&line);
             if !no_header {
+                if !wrote_version_lines
+                    && line.starts_with("#CHROM")
+                    && let Some(lines) = version_lines
+                {
+                    out.write_all(lines.version_line.as_bytes())?;
+                    out.write_all(b"\n")?;
+                    out.write_all(lines.command_line.as_bytes())?;
+                    out.write_all(b"\n")?;
+                    wrote_version_lines = true;
+                }
                 out.write_all(line.as_bytes())?;
             }
             continue;
@@ -2314,11 +2507,137 @@ where
         if header_only {
             break;
         }
-        out.write_all(line.as_bytes())?;
-        io::copy(&mut reader, &mut out)?;
-        break;
+        let normalized = normalize_vcf_text_record_line(&line, &field_types);
+        out.write_all(normalized.as_bytes())?;
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct VcfFieldTypes {
+    info: HashMap<String, VcfScalarType>,
+    format: HashMap<String, VcfScalarType>,
+}
+
+#[derive(Clone, Copy)]
+enum VcfScalarType {
+    Integer,
+    Float,
+}
+
+impl VcfFieldTypes {
+    fn observe_header_line(&mut self, line: &str) {
+        if let Some((id, field_type)) = parse_typed_header_line(line, "##INFO=<") {
+            self.info.insert(id, field_type);
+        } else if let Some((id, field_type)) = parse_typed_header_line(line, "##FORMAT=<") {
+            self.format.insert(id, field_type);
+        }
+    }
+}
+
+fn parse_typed_header_line(line: &str, prefix: &str) -> Option<(String, VcfScalarType)> {
+    let body = line.strip_prefix(prefix)?.trim_end();
+    let body = body.strip_suffix('>').unwrap_or(body);
+    let mut id = None;
+    let mut field_type = None;
+    for item in body.split(',') {
+        let (key, value) = item.split_once('=')?;
+        match key {
+            "ID" => id = Some(value.to_string()),
+            "Type" => {
+                field_type = match value {
+                    "Integer" => Some(VcfScalarType::Integer),
+                    "Float" => Some(VcfScalarType::Float),
+                    _ => None,
+                };
+            }
+            _ => {}
+        }
+    }
+    Some((id?, field_type?))
+}
+
+fn normalize_vcf_text_record_line(line: &str, field_types: &VcfFieldTypes) -> String {
+    let had_newline = line.ends_with('\n');
+    let body = line.trim_end_matches(['\r', '\n']);
+    let mut fields = body.split('\t').map(str::to_string).collect::<Vec<_>>();
+    if fields.len() < 8 {
+        return line.to_string();
+    }
+
+    fields[7] = normalize_info_field(&fields[7], &field_types.info);
+
+    if fields.len() > 9 {
+        let format_keys = fields[8].split(':').map(str::to_string).collect::<Vec<_>>();
+        for sample in &mut fields[9..] {
+            *sample = normalize_format_sample_field(sample, &format_keys, &field_types.format);
+        }
+    }
+
+    let mut out = fields.join("\t");
+    if had_newline {
+        out.push('\n');
+    }
+    out
+}
+
+fn normalize_info_field(raw: &str, types: &HashMap<String, VcfScalarType>) -> String {
+    if raw == "." || raw.is_empty() {
+        return raw.to_string();
+    }
+    raw.split(';')
+        .map(|item| {
+            let Some((key, value)) = item.split_once('=') else {
+                return item.to_string();
+            };
+            match types.get(key) {
+                Some(field_type) => format!("{key}={}", normalize_typed_values(value, *field_type)),
+                None => item.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn normalize_format_sample_field(
+    raw: &str,
+    format_keys: &[String],
+    types: &HashMap<String, VcfScalarType>,
+) -> String {
+    raw.split(':')
+        .enumerate()
+        .map(
+            |(i, value)| match format_keys.get(i).and_then(|key| types.get(key)) {
+                Some(field_type) => normalize_typed_values(value, *field_type),
+                None => value.to_string(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn normalize_typed_values(raw: &str, field_type: VcfScalarType) -> String {
+    raw.split(',')
+        .map(|value| normalize_typed_value(value, field_type))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn normalize_typed_value(raw: &str, field_type: VcfScalarType) -> String {
+    if raw == "." || raw.is_empty() {
+        return raw.to_string();
+    }
+    match field_type {
+        VcfScalarType::Integer => match raw.parse::<i64>() {
+            Ok(n) if (-2_147_483_640..=2_147_483_647).contains(&n) => n.to_string(),
+            Ok(_) => ".".to_string(),
+            Err(_) => raw.to_string(),
+        },
+        VcfScalarType::Float => match raw.parse::<f64>() {
+            Ok(n) if n.is_finite() => n.to_string(),
+            Ok(_) | Err(_) => raw.to_string(),
+        },
+    }
 }
 
 fn write_bcf_vcf_text_no_version<W: Write>(
