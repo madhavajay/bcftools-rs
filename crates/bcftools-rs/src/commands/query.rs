@@ -390,7 +390,7 @@ fn query_format_text<W: Write>(
         {
             continue;
         }
-        let rendered = render_format(format, &record);
+        let rendered = render_format(format, &record, query_filter.as_ref());
         out.write_all(rendered.as_bytes())?;
         if !rendered.ends_with('\n') {
             out.write_all(b"\n")?;
@@ -579,6 +579,7 @@ struct QueryFilter {
 #[derive(Debug, Clone)]
 enum QueryFilterKind {
     Expr(String),
+    SamplePredicateGroups(Vec<Vec<String>>),
     FilterIdMatch {
         id: String,
         negate: bool,
@@ -655,6 +656,9 @@ impl QueryFilter {
                 })
             })
             .or_else(|| {
+                parse_sample_predicate_groups(&spec.raw).map(QueryFilterKind::SamplePredicateGroups)
+            })
+            .or_else(|| {
                 parse_simple_predicate_groups(&spec.raw).map(QueryFilterKind::PredicateGroups)
             })
             .unwrap_or_else(|| QueryFilterKind::Expr(normalize_filter_expr(&spec.raw)));
@@ -665,6 +669,11 @@ impl QueryFilter {
     }
 
     fn matches(&self, record: &TextRecord<'_>) -> io::Result<bool> {
+        if let QueryFilterKind::SamplePredicateGroups(groups) = &self.kind {
+            return Ok((0..record.sample_indices.len()).any(|sample_index| {
+                sample_groups_match(groups, record, sample_index) != self.exclude
+            }));
+        }
         let matched = match &self.kind {
             QueryFilterKind::Expr(expression) => bcffilter::eval_expression_with(
                 expression,
@@ -672,6 +681,7 @@ impl QueryFilter {
                 |name, sample| filter_lookup_value(name, sample, record),
             )?
             .truthy(),
+            QueryFilterKind::SamplePredicateGroups(_) => unreachable!("handled above"),
             QueryFilterKind::FilterIdMatch { id, negate } => {
                 record.filter_has_id(id.as_str()) != *negate
             }
@@ -699,6 +709,15 @@ impl QueryFilter {
                 .any(|predicates| predicates.iter().all(|predicate| predicate.matches(record))),
         };
         Ok(matched != self.exclude)
+    }
+
+    fn matches_sample(&self, record: &TextRecord<'_>, sample_index: usize) -> bool {
+        match &self.kind {
+            QueryFilterKind::SamplePredicateGroups(groups) => {
+                sample_groups_match(groups, record, sample_index) != self.exclude
+            }
+            _ => true,
+        }
     }
 }
 
@@ -734,6 +753,41 @@ fn parse_simple_predicate_groups(raw: &str) -> Option<Vec<Vec<SimplePredicate>>>
         })
         .collect::<Option<Vec<_>>>()?;
     (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
+}
+
+fn parse_sample_predicate_groups(raw: &str) -> Option<Vec<Vec<String>>> {
+    let groups = split_simple_or(raw)
+        .into_iter()
+        .map(|term| {
+            split_simple_and(term)
+                .into_iter()
+                .map(|predicate| {
+                    sample_predicate_is_supported(predicate).then_some(predicate.to_string())
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!groups.is_empty() && groups.iter().all(|group| !group.is_empty())).then_some(groups)
+}
+
+fn sample_predicate_is_supported(raw: &str) -> bool {
+    let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
+        return false;
+    };
+    let lhs = lhs.trim();
+    if parse_sample_count_lhs(lhs).is_some() {
+        return rhs.trim().parse::<f64>().is_ok()
+            && matches!(
+                op,
+                PredicateOp::Eq
+                    | PredicateOp::Ne
+                    | PredicateOp::Gt
+                    | PredicateOp::Ge
+                    | PredicateOp::Lt
+                    | PredicateOp::Le
+            );
+    }
+    lhs == "GT" || lhs.starts_with("FMT/") || lhs.starts_with("FORMAT/")
 }
 
 fn split_simple_or(raw: &str) -> Vec<&str> {
@@ -1217,7 +1271,7 @@ impl<'a> TextRecord<'a> {
     }
 }
 
-fn render_format(format: &str, record: &TextRecord<'_>) -> String {
+fn render_format(format: &str, record: &TextRecord<'_>, filter: Option<&QueryFilter>) -> String {
     let mut out = String::new();
     let mut rest = format;
     while let Some(start) = rest.find('[') {
@@ -1229,6 +1283,9 @@ fn render_format(format: &str, record: &TextRecord<'_>) -> String {
         };
         let block = &after_start[..end];
         for sample_index in 0..record.sample_indices.len() {
+            if filter.is_some_and(|filter| !filter.matches_sample(record, sample_index)) {
+                continue;
+            }
             render_segment(block, record, Some(sample_index), &mut out);
         }
         rest = &after_start[end + 1..];
@@ -1703,10 +1760,32 @@ fn sample_expression_matches(
     })
 }
 
+fn sample_groups_match(
+    groups: &[Vec<String>],
+    record: &TextRecord<'_>,
+    sample_index: usize,
+) -> bool {
+    groups.iter().any(|group| {
+        group
+            .iter()
+            .all(|predicate| sample_predicate_matches(predicate, record, sample_index))
+    })
+}
+
 fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: usize) -> bool {
     let Some((lhs, op, rhs)) = split_sample_predicate(raw) else {
         return false;
     };
+    if let Some(argument) = parse_sample_count_lhs(lhs.trim()) {
+        let Ok(rhs) = rhs.trim().parse::<f64>() else {
+            return false;
+        };
+        return compare_number(
+            sample_count(argument, record, Some(sample_index)) as f64,
+            op,
+            rhs,
+        );
+    }
     let lhs = lhs
         .trim()
         .strip_prefix("FMT/")
@@ -1717,6 +1796,18 @@ fn sample_predicate_matches(raw: &str, record: &TextRecord<'_>, sample_index: us
         return compare_gt(&value, op, rhs);
     }
     compare_sample_value(&value, op, rhs)
+}
+
+fn parse_sample_count_lhs(lhs: &str) -> Option<&str> {
+    let open_idx = lhs.find('(')?;
+    if !lhs[..open_idx].eq_ignore_ascii_case("SMPL_COUNT") {
+        return None;
+    }
+    let close_idx = find_function_end(lhs, open_idx)?;
+    lhs[close_idx + 1..]
+        .trim()
+        .is_empty()
+        .then_some(&lhs[open_idx + 1..close_idx])
 }
 
 fn split_sample_predicate(raw: &str) -> Option<(&str, PredicateOp, &str)> {
