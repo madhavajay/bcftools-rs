@@ -434,6 +434,22 @@ fn query_alt_vector_regex_filter_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_strlen_filter_matches_upstream_fixture() {
+    let path = fixture_path("view.filter.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.9.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "%POS %CIGAR\\n",
+        "-i",
+        "strlen(CIGAR[*])=4",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i strlen(CIGAR[*]) failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_vector_missing_predicates_match_upstream_fixtures() {
     let path = fixture_path("query.filter.15.vcf");
     let expected_missing = std::fs::read_to_string(fixture_path("query.filter.15.1.out")).unwrap();

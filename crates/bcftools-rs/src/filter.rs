@@ -651,6 +651,12 @@ fn eval_call(
                 number(&eval_with_trace(&args[0], context, resolver, trace)?)?.abs(),
             ))
         }
+        "STRLEN" => {
+            require_arity(function, args, 1)?;
+            Ok(string_lengths(&eval_with_trace(
+                &args[0], context, resolver, trace,
+            )?))
+        }
         "PHRED" => {
             require_arity(function, args, 1)?;
             let value = number(&eval_with_trace(&args[0], context, resolver, trace)?)?;
@@ -748,6 +754,13 @@ fn sample_standard_deviation(values: &[f64]) -> f64 {
         .sum::<f64>()
         / values.len() as f64;
     variance.sqrt()
+}
+
+fn string_lengths(value: &Value) -> Value {
+    match value {
+        Value::List(values) => Value::List(values.iter().map(string_lengths).collect()),
+        value => Value::Number(value.as_string().len() as f64),
+    }
 }
 
 fn binom_two_sided(a: f64, b: f64, probability: f64) -> f64 {
@@ -1484,6 +1497,30 @@ mod tests {
             panic!("PHRED should return a number");
         };
         assert!((phred - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn evaluates_string_length_function() {
+        let context = EvalContext::new().with(
+            "CIGAR",
+            Value::List(vec![
+                Value::String("1X4M".into()),
+                Value::String("1X3M1X".into()),
+            ]),
+        );
+
+        assert_eq!(
+            eval_expression("STRLEN(CIGAR[0])", &context).unwrap(),
+            Value::Number(4.0)
+        );
+        assert_eq!(
+            eval_expression("STRLEN(CIGAR[*])=4", &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression("STRLEN(CIGAR[*])=2", &context).unwrap(),
+            Value::Bool(false)
+        );
     }
 
     #[test]
