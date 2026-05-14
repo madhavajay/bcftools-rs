@@ -45,6 +45,16 @@ fn run(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, out.status.code().unwrap_or(-1))
 }
 
+fn run_bytes(args: &[&str]) -> (Vec<u8>, String, i32) {
+    ensure_binary_built();
+    let out = Command::new(bin_path())
+        .args(args)
+        .output()
+        .expect("spawn bcftools");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (out.stdout, stderr, out.status.code().unwrap_or(-1))
+}
+
 fn run_with_stdin(args: &[&str], input: &[u8]) -> (String, String, i32) {
     ensure_binary_built();
     let mut child = Command::new(bin_path())
@@ -155,6 +165,59 @@ fn convert_tsv2vcf_writes_bcf_and_index() {
         run(&["view", "--no-version", out_path.to_str().unwrap()]);
     assert_eq!(view_code, 0, "view of BCF failed: {view_err}");
     assert!(view_out.contains("chr1\t10\trs1\tA\tC\t.\t.\t."));
+}
+
+#[test]
+fn convert_tsv2vcf_bcf_stdout_round_trips_through_view_like_upstream_harness() {
+    let tsv = fixture_path("convert.tsv");
+    let expected_tsv = std::fs::read_to_string(fixture_path("convert.tsv.vcf")).unwrap();
+    let (bcf, err, code) = run_bytes(&[
+        "convert",
+        "-Ou",
+        "-c",
+        "-,CHROM,POS,REF,ALT",
+        "--tsv2vcf",
+        tsv.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "convert -Ou --tsv2vcf convert.tsv failed: {err}");
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of tsv2vcf BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(&expected_tsv)
+    );
+
+    let input_23andme = fixture_path("convert.23andme");
+    let fasta_23andme = fixture_path("23andme.fa");
+    let expected_23andme = std::fs::read_to_string(fixture_path("convert.23andme.vcf")).unwrap();
+    let (bcf, err, code) = run_bytes(&[
+        "convert",
+        "-Ou",
+        "-c",
+        "ID,CHROM,POS,AA",
+        "-s",
+        "SAMPLE1",
+        "-f",
+        fasta_23andme.to_str().unwrap(),
+        "--tsv2vcf",
+        input_23andme.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "convert -Ou --tsv2vcf convert.23andme failed: {err}"
+    );
+    let (view_out, view_err, view_code) = run_with_stdin(&["view", "--no-version"], &bcf);
+    assert_eq!(
+        view_code, 0,
+        "view of 23andMe tsv2vcf BCF stdout failed: {view_err}"
+    );
+    assert_eq!(
+        without_meta_headers(&view_out),
+        without_meta_headers(&expected_23andme)
+    );
 }
 
 #[test]
