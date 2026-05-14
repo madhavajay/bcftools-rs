@@ -1486,6 +1486,22 @@ fn query_format_vector_index_sample_predicates_match_upstream_fixtures() {
 }
 
 #[test]
+fn query_format_gt_vector_index_predicate_matches_upstream_fixture() {
+    let path = fixture_path("query.filter.5.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.92.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "[%POS\\t%GT\\t%SAMPLE\\t%AD\\n]",
+        "-i",
+        "FMT/AD[GT]==10",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -i FMT/AD[GT] failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_sample_vector_ratio_predicate_matches_upstream_fixture() {
     let path = fixture_path("query.filter.13.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.84.out")).unwrap();

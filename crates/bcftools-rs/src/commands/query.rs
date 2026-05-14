@@ -2175,22 +2175,53 @@ fn sample_predicate_value(lhs: &str, record: &TextRecord<'_>, sample_index: usiz
         .strip_prefix("FMT/")
         .or_else(|| lhs.strip_prefix("FORMAT/"))
         .unwrap_or(lhs);
-    let Some((key, index)) = parse_sample_vector_index(lhs) else {
+    let Some((key, selector)) = parse_sample_vector_selector(lhs) else {
         return render_token(lhs, record, Some(sample_index));
     };
-    record
-        .format_value(sample_index, key)
-        .split(',')
-        .nth(index)
-        .unwrap_or(".")
-        .to_string()
+    let value = record.format_value(sample_index, key);
+    let values = value.split(',').collect::<Vec<_>>();
+    match selector {
+        SampleVectorSelector::Index(index) => values.get(index).copied().unwrap_or(".").to_string(),
+        SampleVectorSelector::GenotypeAlleles => {
+            let gt = record.format_value(sample_index, "GT");
+            let Some(alleles) = parse_diploid_gt(&gt) else {
+                return ".".into();
+            };
+            alleles
+                .into_iter()
+                .map(|allele| values.get(allele).copied().unwrap_or("."))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SampleVectorSelector {
+    Index(usize),
+    GenotypeAlleles,
+}
+
+fn parse_sample_vector_selector(lhs: &str) -> Option<(&str, SampleVectorSelector)> {
+    if let Some(key) = lhs.strip_suffix("[GT]") {
+        return (!key.is_empty()).then_some((key, SampleVectorSelector::GenotypeAlleles));
+    }
+    if let Some(index_start) = lhs.rfind("[:") {
+        let key = &lhs[..index_start];
+        let index = lhs[index_start + 2..].strip_suffix(']')?.parse().ok()?;
+        return (!key.is_empty()).then_some((key, SampleVectorSelector::Index(index)));
+    }
+    let index_start = lhs.rfind('[')?;
+    let key = &lhs[..index_start];
+    let index = lhs[index_start + 1..].strip_suffix(']')?.parse().ok()?;
+    (!key.is_empty()).then_some((key, SampleVectorSelector::Index(index)))
 }
 
 fn parse_sample_vector_index(lhs: &str) -> Option<(&str, usize)> {
-    let index_start = lhs.rfind("[:")?;
-    let key = &lhs[..index_start];
-    let index = lhs[index_start + 2..].strip_suffix(']')?.parse().ok()?;
-    (!key.is_empty()).then_some((key, index))
+    match parse_sample_vector_selector(lhs)? {
+        (key, SampleVectorSelector::Index(index)) => Some((key, index)),
+        (_, SampleVectorSelector::GenotypeAlleles) => None,
+    }
 }
 
 fn parse_sample_ratio_lhs(lhs: &str) -> Option<(&str, &str)> {
@@ -2347,6 +2378,17 @@ fn compare_gt(value: &str, op: PredicateOp, rhs: &str) -> bool {
 
 fn compare_sample_value(value: &str, op: PredicateOp, rhs: &str) -> bool {
     let rhs = rhs.trim().trim_matches('"');
+    if value.contains(',') {
+        let values = value.split(',').collect::<Vec<_>>();
+        return match op {
+            PredicateOp::Ne => values
+                .iter()
+                .all(|value| compare_sample_value(value.trim(), op, rhs)),
+            _ => values
+                .iter()
+                .any(|value| compare_sample_value(value.trim(), op, rhs)),
+        };
+    }
     if let (Ok(left), Ok(right)) = (value.parse::<f64>(), rhs.parse::<f64>()) {
         return compare_number(left, op, right);
     }
@@ -2410,21 +2452,33 @@ fn render_token_for_output(
         return value
             .split(',')
             .nth(index)
-            .map(format_output_scalar)
+            .map(|value| format_output_scalar(token, value, sample_index))
             .unwrap_or_else(|| ".".into());
     }
     value
         .split(',')
-        .map(format_output_scalar)
+        .map(|value| format_output_scalar(token, value, sample_index))
         .collect::<Vec<_>>()
         .join(",")
 }
 
-fn format_output_scalar(value: &str) -> String {
+fn format_output_scalar(token: &str, value: &str, sample_index: Option<usize>) -> String {
     if value.contains(['e', 'E'])
         && let Ok(parsed) = value.parse::<f64>()
     {
         return format_number(parsed);
+    }
+    if sample_index.is_some()
+        && token
+            .strip_prefix("FMT/")
+            .or_else(|| token.strip_prefix("FORMAT/"))
+            .unwrap_or(token)
+            == "AD"
+        && value.len() > 1
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(parsed) = value.parse::<i64>()
+    {
+        return parsed.to_string();
     }
     value.to_string()
 }
