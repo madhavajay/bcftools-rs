@@ -473,6 +473,20 @@ fn query_allele_count_filters_match_upstream_fixtures() {
 }
 
 #[test]
+fn query_vector_formatting_matches_upstream_fixture() {
+    let path = fixture_path("view.vectors.vcf");
+    let expected = std::fs::read_to_string(fixture_path("query.12.out")).unwrap();
+    let (out, err, code) = run(&[
+        "query",
+        "-f",
+        "I8=%I8 I16=%I16 I32=%I32 IF=%IF IA8=%IA8 IA16=%IA16 IA32=%IA32 IAF=%IAF IA8=%IA8{1} IA16=%IA16{1} IA32=%IA32{1} IAF=%IAF{1} [ %F8:%F16:%F32:%FF]\\n",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query -f vector formatting failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn query_vector_missing_predicates_match_upstream_fixtures() {
     let path = fixture_path("query.filter.15.vcf");
     let expected_missing = std::fs::read_to_string(fixture_path("query.filter.15.1.out")).unwrap();

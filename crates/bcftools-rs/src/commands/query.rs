@@ -1608,12 +1608,35 @@ fn render_segment(
                         }
                     }
                 } else {
-                    out.push_str(&render_token(token, record, sample_index));
+                    let vector_index = parse_braced_vector_index(&segment[token_end..]);
+                    out.push_str(&render_token_for_output(
+                        token,
+                        record,
+                        sample_index,
+                        vector_index.map(|(_, index)| index),
+                    ));
+                    if let Some((end_offset, _)) = vector_index {
+                        let brace_end = token_end + end_offset;
+                        while let Some(&(next_idx, _)) = chars.peek() {
+                            if next_idx < brace_end {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             _ => out.push(ch),
         }
     }
+}
+
+fn parse_braced_vector_index(raw: &str) -> Option<(usize, usize)> {
+    let rest = raw.strip_prefix('{')?;
+    let end = rest.find('}')?;
+    let index = rest[..end].parse().ok()?;
+    Some((end + 2, index))
 }
 
 fn is_numeric_format_function(token: &str) -> bool {
@@ -2047,6 +2070,36 @@ fn gt_is_hom(value: &str) -> bool {
     alleles
         .first()
         .is_some_and(|first| *first != "." && alleles.iter().all(|allele| allele == first))
+}
+
+fn render_token_for_output(
+    token: &str,
+    record: &TextRecord<'_>,
+    sample_index: Option<usize>,
+    vector_index: Option<usize>,
+) -> String {
+    let value = render_token(token, record, sample_index);
+    if let Some(index) = vector_index {
+        return value
+            .split(',')
+            .nth(index)
+            .map(format_output_scalar)
+            .unwrap_or_else(|| ".".into());
+    }
+    value
+        .split(',')
+        .map(format_output_scalar)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_output_scalar(value: &str) -> String {
+    if value.contains(['e', 'E'])
+        && let Ok(parsed) = value.parse::<f64>()
+    {
+        return format_number(parsed);
+    }
+    value.to_string()
 }
 
 fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize>) -> String {
