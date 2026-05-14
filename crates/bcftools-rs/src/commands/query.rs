@@ -717,7 +717,12 @@ impl QueryFilter {
                 }
             }
             QueryFilterKind::FilterIdMatch { id, negate } => {
-                record.filter_has_id(id.as_str()) != *negate
+                let matched = if id.contains(';') {
+                    filter_set_contains_all(&record.core("FILTER"), id)
+                } else {
+                    record.filter_has_id(id.as_str())
+                };
+                matched != *negate
             }
             QueryFilterKind::NPassComparison {
                 expression,
@@ -771,6 +776,8 @@ impl SimplePredicate {
             PredicateOp::Eq => values.iter().any(|value| {
                 if self.lhs.eq_ignore_ascii_case("TYPE") {
                     value == &self.rhs
+                } else if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    filter_set_exact_matches(value, &self.rhs)
                 } else {
                     string_value_matches(value, &self.rhs)
                 }
@@ -779,22 +786,55 @@ impl SimplePredicate {
             PredicateOp::Ne => values.iter().all(|value| {
                 if self.lhs.eq_ignore_ascii_case("TYPE") {
                     value != &self.rhs
+                } else if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    !filter_set_exact_matches(value, &self.rhs)
                 } else {
                     !string_value_matches(value, &self.rhs)
                 }
             }),
             PredicateOp::Regex => values.iter().any(|value| {
-                regex::Regex::new(&self.rhs).is_ok_and(|re| string_value_regex_matches(value, &re))
+                if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    filter_set_contains_all(value, &self.rhs)
+                } else {
+                    regex::Regex::new(&self.rhs)
+                        .is_ok_and(|re| string_value_regex_matches(value, &re))
+                }
             }),
             PredicateOp::NotRegex if self.vector_any => values
                 .iter()
                 .any(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
-            PredicateOp::NotRegex => values
-                .iter()
-                .all(|value| regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))),
+            PredicateOp::NotRegex => values.iter().all(|value| {
+                if self.lhs == "FILTER" && self.rhs.contains(';') {
+                    !filter_set_contains_all(value, &self.rhs)
+                } else {
+                    regex::Regex::new(&self.rhs).is_ok_and(|re| !re.is_match(value))
+                }
+            }),
             PredicateOp::Gt | PredicateOp::Ge | PredicateOp::Lt | PredicateOp::Le => false,
         }
     }
+}
+
+fn filter_set_exact_matches(value: &str, rhs: &str) -> bool {
+    let mut value_ids = filter_ids(value);
+    let mut rhs_ids = filter_ids(rhs);
+    value_ids.sort_unstable();
+    rhs_ids.sort_unstable();
+    value_ids == rhs_ids
+}
+
+fn filter_set_contains_all(value: &str, rhs: &str) -> bool {
+    let value_ids = filter_ids(value);
+    filter_ids(rhs)
+        .into_iter()
+        .all(|rhs_id| value_ids.contains(&rhs_id))
+}
+
+fn filter_ids(value: &str) -> Vec<&str> {
+    value
+        .split(';')
+        .filter(|id| !id.is_empty() && *id != "." && *id != "PASS")
+        .collect()
 }
 
 fn string_value_matches(value: &str, rhs: &str) -> bool {
