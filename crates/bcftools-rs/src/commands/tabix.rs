@@ -21,16 +21,17 @@ use htslib_rs::tabix_compat::{
 const USAGE: &str = "\n\
 Usage: bcftools tabix [options] <in.gz> [reg1 [...]]\n\
 \n\
-Options: -p STR    preset: gff, bed, sam or vcf [gff]\n\
+Options: -p, --preset STR   preset: gff, bed, sam or vcf [gff]\n\
          -s INT    column number for sequence names (suppressed by -p) [1]\n\
          -b INT    column number for region start [4]\n\
          -e INT    column number for region end (if no end, set INT to -b) [5]\n\
          -0        specify coordinates are zero-based\n\
          -S INT    skip first INT lines [0]\n\
          -c CHAR   skip lines starting with CHAR [null]\n\
-         -a        print all records\n\
-         -f        force to overwrite existing index\n\
-         -m INT    set the minimal interval size to 1<<INT; 0 for the old tabix index [0]\n\
+         -a, --all          print all records\n\
+         -f, --force        force to overwrite existing index\n\
+         -C, --csi          generate CSI index\n\
+         -m, --min-shift INT    set the minimal interval size to 1<<INT; 0 for the old tabix index [0]\n\
 \n";
 
 #[derive(Debug)]
@@ -85,19 +86,42 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         match raw.as_ref() {
             "-h" | "--help" | "-?" => return Err(ParseOutcome::Usage),
             "-0" => {}
-            "-a" => all = true,
-            "-f" => force = true,
+            "-a" | "--all" => all = true,
+            "-f" | "--force" => force = true,
+            "-C" | "--csi" => min_shift = 14,
+            "-t" | "--tbi" => min_shift = 0,
             "-m" => {
                 min_shift = next_string(&mut iter, "-m")?
                     .parse()
                     .map_err(|_| ParseOutcome::Error("Could not parse argument: -m".into()))?;
             }
+            "--min-shift" => {
+                min_shift = next_string(&mut iter, "--min-shift")?
+                    .parse()
+                    .map_err(|_| {
+                        ParseOutcome::Error("Could not parse argument: --min-shift".into())
+                    })?;
+            }
             "-p" => {
                 format = parse_preset(&next_string(&mut iter, "-p")?)?;
                 detect = false;
             }
-            "-s" | "-b" | "-e" | "-S" | "-c" => {
+            "--preset" => {
+                format = parse_preset(&next_string(&mut iter, "--preset")?)?;
+                detect = false;
+            }
+            "-s" | "-b" | "-e" | "-S" | "-c" | "--sequence" | "--begin" | "--end"
+            | "--skip-lines" | "--comment" => {
                 let _ = next_string(&mut iter, raw.as_ref())?;
+            }
+            _ if raw.starts_with("--preset=") => {
+                format = parse_preset(value_after_equals(&raw))?;
+                detect = false;
+            }
+            _ if raw.starts_with("--min-shift=") => {
+                min_shift = value_after_equals(&raw).parse().map_err(|_| {
+                    ParseOutcome::Error("Could not parse argument: --min-shift".into())
+                })?;
             }
             _ if raw.starts_with("-m") && raw.len() > 2 => {
                 min_shift = raw[2..]
@@ -244,6 +268,10 @@ fn detect_format(path: &Path) -> Option<TextFormat> {
 fn ends_with_ci(s: &str, suffix: &str) -> bool {
     let n = suffix.len();
     s.len() >= n && s[s.len() - n..].eq_ignore_ascii_case(suffix)
+}
+
+fn value_after_equals(raw: &str) -> &str {
+    raw.split_once('=').map(|(_, value)| value).unwrap_or("")
 }
 
 fn parse_preset(raw: &str) -> Result<TextFormat, ParseOutcome> {
