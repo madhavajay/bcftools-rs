@@ -250,6 +250,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut input: Option<String> = None;
     let mut output: Option<String> = None;
     let mut output_kind = OutKind::VcfText;
+    // Plugin-specific options consumed for the plugins ported so far.
+    let mut direction: Option<String> = None;
+    let mut tag_name: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -299,6 +302,25 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             | "--regions-overlap" | "--targets-overlap" | "--threads" => {
                 let _ = iter.next();
             }
+            "-d" | "--direction" => {
+                direction = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-n" | "--tag-name" => {
+                tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--direction=") => {
+                direction = Some(raw["--direction=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--tag-name=") => {
+                tag_name = Some(raw["--tag-name=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-d") && raw.len() > 2 => {
+                direction = Some(raw[2..].to_owned());
+            }
+            _ if raw.starts_with("-n") && raw.len() > 2 => {
+                tag_name = Some(raw[2..].to_owned());
+            }
+            "--" => {}
             "--no-version" => {}
             _ if raw.starts_with("--verbosity=") => {
                 verbose = raw["--verbosity=".len()..].parse().unwrap_or(verbose);
@@ -390,6 +412,24 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "fill-AN-AC" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let vcf = crate::commands::plugins::fill_an_ac::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "variant-distance" {
+        use crate::commands::plugins::variant_distance::{self, Direction};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let dir = match direction.as_deref() {
+            None => Direction::Nearest,
+            Some(d) => Direction::parse(d).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown -d direction '{d}' (expected nearest|fwd|rev|both)"),
+                )
+            })?,
+        };
+        let tag = tag_name.as_deref().unwrap_or("DIST");
+        let vcf = variant_distance::run(Path::new(&input), dir, tag)?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }

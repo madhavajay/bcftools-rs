@@ -9,3 +9,4 @@ pub mod allele_length;
 pub mod counts;
 pub mod fill_an_ac;
 pub mod missing2ref;
+pub mod variant_distance;

@@ -538,6 +538,15 @@ Current local slice:
   stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
   upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
   6 unit tests. Remaining: `+fill-tags` superset semantics.
+- [x] `+variant-distance` (`crates/bcftools-rs/src/commands/plugins/variant_distance.rs`):
+  annotates `INFO/<tag>` (default `DIST`) with distance to the nearest
+  variant; `-d nearest|fwd|rev|both` (`both` is a Number=2 `<rev>,<fwd>` tag
+  with `0` for a missing side), `-n`/`--tag-name`; same-POS records are
+  duplicates sharing one distance; injects the implicit
+  `##FILTER=<ID=PASS>` after `##fileformat` (HTSlib write behavior) and the
+  `##INFO` tag line after the last `##INFO` (or before `#CHROM`). Byte-for-byte
+  parity with all four upstream fixtures `variant-distance.{1,2,3,4}.out`
+  covering `test.pl` lines 873-877. 7 integration tests + 5 unit tests.
 - [x] `+allele-length` (`crates/bcftools-rs/src/commands/plugins/allele_length.rs`):
   REF / first-ALT / REF+ALT length histograms (MAXLEN=512, clamped) plus a
   non-base (`[^ACGTacgt]`) tally; first ALT only, matching upstream's
