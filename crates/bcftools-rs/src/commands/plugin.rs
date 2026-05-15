@@ -259,6 +259,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut replace = false;
     let mut threshold: f64 = 0.1;
     let mut conversion: Option<&'static str> = None;
+    // af-dist options.
+    let mut af_tag: Option<String> = None;
+    let mut dev_bins: Option<String> = None;
+    let mut prob_bins: Option<String> = None;
     // remove-overlaps options.
     let mut mark_expr: Option<String> = None;
     let mut mark_tag: Option<String> = None;
@@ -327,15 +331,39 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 }
             }
             "--replace" => replace = true,
-            // `-t` is `--targets` (value) before `--`, `--threshold` after.
-            "-t" | "--threshold" => {
-                if past_separator || raw == "--threshold" {
+            // `-t` is `--af-tag` for af-dist, `--threshold` after `--` for
+            // tag2tag, otherwise `--targets` (value, ignored).
+            "-t" | "--threshold" | "--af-tag" => {
+                if raw == "--af-tag" || plugin_name.as_deref() == Some("af-dist") {
+                    af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else if past_separator || raw == "--threshold" {
                     if let Some(v) = iter.next() {
                         threshold = v.to_string_lossy().parse().unwrap_or(threshold);
                     }
                 } else {
                     let _ = iter.next();
                 }
+            }
+            _ if raw.starts_with("--af-tag=") => {
+                af_tag = Some(raw["--af-tag=".len()..].to_owned());
+            }
+            "--dev-bins" => {
+                dev_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--dev-bins=") => {
+                dev_bins = Some(raw["--dev-bins=".len()..].to_owned());
+            }
+            "--prob-bins" => {
+                prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--prob-bins=") => {
+                prob_bins = Some(raw["--prob-bins=".len()..].to_owned());
+            }
+            "-d" if plugin_name.as_deref() == Some("af-dist") => {
+                dev_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-p" if plugin_name.as_deref() == Some("af-dist") => {
+                prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             "--gl-to-pl" => conversion = Some("gl-to-pl"),
             "--gp-to-gt" => conversion = Some("gp-to-gt"),
@@ -577,6 +605,17 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "af-dist" {
+        use crate::commands::plugins::af_dist::{self, DEFAULT_BINS};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let af = af_tag.as_deref().unwrap_or("AF");
+        let dev = dev_bins.as_deref().unwrap_or(DEFAULT_BINS);
+        let prob = prob_bins.as_deref().unwrap_or(DEFAULT_BINS);
+        let report = af_dist::run(Path::new(&input), af, dev, prob)?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 
