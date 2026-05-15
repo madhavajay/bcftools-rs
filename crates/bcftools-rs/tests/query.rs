@@ -1566,6 +1566,46 @@ fn query_format_gt_vector_index_predicate_matches_upstream_fixture() {
 }
 
 #[test]
+fn query_format_colon_gt_vector_index_predicates_match_upstream_fixtures() {
+    let path = fixture_path("query.gtidx.1.vcf");
+    for (expression, expected_fixture, format) in [
+        (
+            "FMT/TF[:GT]==1 && FMT/TF[:GT]==2",
+            "query.gtidx.1.out",
+            "[%GT %TC %TS %TI %TF\\n]",
+        ),
+        (
+            "FMT/TI[:GT]==1 && FMT/TF[:GT]==2",
+            "query.gtidx.1.out",
+            "[%GT %TC %TS %TI %TF\\n]",
+        ),
+        (
+            "FMT/TS[:GT]==\"BB\" && FMT/TS[:GT]==\"CC\"",
+            "query.gtidx.1.out",
+            "[%GT %TC %TS %TI %TF\\n]",
+        ),
+        (
+            "FMT/TC[:GT]==\"B\"  && FMT/TC[:GT]==\"C\"",
+            "query.gtidx.1.out",
+            "[%GT %TC %TS %TI %TF\\n]",
+        ),
+        ("FMT/TI[:GT]==\".\"", "query.gtidx.2.out", "[%GT %TI\\n]"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            format,
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "fixture {expected_fixture}");
+    }
+}
+
+#[test]
 fn query_sample_vector_ratio_predicate_matches_upstream_fixture() {
     let path = fixture_path("query.filter.13.vcf");
     let expected = std::fs::read_to_string(fixture_path("query.84.out")).unwrap();

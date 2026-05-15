@@ -1026,10 +1026,14 @@ fn split_sample_or(raw: &str) -> Vec<&str> {
 }
 
 fn split_sample_and(raw: &str) -> Vec<&str> {
-    split_single_binary(raw, b'&')
+    split_binary(raw, b'&', true)
 }
 
 fn split_single_binary(raw: &str, delimiter: u8) -> Vec<&str> {
+    split_binary(raw, delimiter, false)
+}
+
+fn split_binary(raw: &str, delimiter: u8, allow_doubled: bool) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut in_string = false;
@@ -1045,6 +1049,16 @@ fn split_single_binary(raw: &str, delimiter: u8) -> Vec<&str> {
                 if bytes.get(i + 1).copied() == Some(delimiter)
                     || i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied() == Some(delimiter)
                 {
+                    if allow_doubled
+                        && bytes.get(i + 1).copied() == Some(delimiter)
+                        && i.checked_sub(1).and_then(|idx| bytes.get(idx)).copied()
+                            != Some(delimiter)
+                    {
+                        parts.push(raw[start..i].trim());
+                        i += 2;
+                        start = i;
+                        continue;
+                    }
                     i += 1;
                     continue;
                 }
@@ -2327,6 +2341,9 @@ enum SampleVectorSelector {
 }
 
 fn parse_sample_vector_selector(lhs: &str) -> Option<(&str, SampleVectorSelector)> {
+    if let Some(key) = lhs.strip_suffix("[:GT]") {
+        return (!key.is_empty()).then_some((key, SampleVectorSelector::GenotypeAlleles));
+    }
     if let Some((key, sample_index)) = lhs.strip_suffix(":GT]").and_then(|lhs| {
         let index_start = lhs.rfind('[')?;
         let key = &lhs[..index_start];
