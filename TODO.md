@@ -519,7 +519,17 @@ Current local slice:
   `bcftools plugin -l`, `bcftools plugin -lv`, `bcftools +<name> --help`,
   and the `+name` shortcut cover all 41 upstream plugin names from
   `bcftools/plugins/*.c` without `dlopen` or `BCFTOOLS_PLUGINS` scanning.
-  Individual plugin record-processing implementations remain below.
+  Per-plugin record-processing implementations live under
+  `crates/bcftools-rs/src/commands/plugins/<name>.rs` and are dispatched from
+  `plugin.rs` once ported.
+- [x] `+counts` (`crates/bcftools-rs/src/commands/plugins/counts.rs`): counts
+  samples/SNPs/indels/MNPs/others/sites with per-ALT classification routed
+  through `htslib_rs::variant::classify_variant` (HTSlib `bcf_set_variant_type`
+  port) OR-combined across ALTs like upstream `bcf_get_variant_types`; VCF/
+  VCF.gz/BCF and stdin input via `bcftools +counts` / `bcftools plugin counts`;
+  upstream-shaped six-line report. 5 integration tests in
+  `crates/bcftools-rs/tests/plugin_counts.rs` + 3 unit tests. No upstream
+  `test.pl` case exists for `+counts`.
 
 Grouped roughly by complexity / shared dependencies:
 
