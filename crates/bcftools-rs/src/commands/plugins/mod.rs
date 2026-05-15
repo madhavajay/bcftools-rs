@@ -5,6 +5,7 @@
 //! registry/listing surface lives in [`super::plugin`]; this module holds the
 //! actual per-plugin algorithms as they are ported.
 
+pub mod ad_bias;
 pub mod add_variantkey;
 pub mod af_dist;
 pub mod allele_length;

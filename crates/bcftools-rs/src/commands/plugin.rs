@@ -269,6 +269,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut missing_expr: Option<String> = None;
     let mut reverse = false;
     let mut out_type_raw: Option<String> = None;
+    // ad-bias options.
+    let mut samples_file: Option<String> = None;
+    let mut clean_vcf = false;
+    let mut min_dp: Option<i32> = None;
+    let mut min_alt_dp: Option<i32> = None;
+    let mut ad_threshold: Option<f64> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -338,7 +344,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else if past_separator || raw == "--threshold" {
                     if let Some(v) = iter.next() {
-                        threshold = v.to_string_lossy().parse().unwrap_or(threshold);
+                        if plugin_name.as_deref() == Some("ad-bias") {
+                            ad_threshold = v.to_string_lossy().parse().ok();
+                        } else {
+                            threshold = v.to_string_lossy().parse().unwrap_or(threshold);
+                        }
                     }
                 } else {
                     let _ = iter.next();
@@ -362,6 +372,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-d" if plugin_name.as_deref() == Some("af-dist") => {
                 dev_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
+            "-d" if plugin_name.as_deref() == Some("ad-bias") => {
+                min_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
             "-p" if plugin_name.as_deref() == Some("af-dist") => {
                 prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -373,6 +386,23 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-n" | "--tag-name" => {
                 tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            // ad-bias options.
+            "-s" | "--samples" => {
+                samples_file = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--samples=") => {
+                samples_file = Some(raw["--samples=".len()..].to_owned());
+            }
+            "-c" | "--clean-vcf" => clean_vcf = true,
+            "--min-dp" => {
+                min_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
+            "--min-alt-dp" => {
+                min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
+            "-a" if plugin_name.as_deref() == Some("ad-bias") => {
+                min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
             // `-m` is `--mark EXPR` (value) for remove-overlaps, but the
             // boolean `--use-missing` flag for check-ploidy.
@@ -605,6 +635,31 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "ad-bias" {
+        if clean_vcf {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "ad-bias -c/--clean-vcf (VCF allele-removal output) is not supported in this local slice",
+            ));
+        }
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(samples) = samples_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ad-bias requires -s/--samples <file>",
+            ));
+        };
+        let report = crate::commands::plugins::ad_bias::run(
+            Path::new(&input),
+            Path::new(samples),
+            ad_threshold.unwrap_or(1e-3),
+            min_dp.unwrap_or(0),
+            min_alt_dp.unwrap_or(1),
+        )?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 
