@@ -275,6 +275,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut min_dp: Option<i32> = None;
     let mut min_alt_dp: Option<i32> = None;
     let mut ad_threshold: Option<f64> = None;
+    // prune options.
+    let mut window: Option<String> = None;
+    let mut nsites: Option<i32> = None;
+    let mut nsites_mode: Option<String> = None;
+    let mut prune_af_tag: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -384,8 +389,28 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-d" | "--direction" => {
                 direction = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
-            "-n" | "--tag-name" => {
-                tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
+            // `-n` is `--nsites-per-win` for prune, `--tag-name` otherwise.
+            "-n" | "--tag-name" | "--nsites-per-win" => {
+                if raw == "--nsites-per-win" || plugin_name.as_deref() == Some("prune") {
+                    nsites = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+                } else {
+                    tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
+                }
+            }
+            "-N" | "--nsites-per-win-mode" => {
+                nsites_mode = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-w" | "--window" => {
+                window = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--window=") => {
+                window = Some(raw["--window=".len()..].to_owned());
+            }
+            "--AF-tag" => {
+                prune_af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--AF-tag=") => {
+                prune_af_tag = Some(raw["--AF-tag=".len()..].to_owned());
             }
             // ad-bias options.
             "-s" | "--samples" => {
@@ -635,6 +660,27 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "prune" {
+        use crate::commands::plugins::prune::{self, Mode};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(n) = nsites else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "prune in this slice requires -n/--nsites-per-win (LD `-a`/`-m` modes are not yet ported)",
+            ));
+        };
+        let win = match window.as_deref() {
+            Some(w) => prune::parse_window(w)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            None => 0,
+        };
+        let mode = Mode::parse(nsites_mode.as_deref().unwrap_or("maxAF"))
+            .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
+        let vcf = prune::run(Path::new(&input), win, n, mode, prune_af_tag.as_deref())?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

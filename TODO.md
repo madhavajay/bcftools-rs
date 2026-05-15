@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #51 (`progress/ad-bias`, merge commit `9be9c42`) landed
+  `+ad-bias` (report mode) — Fisher's exact test on FORMAT/AD via the
+  HTSlib `kfunc.c` port, byte-for-byte against `ad-bias.out` for two
+  inputs.
 - 2026-05-15: PR #50 (`progress/indel-stats`, merge commit `9139169`)
   landed `+indel-stats` (no-PED default) — SN/DVAF/DLEN/DFRAC/NFRAC with
   the FORMAT/AD VAF + minor-allele-fraction analysis, byte-for-byte
@@ -272,22 +276,20 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/ad-bias`, single open PR per the one-branch
-  directive): the `+ad-bias` plugin (report mode) — a port of
-  `ad-bias.c`'s report path
-  (`crates/bcftools-rs/src/commands/plugins/ad_bias.rs`). Parses the
-  sample/control pair file, runs the upstream two-most-frequent-allele
-  search over FORMAT/AD (sample then control), and Fisher's exact test via
-  `htslib_rs::math::kt_fisher_exact` (the HTSlib `kfunc.c` port), emitting
-  `FT` lines below the threshold + an `SN` summary, with C-style `%e`
-  formatting. Byte-for-byte against `ad-bias.out` for both `ad-bias.vcf`
-  and `ad-bias.2.vcf` (post harness `grep -v bcftools`). This brings the
-  in-process plugin total to 14 of 41. The `-c`/`--clean-vcf` VCF
-  allele-removal output, `-v` variant-type filtering, and `-f` convert
-  format are blocked (need the convert/VCF-rewrite infra).
-- Next local-only queue: the `+prune` LD/distance window port
-  (`calc_ld` genotype-correlation math — heavier, partly blocked on the
-  filter engine for the `-i`/`-e` variants);
+- In-flight (branch `progress/prune`, single open PR per the one-branch
+  directive): the `+prune` plugin window subset — a port of the `vcfbuf`
+  windowed `_prune_sites` path + `prune.c` driver
+  (`crates/bcftools-rs/src/commands/plugins/prune.rs`). Keeps at most
+  `-n N` sites per `-w INT[bp|kb|Mb]` window, choosing which to drop by
+  `-N` mode (`1st` keeps the earliest, `maxAF` drops the lowest
+  `--AF-tag`/computed allele frequency); faithful port of the window
+  flush condition and the `_prune_sites` removal order. Byte-for-byte
+  against `prune.1.4.out` (maxAF) and `prune.1.6.out` (1st). This brings
+  the in-process plugin total to 15 of 41. The LD/`-a`/`-m` annotation
+  modes (`calc_ld`), `-N rand` (`hts_drand48` parity), and `-i`/`-e`
+  filtering are blocked on the not-yet-ported LD/RNG/filter infra.
+- Next local-only queue: `calc_ld` genotype-correlation math to unblock
+  the `+prune -a r2,LD,RD`/`-m` modes;
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
   and `norm` first slices; continue tightening `concat`, `filter`, `stats`,
@@ -317,7 +319,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 14 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias` |
+| `plugin` | registry + 15 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -328,28 +330,30 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-14 of 41 plugin record-processing implementations done (see Wave F);
-27 remain.
+15 of 41 plugin record-processing implementations done (see Wave F);
+26 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+ad-bias`, PR #50 landed): approximately
-  31-34% complete toward the full stated goal of a pure Rust
+- 2026-05-15 (post `+prune`, PR #51 landed): approximately
+  32-35% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
-  prior estimate is 14 of 41 plugins now implemented (`ad-bias` Fisher
-  exact test on FORMAT/AD via the HTSlib `kfunc.c` port, verified
-  byte-for-byte against `ad-bias.out` for two inputs) on top of
-  `indel-stats`, `smpl-stats`, `af-dist`, the `vcfbuf` overlap/dup state
-  machine, the VariantKey pair, the PR #45 7-plugin batch and the
-  PRs #10-#41 command slices. The raw checklist is well past two-thirds
-  checked, but the estimate still weights the unfinished large subcommands
-  (`mpileup`, `call`, `csq`, full `merge`/`annotate`/`norm`), the 27
-  remaining plugins (most coupled to the
+  prior estimate is 15 of 41 plugins now implemented (`prune` windowed
+  `_prune_sites` `1st`/`maxAF` modes — the `vcfbuf` window-flush path now
+  ported, verified byte-for-byte against `prune.1.4.out`/`prune.1.6.out`)
+  on top of `ad-bias`, `indel-stats`, `smpl-stats`, `af-dist`, the
+  `vcfbuf` overlap/dup state machine, the VariantKey pair, the PR #45
+  7-plugin batch and the PRs #10-#41 command slices. The raw checklist is
+  well past two-thirds checked, but the estimate still weights the
+  unfinished large subcommands (`mpileup`, `call`, `csq`, full
+  `merge`/`annotate`/`norm`), the 26 remaining plugins (most coupled to
+  the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post `+ad-bias`): approximately 31-34% (kept for trend).
 - 2026-05-15 (post `+indel-stats`): approximately 30-33% (kept for trend).
 - 2026-05-15 (post `+smpl-stats`): approximately 29-32% (kept for trend).
 - 2026-05-15 (post `+af-dist`): approximately 28-31% (kept for trend).
@@ -571,30 +575,32 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#50 + `progress/ad-bias`): 14 plugins
+Implemented so far (PRs #45–#51 + `progress/prune`): 15 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
-`indel-stats`, `ad-bias`. Every one with an upstream `*.out` fixture is
-byte-for-byte verified; `variant-distance`/`check-ploidy` pass their entire
-`test_vcf_plugin` slices, the two VariantKey plugins match the full
-`query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records, 3
-hash/non-reversible), `remove-overlaps` matches all six
+`indel-stats`, `ad-bias`, `prune`. Every one with an upstream `*.out`
+fixture is byte-for-byte verified; `variant-distance`/`check-ploidy` pass
+their entire `test_vcf_plugin` slices, the two VariantKey plugins match the
+full `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66
+records, 3 hash/non-reversible), `remove-overlaps` matches all six
 `remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), `af-dist`
 matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32` binning),
 `smpl-stats` matches `smpl-stats.1.out` (per-sample/per-site genotype
 stats), `indel-stats` matches `indel-stats.1.out` (SN/DVAF/DLEN/DFRAC/
-NFRAC), and `ad-bias` matches `ad-bias.out` for both inputs (Fisher exact
-test on FORMAT/AD). The 27 remaining plugins are heavier and coupled to
-shared infra still in progress: the `vcfbuf` LD/distance window port
-(`+prune`), the bcftools filter engine (`+setGT`, `+split-vep`
-expressions, `remove-overlaps -m 'min(QUAL)'`,
-`smpl-stats`/`indel-stats -i/-e`), FASTA/reference (`+fixref`,
-`+fill-from-fasta`), PED/trio handling (`+trio-stats`, `+mendelian2`,
-`+trio-dnm3`, `indel-stats -p`), VCF-rewrite/convert (`ad-bias -c/-f`), or
-`%g`-exact float formatting (`+dosage`, `+guess-ploidy`,
-`+tag2tag --gl-to-gp`). The `+prune` LD/distance window port is the
+NFRAC), `ad-bias` matches `ad-bias.out` for both inputs (Fisher exact test
+on FORMAT/AD), and `prune` matches `prune.1.4.out`/`prune.1.6.out`
+(windowed `_prune_sites` maxAF/1st). The 26 remaining plugins are heavier
+and coupled to shared infra still in progress: the `vcfbuf` `calc_ld`
+LD/RD/r2 math (`+prune -a/-m`), the bcftools filter engine (`+setGT`,
+`+split-vep` expressions, `remove-overlaps -m 'min(QUAL)'`,
+`smpl-stats`/`indel-stats`/`prune -i/-e`), `hts_drand48` parity
+(`prune -N rand`), FASTA/reference (`+fixref`, `+fill-from-fasta`),
+PED/trio handling (`+trio-stats`, `+mendelian2`, `+trio-dnm3`,
+`indel-stats -p`), VCF-rewrite/convert (`ad-bias -c/-f`), or `%g`-exact
+float formatting (`+dosage`, `+guess-ploidy`, `+tag2tag --gl-to-gp`). The
+`vcfbuf` `calc_ld` port (to unblock the `+prune` LD modes) is the
 preferred next pick.
 
 Current local slice:
@@ -753,6 +759,19 @@ Current local slice:
   tests in `crates/bcftools-rs/tests/plugin_ad_bias.rs` + 3 unit tests.
   Remaining: `-c`/`--clean-vcf` (VCF allele removal), `-v` variant-type
   filtering, and `-f` convert format (need convert/VCF-rewrite infra).
+- [x] `+prune` (`crates/bcftools-rs/src/commands/plugins/prune.rs`, window
+  `-n`/`-N` subset): port of the `vcfbuf` windowed flush condition
+  (`buf->win`, bp/site span) and `_prune_sites` for the `1ST` and `MAX_AF`
+  modes, plus the `prune.c` driver (`-w INT[bp|kb|Mb]`, `-n N`,
+  `-N 1st|maxAF`, `--AF-tag`). The streaming push/flush dynamics, the
+  `nbuf`/`nprune`/`eoff` removal arithmetic, and the AF-ascending
+  `cmpvrec` ordering were hand-traced against the fixtures before coding.
+  htslib-style `##FILTER=<ID=PASS>` header injection. Byte-for-byte parity
+  with `prune.1.4.out` (maxAF, `--AF-tag AF`) and `prune.1.6.out` (1st).
+  2 integration tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 3
+  unit tests. Remaining: `-a`/`-m` LD/RD/r2 annotation & cluster modes
+  (need `vcfbuf::calc_ld`), `-N rand` (`hts_drand48` parity), and
+  `-i`/`-e` filtering (filter engine).
 
 Grouped roughly by complexity / shared dependencies:
 
