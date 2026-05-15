@@ -17,6 +17,7 @@ pub mod fill_an_ac;
 pub mod fixref;
 pub mod guess_ploidy;
 pub mod indel_stats;
+pub mod mendelian2;
 pub mod missing2ref;
 pub mod prune;
 pub mod remove_overlaps;

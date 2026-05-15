@@ -296,6 +296,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut ped_file: Option<String> = None;
     let mut trio_stats_alt: Option<i32> = None;
     let mut trio_stats_debug: Option<String> = None;
+    let mut mendelian_mode: Option<String> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -511,6 +512,15 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             // `-m` is `--max` for prune, `--mark EXPR` for remove-overlaps,
             // the boolean `--use-missing` flag otherwise.
+            _ if raw.starts_with("-m")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("mendelian2") =>
+            {
+                mendelian_mode = Some(raw[2..].to_owned());
+            }
+            "-m" | "--mode" if plugin_name.as_deref() == Some("mendelian2") => {
+                mendelian_mode = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
             "-m" => {
                 if plugin_name.as_deref() == Some("prune") {
                     prune_max = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -744,6 +754,22 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "mendelian2" {
+        use crate::commands::plugins::mendelian2;
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(pfm) = ped_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "mendelian2 requires -p P,F,M",
+            ));
+        };
+        let mode = mendelian2::parse_mode(mendelian_mode.as_deref().unwrap_or(""))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let report = mendelian2::run(Path::new(&input), pfm, mode)?;
+        write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 
