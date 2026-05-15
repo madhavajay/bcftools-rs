@@ -201,7 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-16: PR #57 (`progress/fixref`, merge commit `8b2b65a`) landed
+- 2026-05-16: PR #58 (`progress/trio-switch-rate`, merge commit
+  `5446b0e`) landed `+trio-switch-rate` + a reusable PED parser,
+  byte-for-byte against `trio.out`.
+- 2026-05-16: PR #57 (`progress/fixref`, merge commit `8806ceb`) landed
   `+fixref` — FASTA REF/ALT ref-alt/swap/flip/flip-all, byte-for-byte
   against `fixref.{4,5,6,7}.out`.
 - 2026-05-16: PR #56 (`progress/contrast`, merge commit `8b2b65a`) landed
@@ -295,17 +298,18 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/trio-switch-rate`, single open PR per the
-  one-branch directive): the `+trio-switch-rate` plugin — a port of
-  `trio-switch-rate.c` (`crates/bcftools-rs/src/commands/plugins/
-  trio_switch_rate.rs`). Introduces PED-trio parsing (familyID/sampleID/
-  paternalID/maternalID/sex/pheno/[pop]) resolved against the header;
-  the phased-het-child phase-switch detection per trio (mendelian-error
-  + `test_phase` + `prev` tracking with per-chromosome reset); the
-  `TRIO` rows and per-population averaged `POP` rows. Byte-for-byte
-  against `trio.out`. This brings the in-process plugin total to 20 of
-  41 (and gives a PED parser reusable by `+trio-stats`/`+mendelian2`/
-  `indel-stats -p`).
+- In-flight (branch `progress/trio-stats`, single open PR per the
+  one-branch directive): the `+trio-stats` plugin — a port of
+  `trio-stats.c` (`crates/bcftools-rs/src/commands/plugins/
+  trio_stats.rs`), the largest plugin port so far. PED trios +
+  `bcf_calc_ac`; per-trio Mendelian-error / DNM (hom + recurrent via
+  `ac[culprit]`) / novel-singleton / untransmitted-vs-transmitted
+  singleton/doubleton classification, the `-a` max-alt-trios per-site
+  deferral, `bcf_acgt2int` ts/tv, and the interleaved
+  `MERR`/`TRANSMITTED` debug dump (`-d`) followed by the `DEF`/`FLT0`
+  summary. Byte-for-byte against `trio-stats.out` (`-a 1`) and
+  `trio-stats.2.out` (no `-a`). This brings the in-process plugin
+  total to 21 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -336,7 +340,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 20 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate` |
+| `plugin` | registry + 21 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -347,12 +351,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-20 of 41 plugin record-processing implementations done (see Wave F);
-21 remain.
+21 of 41 plugin record-processing implementations done (see Wave F);
+20 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+trio-switch-rate`, PR #57 landed): approximately
+- 2026-05-16 (post `+trio-stats`, PR #58 landed): approximately
+  40-43% complete toward the full stated goal. Movement since the prior
+  estimate is `+trio-stats` (the largest plugin: Mendelian/DNM/
+  transmitted classification + interleaved debug) verified byte-for-byte
+  against `trio-stats.out`/`trio-stats.2.out`. 21 of 41 plugins done.
+- 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
   byte-for-byte against `trio.out`, plus a reusable PED parser. 20 of 41
@@ -612,13 +621,13 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#57 + `progress/trio-switch-rate`): 20 plugins
+Implemented so far (PRs #45–#58 + `progress/trio-stats`): 21 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
-`fixref`, `trio-switch-rate`. Every one
+`fixref`, `trio-switch-rate`, `trio-stats`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -639,8 +648,10 @@ matches `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out` (control/case
 PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `fixref.{4,5,6,7}.out` (FASTA REF/ALT ref-alt/swap/flip/flip-all), and
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
-per-population averages). The 21 remaining plugins are heavier and
-coupled to shared infra still in progress: the
+per-population averages), and `trio-stats` matches `trio-stats.out`/
+`trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
+dump). The 20 remaining plugins are heavier and coupled to shared infra
+still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
 -i/-e`), `hts_drand48` parity (`prune -N rand`), FASTA/reference
@@ -897,6 +908,23 @@ Current local slice:
   `crates/bcftools-rs/tests/plugin_trio_switch_rate.rs` + 2 unit tests.
   The PED parser here is the reusable basis for `+trio-stats`,
   `+mendelian2`, and `indel-stats -p`.
+- [x] `+trio-stats` (`crates/bcftools-rs/src/commands/plugins/trio_stats.rs`,
+  default "all" filter): port of `trio-stats.c` — the largest plugin so
+  far. PED trios (dedup by `child father mother`), `bcf_calc_ac`
+  (INFO/AC+AN else GT tally), per-trio `parse_genotype` (haploid → hom),
+  `ac_trio`/star/non-ref handling, `bcf_acgt2int` per-site ts/tv, the
+  Mendelian-error decision (`a0F`/`a1M`/`a0M`/`a1F`) with `ndnm_hom` and
+  the `ndnm_recurrent` culprit selection via global `ac[culprit]`, the
+  novel-singleton / untransmitted-singleton / transmitted-doubleton
+  classification, and the `-a` max-alt-trios per-site cross-trio
+  deferral (only counted when `nalt ≤ -a`). Interleaved
+  `MERR`/`TRANSMITTED` debug lines (`-d mendel-errors,transmitted`)
+  emitted during processing, then the verbatim 15-line comment header +
+  `DEF`/`FLT0` summary (`%.2f` ts/tv, `inf` when `ntv==0`). Byte-for-byte
+  parity with `trio-stats.out` (`-a 1`) and `trio-stats.2.out` (no `-a`).
+  2 integration tests in `crates/bcftools-rs/tests/plugin_trio_stats.rs`
+  + 2 unit tests. Remaining: `-i`/`-e` filter-threshold scanning and
+  `-P` pfm trio (filter engine / single-trio mode).
 
 Grouped roughly by complexity / shared dependencies:
 
