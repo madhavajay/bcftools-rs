@@ -513,6 +513,21 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
+Implemented so far (2026-05-15 batch branch `progress/todo-batch`): 7 plugins
+under `crates/bcftools-rs/src/commands/plugins/` —
+`counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
+`check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream
+`*.out` fixture is byte-for-byte verified; `variant-distance` and
+`check-ploidy` pass their entire `test_vcf_plugin` slices. Most remaining
+plugins are heavier and coupled to shared infra still in progress: the
+`vcfbuf` overlap/window port (`+remove-overlaps`, `+prune`), the bcftools
+filter engine (`+setGT`, `+split-vep` expressions), FASTA/reference
+(`+fixref`, `+fill-from-fasta`), PED/trio handling (`+trio-stats`,
+`+mendelian2`, `+trio-dnm3`), or `%g`-exact float formatting (`+dosage`,
+`+guess-ploidy`, `+af-dist`, `+tag2tag --gl-to-gp`). Self-contained
+algorithm ports without those dependencies (e.g. `+add-variantkey`,
+`+variantkey-hex`) are the preferred next picks.
+
 Current local slice:
 
 - [x] Static registry/listing surface in `crates/bcftools-rs/src/commands/plugin.rs`:
