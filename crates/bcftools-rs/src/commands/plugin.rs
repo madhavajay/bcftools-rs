@@ -39,6 +39,21 @@ Plugin options:\n\
    -W, --write-index[=FMT]        Automatically index the output files [off]\n\
 \n";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutKind {
+    VcfText,
+    VcfGz,
+    Bcf,
+}
+
+fn parse_out_kind(raw: &str) -> OutKind {
+    match raw.as_bytes().first().copied() {
+        Some(b'z') => OutKind::VcfGz,
+        Some(b'u' | b'b') => OutKind::Bcf,
+        _ => OutKind::VcfText,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Plugin {
     name: &'static str,
@@ -233,6 +248,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut version = false;
     let mut plugin_name: Option<String> = None;
     let mut input: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut output_kind = OutKind::VcfText;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -257,9 +274,29 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-vv" => verbose += 2,
             "-vvv" => verbose += 3,
             "-W" | "--write-index" => {}
-            "-o" | "--output" | "-O" | "--output-type" | "-i" | "--include" | "-e"
-            | "--exclude" | "-r" | "--regions" | "-R" | "--regions-file" | "-t" | "--targets"
-            | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap" | "--threads" => {
+            "-o" | "--output" => {
+                output = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-O" | "--output-type" => {
+                if let Some(v) = iter.next() {
+                    output_kind = parse_out_kind(&v.to_string_lossy());
+                }
+            }
+            _ if raw.starts_with("--output=") => {
+                output = Some(raw["--output=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--output-type=") => {
+                output_kind = parse_out_kind(&raw["--output-type=".len()..]);
+            }
+            _ if raw.starts_with("-o") && raw.len() > 2 => {
+                output = Some(raw[2..].to_owned());
+            }
+            _ if raw.starts_with("-O") && raw.len() > 2 => {
+                output_kind = parse_out_kind(&raw[2..]);
+            }
+            "-i" | "--include" | "-e" | "--exclude" | "-r" | "--regions" | "-R"
+            | "--regions-file" | "-t" | "--targets" | "-T" | "--targets-file"
+            | "--regions-overlap" | "--targets-overlap" | "--threads" => {
                 let _ = iter.next();
             }
             "--no-version" => {}
@@ -336,6 +373,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "missing2ref" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::missing2ref::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
@@ -343,6 +387,39 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             plugin.name
         ),
     ))
+}
+
+fn write_plugin_output(bytes: &[u8], output: Option<&str>, kind: OutKind) -> io::Result<()> {
+    use std::fs::File;
+    match output {
+        Some(path) if path != "-" => write_kind(bytes, kind, File::create(path)?),
+        _ => write_kind(bytes, kind, io::stdout().lock()),
+    }
+}
+
+fn write_kind<W: Write>(bytes: &[u8], kind: OutKind, out: W) -> io::Result<()> {
+    match kind {
+        OutKind::VcfText => {
+            let mut w = io::BufWriter::new(out);
+            w.write_all(bytes)
+        }
+        OutKind::VcfGz => {
+            let mut bgzf = htslib_rs::bgzf::io::Writer::new(out);
+            bgzf.write_all(bytes)?;
+            bgzf.finish().map(|_| ())
+        }
+        OutKind::Bcf => {
+            use htslib_rs::vcf::variant::io::Write as _;
+            let mut reader = htslib_rs::vcf::io::Reader::new(std::io::BufReader::new(bytes));
+            let header = reader.read_header()?;
+            let mut writer = htslib_rs::bcf::io::Writer::new(out);
+            writer.write_variant_header(&header)?;
+            for result in reader.records() {
+                writer.write_variant_record(&header, &result?)?;
+            }
+            writer.try_finish()
+        }
+    }
 }
 
 fn list_plugins<W: Write>(out: &mut W, verbose: bool) -> io::Result<()> {

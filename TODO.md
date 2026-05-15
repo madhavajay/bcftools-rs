@@ -530,6 +530,16 @@ Current local slice:
   upstream-shaped six-line report. 5 integration tests in
   `crates/bcftools-rs/tests/plugin_counts.rs` + 3 unit tests. No upstream
   `test.pl` case exists for `+counts`.
+- [x] `+missing2ref` (`crates/bcftools-rs/src/commands/plugins/missing2ref.rs`):
+  default missing-genotype-to-ref behavior — every `.` allele token inside the
+  `GT` FORMAT subfield becomes `0` while phase/unphase separators and all other
+  FORMAT subfields are byte-preserved; GT located by FORMAT key index (not
+  position). VCF/VCF.gz/BCF and stdin input; `-o`/`-O u|b|v|z` output via a
+  shared `write_plugin_output` helper in `plugin.rs`. Byte-for-byte parity
+  with the upstream `plugin1.vcf` -> `missing2ref.out` fixture
+  (`test_vcf_plugin` / `+missing2ref --no-version`). 5 integration tests in
+  `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 5 unit tests. Remaining:
+  `-e`/expression-gated and major-allele set modes.
 
 Grouped roughly by complexity / shared dependencies:
 
