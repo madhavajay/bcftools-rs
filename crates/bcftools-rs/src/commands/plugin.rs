@@ -302,6 +302,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut fp_force_ploidy: Option<i32> = None;
     // GTisec options (collected short flags, e.g. "Hm").
     let mut gtisec_flags = String::new();
+    // scatter options.
+    let mut sc_nsites: Option<usize> = None;
+    let mut sc_scatter: Option<String> = None;
+    let mut sc_scatter_file: Option<String> = None;
+    let mut sc_extra: Option<String> = None;
+    let mut sc_prefix: Option<String> = None;
     // fill-from-fasta options.
     let mut ff_column: Option<String> = None;
     let mut ff_fasta: Option<String> = None;
@@ -344,6 +350,22 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 && raw.len() > 1 =>
             {
                 gtisec_flags.push_str(&raw[1..]);
+            }
+            // scatter: -n N, -s REGIONS, -S FILE, -x EXTRA, -p PREFIX.
+            "-n" | "--nsites-per-chunk" if plugin_name.as_deref() == Some("scatter") => {
+                sc_nsites = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
+            "-s" | "--scatter" if plugin_name.as_deref() == Some("scatter") => {
+                sc_scatter = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-S" | "--scatter-file" if plugin_name.as_deref() == Some("scatter") => {
+                sc_scatter_file = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-x" | "--extra" if plugin_name.as_deref() == Some("scatter") => {
+                sc_extra = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-p" | "--prefix" if plugin_name.as_deref() == Some("scatter") => {
+                sc_prefix = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             // fill-from-fasta: -c COL, -f FASTA, -h HDR, -N, -i/-e EXPR.
             // These guarded arms must precede the global -h/-c/-f arms.
@@ -850,6 +872,32 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let report = mendelian2::run(Path::new(&input), pfm, mode)?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "scatter" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(dir) = output.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "scatter requires -o DIR",
+            ));
+        };
+        if sc_nsites.is_none() && sc_scatter.is_none() && sc_scatter_file.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "scatter requires one of -n, -s or -S",
+            ));
+        }
+        crate::commands::plugins::scatter::run(
+            Path::new(&input),
+            Path::new(dir),
+            sc_nsites,
+            sc_scatter.as_deref(),
+            sc_scatter_file.as_deref().map(Path::new),
+            sc_extra.as_deref(),
+            sc_prefix.as_deref(),
+        )?;
         return Ok(ExitCode::SUCCESS);
     }
 

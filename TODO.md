@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #65 (`progress/fill-from-fasta`, merge commit
+  `c4cc5cd`) landed `+fill-from-fasta` (`-c REF` modes) — REF fill
+  from a FASTA reference, byte-for-byte against `ref.out` / `aa.2.out`
+  (the `-i` `aa.out` row deferred to the filter engine).
 - 2026-05-16: PR #64 (`progress/gtisec`, merge commit `68cc665`)
   landed `+GTisec` — genotype-intersection subset counts in
   banker's-sequence order, byte-for-byte against
@@ -325,16 +329,16 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/fill-from-fasta`, single open PR per the
-  one-branch directive): the `+fill-from-fasta` plugin — a port of
-  `fill-from-fasta.c` (`crates/bcftools-rs/src/commands/plugins/
-  fill_from_fasta.rs`). Fills the REF allele (`-c REF`) or an INFO
-  string tag from a FASTA reference: per-record fetch of
-  `[pos, pos+ref_len)`, upstream uppercasing (`c>96 ? c-32`), `-N`
-  non-ACGTN→N, optional `-h` header-line append. Byte-for-byte
-  against `ref.out` and `aa.2.out`; the `aa.out` row needs the
-  `-i 'TYPE="snp"'` filter engine and is deferred. This brings the
-  in-process plugin total to 27 of 41.
+- In-flight (branch `progress/scatter`, single open PR per the
+  one-branch directive): the `+scatter` plugin — a port of
+  `scatter.c` (`crates/bcftools-rs/src/commands/plugins/scatter.rs`).
+  Splits a VCF into multiple VCFs by fixed-size chunks (`-n N`,
+  integer-named files) or a comma-separated region list (`-s`, with
+  `-x` for an extra file of unmatched records; `-S` file form and
+  `-p` prefix supported), each output file getting the full input
+  header. Byte-for-byte against `scatter.1.{1,2,3}.out` (via the
+  sort-dir / `cat` / `grep -v ^##` harness). This brings the
+  in-process plugin total to 28 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -365,7 +369,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 27 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta` |
+| `plugin` | registry + 28 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -376,16 +380,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-27 of 41 plugin record-processing implementations done (see Wave F);
-14 remain.
+28 of 41 plugin record-processing implementations done (see Wave F);
+13 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+fill-from-fasta`, PR #64 `+GTisec` landed):
-  approximately 46-49% complete toward the full stated goal. Movement
-  since the prior estimate is `+fill-from-fasta` (REF/INFO fill from a
-  FASTA reference, `-c REF` modes) verified byte-for-byte against
-  `ref.out` / `aa.2.out`. 27 of 41 plugins done.
+- 2026-05-16 (post `+scatter`, PR #65 `+fill-from-fasta` landed):
+  approximately 47-50% complete toward the full stated goal. Movement
+  since the prior estimate is `+scatter` (split a VCF into multiple
+  VCFs by `-n` chunks or `-s`/`-S` regions, `-x` extra) verified
+  byte-for-byte against `scatter.1.{1,2,3}.out`. 28 of 41 plugins
+  done.
 - 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
@@ -646,7 +651,7 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#64 + `progress/fill-from-fasta`): 27 plugins
+Implemented so far (PRs #45–#65 + `progress/scatter`): 28 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
@@ -654,7 +659,7 @@ under `crates/bcftools-rs/src/commands/plugins/` —
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
 `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`,
-`fill-from-fasta`. Every one
+`fill-from-fasta`, `scatter`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -1031,6 +1036,17 @@ Current local slice:
   `crates/bcftools-rs/tests/plugin_fill_from_fasta.rs` + 1 unit test.
   Remaining: `-i`/`-e` filtering (the `aa.out` row needs
   `-i 'TYPE="snp"'`) — filter engine.
+- [x] `+scatter` (`crates/bcftools-rs/src/commands/plugins/scatter.rs`):
+  port of `scatter.c`. Splits a VCF into multiple VCFs by fixed-size
+  chunks (`-n N`, sequential integer-named files) or a region list
+  (`-s REGIONS` / `-S FILE`, each region's records routed to its named
+  file, `-x EXTRA` collecting records that match no region, `-p`
+  prefix), every output file getting the full input header. Region
+  parsing mirrors `regidx_parse_reg_name` (chrom-only ⇒ whole
+  contig). Byte-for-byte parity with `scatter.1.{1,2,3}.out` via the
+  sort-dir / `cat` / `grep -v ^##` harness. 3 integration tests in
+  `crates/bcftools-rs/tests/plugin_scatter.rs` + 2 unit tests.
+  Remaining: `-i`/`-e` filtering (filter engine).
 
 Grouped roughly by complexity / shared dependencies:
 
