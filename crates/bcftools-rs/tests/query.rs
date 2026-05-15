@@ -98,6 +98,34 @@ fn query_format_core_fields_from_vcf() {
 }
 
 #[test]
+fn query_allow_undef_tags_accepts_unknown_format_tokens() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("undef.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t10\t.\tA\tC\t.\tPASS\t.\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "query",
+        "--allow-undef-tags",
+        "-f",
+        "%CHROM\t%MISSING\n",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "query --allow-undef-tags failed: {err}");
+    assert_eq!(out, "1\t.\n");
+
+    let (out, err, code) = run(&["query", "-u", "-f", "%MISSING\n", input.to_str().unwrap()]);
+    assert_eq!(code, 0, "query -u failed: {err}");
+    assert_eq!(out, ".\n");
+}
+
+#[test]
 fn query_samples_file_filters_list_samples_in_header_order() {
     let path = fixture_path("query.smpl.vcf");
     let samples = fixture_path("query.smpl.txt");
