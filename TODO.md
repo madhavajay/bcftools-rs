@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #50 (`progress/indel-stats`, merge commit `9139169`)
+  landed `+indel-stats` (no-PED default) — SN/DVAF/DLEN/DFRAC/NFRAC with
+  the FORMAT/AD VAF + minor-allele-fraction analysis, byte-for-byte
+  against `indel-stats.1.out`.
 - 2026-05-15: PR #49 (`progress/smpl-stats`, merge commit `3864e03`)
   landed `+smpl-stats` (default "all" filter) — per-sample/per-site
   genotype stats with `bcf_calc_ac` + the `bcf_acgt2int` ts/tv walk,
@@ -268,17 +272,19 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/indel-stats`, single open PR per the one-branch
-  directive): the `+indel-stats` plugin (no-PED default) — a port of
-  `indel-stats.c` `process_record`/`update_indel_stats`/`destroy`
-  (`crates/bcftools-rs/src/commands/plugins/indel_stats.rs`). Record-level
-  `VCF_INDEL` prefilter, SN summary, the FORMAT/AD VAF distribution (DVAF),
-  indel-length distribution (DLEN), and mean minor-allele fraction at HET
-  indel genotypes vs length (DFRAC/NFRAC), plus CSQ inframe/frameshift and
-  nins/ndel. Byte-for-byte against `indel-stats.1.out` (post harness
-  `grep -v ^CMD`). This brings the in-process plugin total to 13 of 41.
-  The `-p` trio/de-novo mode and `-i`/`-e` filter-threshold scanning are
-  blocked on the not-yet-ported PED/filter infrastructure.
+- In-flight (branch `progress/ad-bias`, single open PR per the one-branch
+  directive): the `+ad-bias` plugin (report mode) — a port of
+  `ad-bias.c`'s report path
+  (`crates/bcftools-rs/src/commands/plugins/ad_bias.rs`). Parses the
+  sample/control pair file, runs the upstream two-most-frequent-allele
+  search over FORMAT/AD (sample then control), and Fisher's exact test via
+  `htslib_rs::math::kt_fisher_exact` (the HTSlib `kfunc.c` port), emitting
+  `FT` lines below the threshold + an `SN` summary, with C-style `%e`
+  formatting. Byte-for-byte against `ad-bias.out` for both `ad-bias.vcf`
+  and `ad-bias.2.vcf` (post harness `grep -v bcftools`). This brings the
+  in-process plugin total to 14 of 41. The `-c`/`--clean-vcf` VCF
+  allele-removal output, `-v` variant-type filtering, and `-f` convert
+  format are blocked (need the convert/VCF-rewrite infra).
 - Next local-only queue: the `+prune` LD/distance window port
   (`calc_ld` genotype-correlation math — heavier, partly blocked on the
   filter engine for the `-i`/`-e` variants);
@@ -311,7 +317,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 13 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats` |
+| `plugin` | registry + 14 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -322,28 +328,29 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-13 of 41 plugin record-processing implementations done (see Wave F);
-28 remain.
+14 of 41 plugin record-processing implementations done (see Wave F);
+27 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+indel-stats`, PR #49 landed): approximately
-  30-33% complete toward the full stated goal of a pure Rust
+- 2026-05-15 (post `+ad-bias`, PR #50 landed): approximately
+  31-34% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
-  prior estimate is 13 of 41 plugins now implemented (`indel-stats`
-  SN/DVAF/DLEN/DFRAC/NFRAC with FORMAT/AD VAF + minor-allele-fraction,
-  verified byte-for-byte against `indel-stats.1.out`) on top of
-  `smpl-stats`, `af-dist`, the `vcfbuf` overlap/dup state machine, the
-  VariantKey pair, the PR #45 7-plugin batch and the PRs #10-#41 command
-  slices. The raw checklist is well past two-thirds checked, but the
-  estimate still weights the unfinished large subcommands (`mpileup`,
-  `call`, `csq`, full `merge`/`annotate`/`norm`), the 28 remaining plugins
-  (most coupled to the
+  prior estimate is 14 of 41 plugins now implemented (`ad-bias` Fisher
+  exact test on FORMAT/AD via the HTSlib `kfunc.c` port, verified
+  byte-for-byte against `ad-bias.out` for two inputs) on top of
+  `indel-stats`, `smpl-stats`, `af-dist`, the `vcfbuf` overlap/dup state
+  machine, the VariantKey pair, the PR #45 7-plugin batch and the
+  PRs #10-#41 command slices. The raw checklist is well past two-thirds
+  checked, but the estimate still weights the unfinished large subcommands
+  (`mpileup`, `call`, `csq`, full `merge`/`annotate`/`norm`), the 27
+  remaining plugins (most coupled to the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post `+indel-stats`): approximately 30-33% (kept for trend).
 - 2026-05-15 (post `+smpl-stats`): approximately 29-32% (kept for trend).
 - 2026-05-15 (post `+af-dist`): approximately 28-31% (kept for trend).
 - 2026-05-15 (post `+remove-overlaps`): approximately 27-30% (kept for trend).
@@ -564,26 +571,28 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45/#46/#47/#48/#49 + `progress/indel-stats`): 13
-plugins under `crates/bcftools-rs/src/commands/plugins/` —
+Implemented so far (PRs #45–#50 + `progress/ad-bias`): 14 plugins
+under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
-`variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`.
-Every one with an upstream `*.out` fixture is byte-for-byte verified;
-`variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
-slices, the two VariantKey plugins match the full
+`variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
+`indel-stats`, `ad-bias`. Every one with an upstream `*.out` fixture is
+byte-for-byte verified; `variant-distance`/`check-ploidy` pass their entire
+`test_vcf_plugin` slices, the two VariantKey plugins match the full
 `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records, 3
 hash/non-reversible), `remove-overlaps` matches all six
 `remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), `af-dist`
 matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32` binning),
 `smpl-stats` matches `smpl-stats.1.out` (per-sample/per-site genotype
-stats), and `indel-stats` matches `indel-stats.1.out` (SN/DVAF/DLEN/
-DFRAC/NFRAC). The 28 remaining plugins are heavier and coupled to shared
-infra still in progress: the `vcfbuf` LD/distance window port (`+prune`),
-the bcftools filter engine (`+setGT`, `+split-vep` expressions,
-`remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats -i/-e`),
-FASTA/reference (`+fixref`, `+fill-from-fasta`), PED/trio handling
-(`+trio-stats`, `+mendelian2`, `+trio-dnm3`, `indel-stats -p`), or
+stats), `indel-stats` matches `indel-stats.1.out` (SN/DVAF/DLEN/DFRAC/
+NFRAC), and `ad-bias` matches `ad-bias.out` for both inputs (Fisher exact
+test on FORMAT/AD). The 27 remaining plugins are heavier and coupled to
+shared infra still in progress: the `vcfbuf` LD/distance window port
+(`+prune`), the bcftools filter engine (`+setGT`, `+split-vep`
+expressions, `remove-overlaps -m 'min(QUAL)'`,
+`smpl-stats`/`indel-stats -i/-e`), FASTA/reference (`+fixref`,
+`+fill-from-fasta`), PED/trio handling (`+trio-stats`, `+mendelian2`,
+`+trio-dnm3`, `indel-stats -p`), VCF-rewrite/convert (`ad-bias -c/-f`), or
 `%g`-exact float formatting (`+dosage`, `+guess-ploidy`,
 `+tag2tag --gl-to-gp`). The `+prune` LD/distance window port is the
 preferred next pick.
@@ -730,6 +739,20 @@ Current local slice:
   `crates/bcftools-rs/tests/plugin_indel_stats.rs` + 3 unit tests.
   Remaining: `-p` trio/de-novo mode, `-i`/`-e` filter scanning, and
   `--max-len`/`--nvaf` overrides (blocked on PED/filter infra).
+- [x] `+ad-bias` (`crates/bcftools-rs/src/commands/plugins/ad_bias.rs`,
+  report mode): port of `ad-bias.c`'s report path. Parses the
+  sample/control pair file against the `#CHROM` order (skipping pairs not
+  in the VCF), runs the upstream stateful two-most-frequent-allele search
+  over FORMAT/AD (sample loop then control loop, with the carry-over
+  `ibig`/`ismall`/`nbig`/`nsmall` state), applies `-d`/`-a` depth gates,
+  and computes Fisher's exact test two-tail via
+  `htslib_rs::math::kt_fisher_exact` (the HTSlib `kfunc.c` port). Emits
+  `FT` lines below `-t` (default 1e-3) and the `SN` summary with C-style
+  `%e` formatting (signed two-digit exponent). Byte-for-byte parity with
+  `ad-bias.out` for both `ad-bias.vcf` and `ad-bias.2.vcf`. 2 integration
+  tests in `crates/bcftools-rs/tests/plugin_ad_bias.rs` + 3 unit tests.
+  Remaining: `-c`/`--clean-vcf` (VCF allele removal), `-v` variant-type
+  filtering, and `-f` convert format (need convert/VCF-rewrite infra).
 
 Grouped roughly by complexity / shared dependencies:
 
