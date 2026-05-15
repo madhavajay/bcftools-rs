@@ -176,6 +176,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-W=") => {
                 write_index = parse_write_index(Some(&raw[3..]))?;
             }
+            _ if raw.starts_with("-W") && raw.len() > 2 => {
+                write_index = parse_write_index(Some(&raw[2..]))?;
+            }
             _ if raw.starts_with('-') => return Err(ParseOutcome::Usage),
             _ => {
                 if input.is_some() {

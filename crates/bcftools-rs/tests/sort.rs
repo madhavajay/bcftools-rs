@@ -114,6 +114,28 @@ fn sort_supports_vntyper_compressed_write_index_command_shape() {
 }
 
 #[test]
+fn sort_supports_attached_write_index_format() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    let output = dir.path().join("sorted.vcf.gz");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (_out, err, code) = run(&[
+        "sort",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "-Oz",
+        "-Wtbi",
+    ]);
+    assert_eq!(code, 0, "sort -Wtbi -Oz failed: {err}");
+    assert!(output.exists(), "compressed VCF output not produced");
+    let tbi = dir.path().join("sorted.vcf.gz.tbi");
+    assert!(tbi.exists(), "TBI index not produced for -Wtbi");
+    assert!(!std::fs::read(&tbi).unwrap().is_empty(), "TBI is empty");
+}
+
+#[test]
 fn sort_threads_writes_bgzf_vcf_output() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("unsorted.vcf");
