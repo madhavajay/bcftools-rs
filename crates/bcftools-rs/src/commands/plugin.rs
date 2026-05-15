@@ -292,8 +292,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut fixref_fasta: Option<String> = None;
     let mut fixref_mode: Option<String> = None;
     let mut fixref_discard = false;
-    // PED-driven plugins (trio-switch-rate, ...).
+    // PED-driven plugins (trio-switch-rate, trio-stats, ...).
     let mut ped_file: Option<String> = None;
+    let mut trio_stats_alt: Option<i32> = None;
+    let mut trio_stats_debug: Option<String> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -420,6 +422,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-d" if plugin_name.as_deref() == Some("fixref") => {
                 fixref_discard = true;
+            }
+            "-d" | "--debug" if plugin_name.as_deref() == Some("trio-stats") => {
+                trio_stats_debug = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-a" | "--alt-trios" if plugin_name.as_deref() == Some("trio-stats") => {
+                trio_stats_alt = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
             "-p" if plugin_name.as_deref() == Some("af-dist") => {
                 prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -736,6 +744,32 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "trio-stats" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(ped) = ped_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "trio-stats requires -p/--ped",
+            ));
+        };
+        let dbg = trio_stats_debug.unwrap_or_default();
+        let dbg_mendel = dbg
+            .split(',')
+            .any(|t| t.eq_ignore_ascii_case("mendel-errors"));
+        let dbg_tr = dbg
+            .split(',')
+            .any(|t| t.eq_ignore_ascii_case("transmitted"));
+        let report = crate::commands::plugins::trio_stats::run(
+            Path::new(&input),
+            Path::new(ped),
+            trio_stats_alt.unwrap_or(0),
+            dbg_mendel,
+            dbg_tr,
+        )?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 
