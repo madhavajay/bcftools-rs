@@ -291,3 +291,37 @@ fn sort_spills_to_temp_dir_when_max_mem_is_small() {
     let leftovers = std::fs::read_dir(&temp).unwrap().count();
     assert_eq!(leftovers, 0, "temporary chunk files were not cleaned up");
 }
+
+#[test]
+fn sort_accepts_zero_max_mem_as_unbounded() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (out, err, code) = run(&["sort", "-m", "0", input.to_str().unwrap()]);
+    assert_eq!(code, 0, "sort -m 0 failed: {err}");
+
+    let first_record = out
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty());
+    assert_eq!(first_record, Some("1\t10\t.\tA\tC\t100\tPASS\t."));
+}
+
+#[test]
+fn sort_accepts_attached_bcf_output_type() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("unsorted.vcf");
+    let output = dir.path().join("sorted.bcf");
+    std::fs::write(&input, UNSORTED_VCF).unwrap();
+
+    let (_out, err, code) = run(&[
+        "sort",
+        "-Ob",
+        "-o",
+        output.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "sort -Ob failed: {err}");
+    let bytes = std::fs::read(&output).unwrap();
+    assert_eq!(&bytes[..4], &[0x1f, 0x8b, 0x08, 0x04]);
+}

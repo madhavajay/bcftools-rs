@@ -387,8 +387,11 @@ The waves are ordered to land foundational machinery first (read/write/index, th
         unblocks the BioScript VNtyper port.
   - [x] Snapshot coverage: coordinate/ref/ALT sorting, compressed VCF output,
         CSI/TBI indexing including attached `-Wtbi`, BGZF writer threading,
-        Kestrel-tolerant header normalization, and disk-backed temp-run spill.
-        9 integration tests in `crates/bcftools-rs/tests/sort.rs`.
+        Kestrel-tolerant header normalization, disk-backed temp-run spill, and
+        upstream Perl `test_vcf_sort` option forms including `-m 0`,
+        tiny `-m 1000` external-sort spills, attached `-Ob` BCF output, and
+        BCF stdout piping through `view`. 11 integration tests in
+        `crates/bcftools-rs/tests/sort.rs`.
 - [ ] `concat` (`vcfconcat.c`, 52k) — vertical concat (`-a`, `-d`, `-l`, `--naive`, `--ligate`, `--regions`). Covered by `test_vcf_concat`, `test_naive_concat`.
   - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/concat.rs`): same-sample vertical concat for VCF/VCF.gz/BCF inputs, header preservation from first file, sample-column verification across inputs, default adjacent-input overlap rejection plus `-a`/`--allow-overlaps`, `-o`/`--output`, `-O u|b|v|z[0-9]`, `-f`/`--file-list`, `-G`/`--drop-genotypes`, `-D`/`--remove-duplicates`, `-d`/`--rm-dups snps|indels|both|all|exact`, `-n`/`--naive` VCF body concatenation and `--naive-force`, `-r`/`-R` POS-based region restriction including BED coordinate conversion, `--regions-overlap 0|1|2` with record-span matching for 1/2, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_concat{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads. 27 integration tests in `crates/bcftools-rs/tests/concat.rs`.
   - [ ] Remaining: full `-a`/`--allow-overlaps` edge-case parity with synced-reader overlap semantics, `-l`/`--ligate` and ligate-force/warn variants, true BCF block-level `--naive` concat, `-c`/`--compact-PS`, `-q`/`--min-PQ`.
