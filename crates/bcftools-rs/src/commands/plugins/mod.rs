@@ -22,6 +22,7 @@ pub mod prune;
 pub mod remove_overlaps;
 pub mod smpl_stats;
 pub mod tag2tag;
+pub mod trio_switch_rate;
 pub mod variant_distance;
 pub mod variantkey;
 pub mod variantkey_hex;
