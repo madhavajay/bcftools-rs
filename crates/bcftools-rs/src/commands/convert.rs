@@ -289,6 +289,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-e") && raw.len() > 2 => exclude_expr = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-f") && raw.len() > 2 => {
+                fasta_ref = Some(PathBuf::from(&raw[2..]))
+            }
             _ if raw.starts_with("-g") && raw.len() > 2 => gensample = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-h") && raw.len() > 2 => {
                 haplegendsample = Some(raw[2..].to_owned())

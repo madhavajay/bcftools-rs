@@ -337,7 +337,7 @@ fn convert_tsv2vcf_skips_malformed_rows_and_keeps_writing() {
 }
 
 #[test]
-fn convert_tsv2vcf_aa_with_reference_derives_ref_alt_and_gt() {
+fn convert_tsv2vcf_aa_with_attached_reference_derives_ref_alt_and_gt() {
     let dir = TempDir::new().unwrap();
     let fasta = dir.path().join("ref.fa");
     let tsv = dir.path().join("in.tsv");
@@ -351,8 +351,7 @@ fn convert_tsv2vcf_aa_with_reference_derives_ref_alt_and_gt() {
         "convert",
         "--tsv2vcf",
         tsv.to_str().unwrap(),
-        "-f",
-        fasta.to_str().unwrap(),
+        &format!("-f{}", fasta.display()),
         "-c",
         "ID,CHROM,POS,AA",
         "-s",
