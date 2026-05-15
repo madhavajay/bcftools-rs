@@ -7,6 +7,7 @@
 
 use std::ffi::OsString;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use crate::diagnostics::fmt_etag;
@@ -231,6 +232,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut help = false;
     let mut version = false;
     let mut plugin_name: Option<String> = None;
+    let mut input: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -273,6 +275,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with("--") => {}
             _ if raw.starts_with('-') => {}
             _ if plugin_name.is_none() => plugin_name = Some(raw.into_owned()),
+            _ if input.is_none() => input = Some(raw.into_owned()),
             _ => {}
         }
     }
@@ -323,6 +326,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "\nThe '{}' plugin is registered but its record-processing implementation is not yet ported.",
             plugin.name
         )?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "counts" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::counts::run(Path::new(&input))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 

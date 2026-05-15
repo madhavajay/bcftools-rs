@@ -22,6 +22,7 @@ pub mod isec;
 pub mod merge;
 pub mod norm;
 pub mod plugin;
+pub mod plugins;
 pub mod query;
 pub mod reheader;
 pub mod sort;
