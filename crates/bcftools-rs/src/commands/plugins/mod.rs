@@ -26,6 +26,7 @@ pub mod missing2ref;
 pub mod parental_origin;
 pub mod prune;
 pub mod remove_overlaps;
+pub mod scatter;
 pub mod smpl_stats;
 pub mod tag2tag;
 pub mod trio_stats;
