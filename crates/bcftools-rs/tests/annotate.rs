@@ -49,6 +49,24 @@ fn write_fixture(dir: &TempDir) -> (PathBuf, PathBuf) {
     (vcf, map)
 }
 
+fn write_annotated_fixture(dir: &TempDir) -> PathBuf {
+    let vcf = dir.path().join("ann.vcf");
+    std::fs::write(
+        &vcf,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=10>\n\
+##INFO=<ID=AC,Number=A,Type=Integer,Description=\"x\">\n\
+##INFO=<ID=AN,Number=1,Type=Integer,Description=\"x\">\n\
+##INFO=<ID=DP,Number=1,Type=Integer,Description=\"x\">\n\
+##FILTER=<ID=LowQual,Description=\"x\">\n\
+##FILTER=<ID=q10,Description=\"x\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t5\trs9\tA\tC\t99\tLowQual;q10\tAC=1;AN=2;DP=12\n",
+    )
+    .unwrap();
+    vcf
+}
+
 #[test]
 fn annotate_rename_chrs_updates_vcf_text() {
     let dir = TempDir::new().unwrap();
@@ -122,4 +140,123 @@ fn annotate_rename_chrs_reads_bcf_input() {
     assert_eq!(code, 0, "annotate BCF input failed: {err}");
     let out = String::from_utf8(out).unwrap();
     assert!(out.contains("chr1\t2\t.\tA\tC\t.\tPASS\t."), "{out}");
+}
+
+#[test]
+fn annotate_remove_specific_info_tags() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "INFO/AC,INFO/DP",
+        "-Ov",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "annotate -x failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(!out.contains("##INFO=<ID=AC,"), "{out}");
+    assert!(!out.contains("##INFO=<ID=DP,"), "{out}");
+    assert!(out.contains("##INFO=<ID=AN,"), "{out}");
+    assert!(out.contains("\tAN=2\n"), "{out}");
+}
+
+#[test]
+fn annotate_remove_id_and_qual() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "ID,QUAL",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "annotate -x ID,QUAL failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains("1\t5\t.\tA\tC\t.\tLowQual;q10\tAC=1;AN=2;DP=12"),
+        "{out}"
+    );
+}
+
+#[test]
+fn annotate_remove_specific_filter_becomes_pass() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "FILTER/LowQual,FILTER/q10",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "annotate -x FILTER/... failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(!out.contains("##FILTER=<ID=LowQual,"), "{out}");
+    assert!(out.contains("\tPASS\tAC=1;AN=2;DP=12"), "{out}");
+}
+
+#[test]
+fn annotate_remove_all_info() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "INFO",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "annotate -x INFO failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(!out.contains("##INFO="), "{out}");
+    assert!(out.contains("\tLowQual;q10\t.\n"), "{out}");
+}
+
+#[test]
+fn annotate_rename_and_remove_combined() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+    let map = dir.path().join("m.map");
+    std::fs::write(&map, "1\tchr1\n").unwrap();
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "--rename-chrs",
+        map.to_str().unwrap(),
+        "-x",
+        "INFO/AC",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "annotate combined failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("##contig=<ID=chr1,"), "{out}");
+    assert!(!out.contains("##INFO=<ID=AC,"), "{out}");
+    assert!(
+        out.contains("chr1\t5\trs9\tA\tC\t99\tLowQual;q10\tAN=2;DP=12"),
+        "{out}"
+    );
+}
+
+#[test]
+fn annotate_rejects_keep_only_form() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (_out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "^INFO/AC",
+        vcf.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0, "expected rejection of ^ keep-only form");
+    assert!(err.contains("keep-only"), "stderr: {err}");
 }

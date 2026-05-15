@@ -1,10 +1,12 @@
 //! Focused `bcftools annotate` implementation (upstream `vcfannotate.c`).
 //!
-//! This first local slice supports chromosome renaming with `--rename-chrs`.
-//! Full annotation transfer/removal and overlap logic remain tracked in
+//! Local slice supports chromosome renaming via `--rename-chrs` and tag
+//! removal via `-x`/`--remove` for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>`,
+//! `INFO`, and `INFO/<ID>` targets. Full annotation transfer, FORMAT
+//! removal, header injection, and the `^`-keep-only form remain tracked in
 //! `TODO.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
@@ -24,15 +26,38 @@ Usage:   bcftools annotate [OPTIONS] <in.vcf.gz>\n\
 \n\
 Options:\n\
         --rename-chrs FILE           Rename chromosomes according to a two-column map\n\
+    -x, --remove LIST                Remove annotations (LIST = comma-separated ID, QUAL, FILTER[/<ID>], INFO[/<ID>])\n\
     -o, --output FILE                Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]   u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --no-version                 Accepted for command-shape compatibility\n\
 \n";
 
+#[derive(Debug, Default)]
+struct RemoveSet {
+    id: bool,
+    qual: bool,
+    all_filter: bool,
+    all_info: bool,
+    filter_ids: HashSet<String>,
+    info_ids: HashSet<String>,
+}
+
+impl RemoveSet {
+    fn is_empty(&self) -> bool {
+        !self.id
+            && !self.qual
+            && !self.all_filter
+            && !self.all_info
+            && self.filter_ids.is_empty()
+            && self.info_ids.is_empty()
+    }
+}
+
 #[derive(Debug)]
 struct Args {
     input: PathBuf,
-    rename_chrs: PathBuf,
+    rename_chrs: Option<PathBuf>,
+    remove: RemoveSet,
     output: Option<PathBuf>,
     output_kind: OutputKind,
 }
@@ -73,6 +98,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
 fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut input = None;
     let mut rename_chrs = None;
+    let mut remove = RemoveSet::default();
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
 
@@ -84,6 +110,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "--rename-chrs" => {
                 rename_chrs = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
+            "-x" | "--remove" => {
+                parse_remove_list(&next_string(&mut iter, raw.as_ref())?, &mut remove)?
+            }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -94,11 +123,17 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--rename-chrs=") => {
                 rename_chrs = Some(PathBuf::from(value_after_equals(&raw)))
             }
+            _ if raw.starts_with("--remove=") => {
+                parse_remove_list(value_after_equals(&raw), &mut remove)?
+            }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
             }
             _ if raw.starts_with("--output-type=") => {
                 output_kind = parse_output_kind(value_after_equals(&raw))?
+            }
+            _ if raw.starts_with("-x") && raw.len() > 2 => {
+                parse_remove_list(&raw[2..], &mut remove)?
             }
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
@@ -120,14 +155,61 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
 
     let input =
         input.ok_or_else(|| ParseOutcome::Error("expected one input VCF/BCF path".into()))?;
-    let rename_chrs =
-        rename_chrs.ok_or_else(|| ParseOutcome::Error("expected --rename-chrs FILE".into()))?;
+    if rename_chrs.is_none() && remove.is_empty() {
+        return Err(ParseOutcome::Error(
+            "expected --rename-chrs FILE and/or -x LIST".into(),
+        ));
+    }
     Ok(Args {
         input,
         rename_chrs,
+        remove,
         output,
         output_kind,
     })
+}
+
+fn parse_remove_list(list: &str, remove: &mut RemoveSet) -> Result<(), ParseOutcome> {
+    for entry in list.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        if entry.starts_with('^') {
+            return Err(ParseOutcome::Error(
+                "'^' keep-only form is not supported in this local annotate slice".into(),
+            ));
+        }
+        match entry {
+            "ID" => remove.id = true,
+            "QUAL" => remove.qual = true,
+            "FILTER" => remove.all_filter = true,
+            "INFO" => remove.all_info = true,
+            _ => {
+                if let Some(id) = entry.strip_prefix("FILTER/") {
+                    if id.is_empty() {
+                        return Err(ParseOutcome::Error(format!("invalid -x entry '{entry}'")));
+                    }
+                    remove.filter_ids.insert(id.to_owned());
+                } else if let Some(id) = entry.strip_prefix("INFO/") {
+                    if id.is_empty() {
+                        return Err(ParseOutcome::Error(format!("invalid -x entry '{entry}'")));
+                    }
+                    remove.info_ids.insert(id.to_owned());
+                } else if let Some(id) = entry.strip_prefix("FORMAT/") {
+                    let _ = id;
+                    return Err(ParseOutcome::Error(format!(
+                        "FORMAT removal is not supported in this local annotate slice: '{entry}'"
+                    )));
+                } else {
+                    return Err(ParseOutcome::Error(format!(
+                        "unrecognized -x entry '{entry}'"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn next_string<'a, I>(iter: &mut std::iter::Peekable<I>, name: &str) -> Result<String, ParseOutcome>
@@ -153,9 +235,12 @@ fn parse_output_kind(raw: &str) -> Result<OutputKind, ParseOutcome> {
 }
 
 fn run(args: &Args) -> io::Result<()> {
-    let map = read_rename_map(&args.rename_chrs)?;
+    let rename = match &args.rename_chrs {
+        Some(path) => Some(read_rename_map(path)?),
+        None => None,
+    };
     let mut text = read_vcf_text(&args.input)?;
-    rename_vcf_text(&mut text, &map);
+    transform_vcf_text(&mut text, rename.as_ref(), &args.remove);
     write_output(text.as_bytes(), args)
 }
 
@@ -217,15 +302,45 @@ fn stdin_tmp_path() -> PathBuf {
     ))
 }
 
-fn rename_vcf_text(text: &mut String, map: &HashMap<String, String>) {
+fn transform_vcf_text(
+    text: &mut String,
+    rename: Option<&HashMap<String, String>>,
+    remove: &RemoveSet,
+) {
+    let empty = HashMap::new();
+    let rename = rename.unwrap_or(&empty);
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with("##contig=<") {
-            out.push_str(&rename_contig_header(line, map));
+            if !rename.is_empty() {
+                out.push_str(&rename_contig_header(line, rename));
+            } else {
+                out.push_str(line);
+            }
+        } else if let Some(id) = header_id_for_kind(line, "##INFO=<") {
+            if remove.all_info || remove.info_ids.contains(id) {
+                continue;
+            }
+            out.push_str(line);
+        } else if let Some(id) = header_id_for_kind(line, "##FILTER=<") {
+            if remove.all_filter || remove.filter_ids.contains(id) {
+                continue;
+            }
+            out.push_str(line);
         } else if line.starts_with('#') {
             out.push_str(line);
         } else {
-            out.push_str(&rename_record_chrom(line, map));
+            let renamed;
+            let mut record: &str = line;
+            if !rename.is_empty() {
+                renamed = rename_record_chrom(line, rename);
+                record = &renamed;
+            }
+            if remove.is_empty() {
+                out.push_str(record);
+            } else {
+                out.push_str(&apply_record_removals(record, remove));
+            }
         }
         out.push('\n');
     }
@@ -264,6 +379,71 @@ fn rename_record_chrom(line: &str, map: &HashMap<String, String>) -> String {
     renamed.push_str(new);
     renamed.push_str(&line[tab..]);
     renamed
+}
+
+fn header_id_for_kind<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(prefix)?;
+    let id_start = rest.find("ID=")? + 3;
+    let id_rest = &rest[id_start..];
+    let id_end = id_rest.find([',', '>']).unwrap_or(id_rest.len());
+    Some(&id_rest[..id_end])
+}
+
+fn apply_record_removals(line: &str, remove: &RemoveSet) -> String {
+    let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+    if fields.len() < 8 {
+        return line.to_owned();
+    }
+    if remove.id {
+        fields[2] = ".".to_owned();
+    }
+    if remove.qual {
+        fields[5] = ".".to_owned();
+    }
+    if remove.all_filter {
+        fields[6] = ".".to_owned();
+    } else if !remove.filter_ids.is_empty() {
+        fields[6] = filter_after_removal(&fields[6], &remove.filter_ids);
+    }
+    if remove.all_info {
+        fields[7] = ".".to_owned();
+    } else if !remove.info_ids.is_empty() {
+        fields[7] = info_after_removal(&fields[7], &remove.info_ids);
+    }
+    fields.join("\t")
+}
+
+fn filter_after_removal(current: &str, drop: &HashSet<String>) -> String {
+    if current == "." || current == "PASS" {
+        return current.to_owned();
+    }
+    let kept: Vec<&str> = current
+        .split(';')
+        .filter(|tag| !drop.contains(*tag))
+        .collect();
+    if kept.is_empty() {
+        "PASS".to_owned()
+    } else {
+        kept.join(";")
+    }
+}
+
+fn info_after_removal(current: &str, drop: &HashSet<String>) -> String {
+    if current == "." {
+        return current.to_owned();
+    }
+    let kept: Vec<&str> = current
+        .split(';')
+        .filter(|entry| {
+            let key = entry.split_once('=').map(|(k, _)| k).unwrap_or(entry);
+            !drop.contains(key)
+        })
+        .collect();
+    if kept.is_empty() {
+        ".".to_owned()
+    } else {
+        kept.join(";")
+    }
 }
 
 fn write_output(bytes: &[u8], args: &Args) -> io::Result<()> {
@@ -313,18 +493,77 @@ fn write_bcf_from_vcf_text<W: Write>(text: &[u8], out: W) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    fn sample_vcf() -> String {
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=10>\n\
+##INFO=<ID=AC,Number=A,Type=Integer,Description=\"\">\n\
+##INFO=<ID=AN,Number=1,Type=Integer,Description=\"\">\n\
+##INFO=<ID=DP,Number=1,Type=Integer,Description=\"\">\n\
+##FILTER=<ID=LowQual,Description=\"\">\n\
+##FILTER=<ID=q10,Description=\"\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+1\t2\trs1\tA\tC\t99\tLowQual;q10\tAC=1;AN=2;DP=12\n"
+            .to_owned()
+    }
+
     #[test]
     fn renames_contig_headers_and_records() {
         let mut map = HashMap::new();
         map.insert("1".to_owned(), "chr1".to_owned());
-        let mut text = "##fileformat=VCFv4.2\n\
-##contig=<ID=1,length=10>\n\
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
-1\t2\t.\tA\tC\t.\tPASS\t.\n"
-            .to_owned();
-
-        rename_vcf_text(&mut text, &map);
+        let mut text = sample_vcf();
+        transform_vcf_text(&mut text, Some(&map), &RemoveSet::default());
         assert!(text.contains("##contig=<ID=chr1,length=10>"));
-        assert!(text.contains("chr1\t2\t.\tA\tC\t.\tPASS\t."));
+        assert!(text.contains("chr1\t2\trs1\tA\tC\t99\tLowQual;q10\tAC=1;AN=2;DP=12"));
+    }
+
+    #[test]
+    fn removes_id_and_qual_columns() {
+        let remove = RemoveSet {
+            id: true,
+            qual: true,
+            ..Default::default()
+        };
+        let mut text = sample_vcf();
+        transform_vcf_text(&mut text, None, &remove);
+        assert!(text.contains("1\t2\t.\tA\tC\t.\tLowQual;q10\tAC=1;AN=2;DP=12"));
+    }
+
+    #[test]
+    fn removes_specific_info_tags_and_their_headers() {
+        let mut remove = RemoveSet::default();
+        remove.info_ids.insert("AC".into());
+        remove.info_ids.insert("DP".into());
+        let mut text = sample_vcf();
+        transform_vcf_text(&mut text, None, &remove);
+        assert!(!text.contains("##INFO=<ID=AC,"));
+        assert!(!text.contains("##INFO=<ID=DP,"));
+        assert!(text.contains("##INFO=<ID=AN,"));
+        assert!(text.contains("AN=2\n"));
+        assert!(!text.contains("AC=1"));
+        assert!(!text.contains("DP=12"));
+    }
+
+    #[test]
+    fn removes_specific_filter_and_substitutes_pass() {
+        let mut remove = RemoveSet::default();
+        remove.filter_ids.insert("LowQual".into());
+        remove.filter_ids.insert("q10".into());
+        let mut text = sample_vcf();
+        transform_vcf_text(&mut text, None, &remove);
+        assert!(!text.contains("##FILTER=<ID=LowQual,"));
+        assert!(!text.contains("##FILTER=<ID=q10,"));
+        assert!(text.contains("PASS\tAC=1;AN=2;DP=12"));
+    }
+
+    #[test]
+    fn removes_all_info() {
+        let remove = RemoveSet {
+            all_info: true,
+            ..Default::default()
+        };
+        let mut text = sample_vcf();
+        transform_vcf_text(&mut text, None, &remove);
+        assert!(!text.contains("##INFO="));
+        assert!(text.contains("LowQual;q10\t.\n"));
     }
 }
