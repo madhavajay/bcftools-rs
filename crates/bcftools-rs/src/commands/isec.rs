@@ -89,6 +89,8 @@ struct NFiles {
 enum CollapseMode {
     None,
     Any,
+    Snps,
+    Indels,
     Both,
     Id,
 }
@@ -468,7 +470,30 @@ fn collapse_key(key: &Key, mode: CollapseMode) -> String {
             key.chrom, key.pos, key.ref_allele, key.alt
         ),
         CollapseMode::Any => format!("{}\t{}", key.chrom, key.pos),
-        CollapseMode::Both => format!("{}\t{}", key.chrom, key.pos),
+        CollapseMode::Snps if key.class == VariantClass::Snp => {
+            format!("{}\t{}\tSNP", key.chrom, key.pos)
+        }
+        CollapseMode::Snps => format!(
+            "{}\t{}\t{}\t{}",
+            key.chrom, key.pos, key.ref_allele, key.alt
+        ),
+        CollapseMode::Indels if key.class == VariantClass::Indel => {
+            format!("{}\t{}\tINDEL", key.chrom, key.pos)
+        }
+        CollapseMode::Indels => format!(
+            "{}\t{}\t{}\t{}",
+            key.chrom, key.pos, key.ref_allele, key.alt
+        ),
+        CollapseMode::Both if key.class == VariantClass::Snp => {
+            format!("{}\t{}\tSNP", key.chrom, key.pos)
+        }
+        CollapseMode::Both if key.class == VariantClass::Indel => {
+            format!("{}\t{}\tINDEL", key.chrom, key.pos)
+        }
+        CollapseMode::Both => format!(
+            "{}\t{}\t{}\t{}",
+            key.chrom, key.pos, key.ref_allele, key.alt
+        ),
     }
 }
 
@@ -889,6 +914,10 @@ fn group_for_record(
 fn infer_group_mode(group_id: &str, key: &Key) -> CollapseMode {
     if group_id == format!("{}\t{}", key.chrom, key.pos) {
         CollapseMode::Any
+    } else if group_id == format!("{}\t{}\tSNP", key.chrom, key.pos) {
+        CollapseMode::Snps
+    } else if group_id == format!("{}\t{}\tINDEL", key.chrom, key.pos) {
+        CollapseMode::Indels
     } else if key.id != "." && group_id == format!("{}\t{}\tID\t{}", key.chrom, key.pos, key.id) {
         CollapseMode::Id
     } else {
@@ -1115,7 +1144,9 @@ fn parse_collapse(raw: &str) -> Result<CollapseMode, ParseOutcome> {
     match raw {
         "none" | "exact" => Ok(CollapseMode::None),
         "any" | "all" | "some" => Ok(CollapseMode::Any),
-        "both" | "snps" | "indels" => Ok(CollapseMode::Both),
+        "snps" => Ok(CollapseMode::Snps),
+        "indels" => Ok(CollapseMode::Indels),
+        "both" => Ok(CollapseMode::Both),
         "id" => Ok(CollapseMode::Id),
         _ => Err(ParseOutcome::Error(format!(
             "invalid collapse mode '{raw}'"
