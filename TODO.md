@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #59 (`progress/trio-stats`, merge commit `ca2221f`)
+  landed `+trio-stats` — PED trios, `bcf_calc_ac`, per-trio
+  Mendelian-error / DNM / transmitted-doubleton classification, the
+  `-a` deferral and interleaved `-d` debug dump, byte-for-byte against
+  `trio-stats.out` / `trio-stats.2.out`.
 - 2026-05-16: PR #58 (`progress/trio-switch-rate`, merge commit
   `5446b0e`) landed `+trio-switch-rate` + a reusable PED parser,
   byte-for-byte against `trio.out`.
@@ -298,18 +303,19 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/trio-stats`, single open PR per the
-  one-branch directive): the `+trio-stats` plugin — a port of
-  `trio-stats.c` (`crates/bcftools-rs/src/commands/plugins/
-  trio_stats.rs`), the largest plugin port so far. PED trios +
-  `bcf_calc_ac`; per-trio Mendelian-error / DNM (hom + recurrent via
-  `ac[culprit]`) / novel-singleton / untransmitted-vs-transmitted
-  singleton/doubleton classification, the `-a` max-alt-trios per-site
-  deferral, `bcf_acgt2int` ts/tv, and the interleaved
-  `MERR`/`TRANSMITTED` debug dump (`-d`) followed by the `DEF`/`FLT0`
-  summary. Byte-for-byte against `trio-stats.out` (`-a 1`) and
-  `trio-stats.2.out` (no `-a`). This brings the in-process plugin
-  total to 21 of 41.
+- In-flight (branch `progress/mendelian2`, single open PR per the
+  one-branch directive): the `+mendelian2` plugin — a port of
+  `mendelian2.c` (`crates/bcftools-rs/src/commands/plugins/
+  mendelian2.rs`). Single `-p [1X:|2X:]P,F,M` trio with the built-in
+  default `GRCh37` ruleset (`init_rules(args, NULL)` → alias
+  `"GRCh37"`): per-record region→`(sex_id, inherits, ploidy)`
+  resolution so chrX/Y/MT use the haploid ploidy-1 inheritance pattern
+  while all other regions inherit MF/ploidy-2; the haploid-kid
+  consistency branch (compare against the single inheriting parent),
+  the diploid branch, and the `c`/`a`/`d`/`e`/`g`/`m`/`E`/`M`/`S`
+  modes + count table. Byte-for-byte against
+  `mendelian.{1,3,4,6,7,8}.out`. This brings the in-process plugin
+  total to 22 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -340,7 +346,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 21 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats` |
+| `plugin` | registry + 22 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -351,16 +357,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-21 of 41 plugin record-processing implementations done (see Wave F);
-20 remain.
+22 of 41 plugin record-processing implementations done (see Wave F);
+19 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+trio-stats`, PR #58 landed): approximately
-  40-43% complete toward the full stated goal. Movement since the prior
-  estimate is `+trio-stats` (the largest plugin: Mendelian/DNM/
-  transmitted classification + interleaved debug) verified byte-for-byte
-  against `trio-stats.out`/`trio-stats.2.out`. 21 of 41 plugins done.
+- 2026-05-16 (post `+mendelian2`, PR #59 `+trio-stats` landed):
+  approximately 41-44% complete toward the full stated goal. Movement
+  since the prior estimate is `+mendelian2` (built-in default GRCh37
+  ruleset → per-record region ploidy/inheritance resolution, haploid
+  and diploid consistency branches) verified byte-for-byte against
+  `mendelian.{1,3,4,6,7,8}.out`. 22 of 41 plugins done.
 - 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
@@ -621,13 +628,13 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#58 + `progress/trio-stats`): 21 plugins
+Implemented so far (PRs #45–#59 + `progress/mendelian2`): 22 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
-`fixref`, `trio-switch-rate`, `trio-stats`. Every one
+`fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -925,6 +932,21 @@ Current local slice:
   2 integration tests in `crates/bcftools-rs/tests/plugin_trio_stats.rs`
   + 2 unit tests. Remaining: `-i`/`-e` filter-threshold scanning and
   `-P` pfm trio (filter engine / single-trio mode).
+- [x] `+mendelian2` (`crates/bcftools-rs/src/commands/plugins/mendelian2.rs`):
+  port of `mendelian2.c`. Single `-p [1X:|2X:]P,F,M` trio; the built-in
+  default `GRCh37` ruleset (`init_rules(args, NULL)` → alias `"GRCh37"`)
+  is reproduced as a region table so each record resolves its
+  `(sex_id, inherits, ploidy)` — chrX/Y/MT haploid (ploidy 1, M/F/.
+  inheritance), all other regions MF/ploidy 2. `parse_gt` allele
+  bitmasks; the haploid-kid branch (compare against the single
+  inheriting parent, `ngood_alt` unless both ref), the diploid
+  consistency branch (phase-consistent GOOD, parent-missing guards,
+  else MERR), and the `c`/`a`/`d`/`e`/`g`/`m`/`E`/`M`/`S` modes +
+  summary/per-trio count table. Byte-for-byte parity with
+  `mendelian.{1,3,4,6,7,8}.out`. 6 integration tests in
+  `crates/bcftools-rs/tests/plugin_mendelian2.rs` + 4 unit tests.
+  Remaining: explicit `--rules`/`--rules-file` (other assemblies /
+  custom ploidy) and `-i`/`-e` filtering (filter engine).
 
 Grouped roughly by complexity / shared dependencies:
 
