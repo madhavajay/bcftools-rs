@@ -6,4 +6,5 @@
 //! actual per-plugin algorithms as they are ported.
 
 pub mod counts;
+pub mod fill_an_ac;
 pub mod missing2ref;

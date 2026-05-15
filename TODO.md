@@ -530,6 +530,14 @@ Current local slice:
   upstream-shaped six-line report. 5 integration tests in
   `crates/bcftools-rs/tests/plugin_counts.rs` + 3 unit tests. No upstream
   `test.pl` case exists for `+counts`.
+- [x] `+fill-AN-AC` (`crates/bcftools-rs/src/commands/plugins/fill_an_ac.rs`):
+  fills `INFO/AN` (total called alleles) and per-ALT `INFO/AC` from
+  `FORMAT/GT`; existing AN/AC stripped first; `AC` omitted when there are no
+  ALT alleles; `##INFO` lines for `AC` then `AN` inserted after the last
+  existing `##INFO` line (HTSlib `bcf_hdr_append` grouping). VCF/VCF.gz/BCF +
+  stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
+  upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
+  6 unit tests. Remaining: `+fill-tags` superset semantics.
 - [x] `+missing2ref` (`crates/bcftools-rs/src/commands/plugins/missing2ref.rs`):
   default missing-genotype-to-ref behavior — every `.` allele token inside the
   `GT` FORMAT subfield becomes `0` while phase/unphase separators and all other

@@ -380,6 +380,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "fill-AN-AC" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::fill_an_ac::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(

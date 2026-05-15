@@ -53,7 +53,7 @@ Status values:
 | `test_vcf_merge` | not-yet-ported | `merge` not ported. |
 | `test_vcf_merge_big` | not-yet-ported | `merge` not ported. |
 | `test_vcf_norm` | not-yet-ported | `norm` not ported. |
-| `test_vcf_plugin` | partial-rust-covered | Static plugin registry/listing is in; `+counts` and `+missing2ref` have Rust implementations (`+missing2ref` matches the upstream `missing2ref.out` fixture). The umbrella Perl slice stays disabled until enough plugins land. |
+| `test_vcf_plugin` | partial-rust-covered | Static plugin registry/listing is in; `+counts`, `+missing2ref`, and `+fill-AN-AC` have Rust implementations (`+missing2ref` and `+fill-AN-AC` match their upstream `*.out` fixtures byte-for-byte). The umbrella Perl slice stays disabled until enough plugins land. |
 | `test_vcf_query` | rust-covered | Rust integration coverage includes list-samples, sample selection, headers, regions/targets, record and sample filters, and many formatter tokens/functions; full shared formatter parity remains. |
 | `test_vcf_regions` | rust-covered | Rust `query`/`view`/`filter`/`isec` have local region and target coverage, but full upstream region/target semantics are not complete. |
 | `test_vcf_reheader` | rust-covered | Rust integration coverage includes header replacement, sample renaming, FAI contig updates, stdin, BCF output, in-place BCF, and threads; `test_rename_chrs` still depends on `annotate`/full `query`. |
