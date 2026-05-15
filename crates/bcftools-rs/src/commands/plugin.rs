@@ -259,6 +259,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut replace = false;
     let mut threshold: f64 = 0.1;
     let mut conversion: Option<&'static str> = None;
+    // remove-overlaps options.
+    let mut mark_expr: Option<String> = None;
+    let mut mark_tag: Option<String> = None;
+    let mut missing_expr: Option<String> = None;
+    let mut reverse = false;
+    let mut out_type_raw: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -288,19 +294,23 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-O" | "--output-type" => {
                 if let Some(v) = iter.next() {
-                    output_kind = parse_out_kind(&v.to_string_lossy());
+                    let v = v.to_string_lossy();
+                    out_type_raw = Some(v.clone().into_owned());
+                    output_kind = parse_out_kind(&v);
                 }
             }
             _ if raw.starts_with("--output=") => {
                 output = Some(raw["--output=".len()..].to_owned());
             }
             _ if raw.starts_with("--output-type=") => {
+                out_type_raw = Some(raw["--output-type=".len()..].to_owned());
                 output_kind = parse_out_kind(&raw["--output-type=".len()..]);
             }
             _ if raw.starts_with("-o") && raw.len() > 2 => {
                 output = Some(raw[2..].to_owned());
             }
             _ if raw.starts_with("-O") && raw.len() > 2 => {
+                out_type_raw = Some(raw[2..].to_owned());
                 output_kind = parse_out_kind(&raw[2..]);
             }
             "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
@@ -336,7 +346,35 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-n" | "--tag-name" => {
                 tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
-            "-m" | "--use-missing" => use_missing = true,
+            // `-m` is `--mark EXPR` (value) for remove-overlaps, but the
+            // boolean `--use-missing` flag for check-ploidy.
+            "-m" => {
+                if plugin_name.as_deref() == Some("remove-overlaps") {
+                    mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else {
+                    use_missing = true;
+                }
+            }
+            "--mark" => {
+                mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--mark=") => {
+                mark_expr = Some(raw["--mark=".len()..].to_owned());
+            }
+            "--use-missing" => use_missing = true,
+            "-M" | "--mark-tag" => {
+                mark_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--mark-tag=") => {
+                mark_tag = Some(raw["--mark-tag=".len()..].to_owned());
+            }
+            "--reverse" => reverse = true,
+            "--missing" => {
+                missing_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--missing=") => {
+                missing_expr = Some(raw["--missing=".len()..].to_owned());
+            }
             _ if raw.starts_with("--direction=") => {
                 direction = Some(raw["--direction=".len()..].to_owned());
             }
@@ -509,6 +547,36 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         let dir = extra.unwrap_or_else(|| "./".to_owned());
         let summary = crate::commands::plugins::variantkey_hex::run(Path::new(&input), &dir)?;
         io::stdout().lock().write_all(summary.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "remove-overlaps" {
+        use crate::commands::plugins::remove_overlaps::{self, Mark};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        if let Some(m) = missing_expr.as_deref() {
+            // --missing only applies to the `min(QUAL)` expression mode,
+            // which needs the not-yet-ported filter engine.
+            let _ = m;
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "remove-overlaps --missing requires the min(QUAL) expression mode (filter engine not yet ported)",
+            ));
+        }
+        let mode = Mark::parse(mark_expr.as_deref().unwrap_or("overlap"))
+            .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
+        let text_list = out_type_raw.as_deref().is_some_and(|o| o.starts_with('t'));
+        let vcf = remove_overlaps::run(
+            Path::new(&input),
+            mode,
+            mark_tag.as_deref(),
+            reverse,
+            text_list,
+        )?;
+        if text_list {
+            write_plugin_output(vcf.as_bytes(), output.as_deref(), OutKind::VcfText)?;
+        } else {
+            write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
