@@ -287,6 +287,20 @@ fn index_threads_rejects_non_integer_argument() {
 }
 
 #[test]
+fn index_rejects_extra_input_paths() {
+    let (_out, err, code) = run(&[
+        "index",
+        "/tmp/first-does-not-matter.vcf.gz",
+        "/tmp/second-does-not-matter.vcf.gz",
+    ]);
+    assert_ne!(code, 0);
+    assert!(
+        err.contains("multiple input files are not supported"),
+        "stderr: {err}"
+    );
+}
+
+#[test]
 fn index_and_view_large_chromosome_fixture_matches_upstream_output() {
     let dir = TempDir::new().expect("tempdir");
     let input = fixture_path("large_chrom_csi_limit.vcf");

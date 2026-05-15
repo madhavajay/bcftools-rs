@@ -188,6 +188,19 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         };
     }
     let fname = &positional[0];
+    if positional.len() > 1 {
+        eprintln!(
+            "{}",
+            fmt_etag(
+                "main_vcfindex",
+                &format!(
+                    "multiple input files are not supported: {}",
+                    positional[1].to_string_lossy()
+                )
+            )
+        );
+        return ExitCode::FAILURE;
+    }
     let path = Path::new(fname);
 
     if stats_flags != 0 {

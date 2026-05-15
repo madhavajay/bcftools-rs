@@ -353,6 +353,12 @@ The waves are ordered to land foundational machinery first (read/write/index, th
   - [ ] Remaining: full filter expression handling including FORMAT/sample expressions and advanced vector/sample slicing, complete FILTER/frequency/count/allele/type/genotype/phasing/known-novel/uncalled filter semantics across structured VCF/BCF writer paths, overlap-aware indexed region semantics, structured BCF/VCF writer overlap filtering, and full upstream `test_vcf_view` parity.
 - [x] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`. Snapshot coverage: VCF/VCF.gz/BCF input paths, stdin handling for VCF/BCF, Kestrel-tolerant non-canonical VCF headers, and dispatcher version/help/plugin shortcut behavior. 13 integration tests in `crates/bcftools-rs/tests/head.rs`.
 - [x] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.
+  - [x] Snapshot coverage: BCF CSI indexing, BGZF VCF CSI/TBI indexing,
+        stdin indexing with explicit `-o`, custom output paths, overwrite
+        protection, per-contig and total-record stats from data or index paths,
+        large-coordinate CSI fixture queries through `view`, option validation,
+        and rejection of extra input paths. 12 integration tests in
+        `crates/bcftools-rs/tests/index.rs`.
 - [x] `tabix` (`tabix.c`) — generic BGZF index/query for BED/GFF/SAM/VCF. Marked "do not advertise" upstream (`main.c:85`) but kept for tests. Covered by `test_tabix`.
   - [x] Snapshot coverage: BGZF VCF TBI build and query, CSI build and query,
         BED/GFF/SAM preset builds, `-a` streaming, existing-index refusal,
