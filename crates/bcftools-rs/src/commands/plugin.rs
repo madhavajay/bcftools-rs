@@ -608,6 +608,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "indel-stats" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::indel_stats::run(Path::new(&input))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     if plugin.name == "smpl-stats" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let report = crate::commands::plugins::smpl_stats::run(Path::new(&input))?;
