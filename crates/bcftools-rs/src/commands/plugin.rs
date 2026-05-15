@@ -288,6 +288,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut contrast_control: Option<String> = None;
     let mut contrast_case: Option<String> = None;
     let mut force_samples = false;
+    // fixref options.
+    let mut fixref_fasta: Option<String> = None;
+    let mut fixref_mode: Option<String> = None;
+    let mut fixref_discard = false;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -412,6 +416,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-d" if plugin_name.as_deref() == Some("ad-bias") => {
                 min_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
+            "-d" if plugin_name.as_deref() == Some("fixref") => {
+                fixref_discard = true;
+            }
             "-p" if plugin_name.as_deref() == Some("af-dist") => {
                 prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -477,6 +484,15 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-f" | "--set-filter" if plugin_name.as_deref() == Some("prune") => {
                 prune_set_filter = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
+            "-f" | "--fasta-ref" if plugin_name.as_deref() == Some("fixref") => {
+                fixref_fasta = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "--mode" if plugin_name.as_deref() == Some("fixref") => {
+                fixref_mode = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "--discard" if plugin_name.as_deref() == Some("fixref") => {
+                fixref_discard = true;
+            }
             "--max" if plugin_name.as_deref() == Some("prune") => {
                 prune_max = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -487,6 +503,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     prune_max = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else if plugin_name.as_deref() == Some("remove-overlaps") {
                     mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else if plugin_name.as_deref() == Some("fixref") {
+                    fixref_mode = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else {
                     use_missing = true;
                 }
@@ -713,6 +731,28 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "fixref" {
+        use crate::commands::plugins::fixref::{self, Mode};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(fa) = fixref_fasta.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fixref requires -f/--fasta-ref",
+            ));
+        };
+        let mode = Mode::parse(fixref_mode.as_deref().unwrap_or("stats"))
+            .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
+        let vcf = fixref::run(
+            Path::new(&input),
+            Path::new(fa),
+            mode,
+            fixref_discard,
+            "FIXREF",
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

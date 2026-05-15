@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #56 (`progress/contrast`, merge commit `8b2b65a`) landed
+  `+contrast` — control/case PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT,
+  byte-for-byte against `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out`.
 - 2026-05-16: PR #55 (`progress/prune-ld`, merge commit `f4996b0`) landed
   the `+prune` LD `-a`/`-m`/`-f` modes (`calc_ld` + HTSlib `kputd`),
   byte-for-byte against `prune.1.{1,2,3}.out` / `prune.2.1.out`.
@@ -289,17 +292,16 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/contrast`, single open PR per the one-branch
-  directive): the `+contrast` plugin — a port of `contrast.c`
-  (`crates/bcftools-rs/src/commands/plugins/contrast.rs`). `-0`/`-1`
-  control/case sample groups (comma list or file, `--force-samples`),
-  per-record `control_als`/`gt` bitmasks + `nals[4]`, `PASSOC`
-  (`kt_fisher_exact` two-tail), `FASSOC` (`f32` non-REF proportions),
-  `NASSOC` (4 ints), `NOVELAL`/`NOVELGT` (case samples with a novel
-  allele/genotype vs controls), INFO + header injection, `kputd` floats.
-  Byte-for-byte against `contrast.out`, `contrast.1.out`,
-  `contrast.1.1.out`, `contrast.1.2.out` (list and file sample inputs).
-  This brings the in-process plugin total to 18 of 41.
+- In-flight (branch `progress/fixref`, single open PR per the one-branch
+  directive): the `+fixref` plugin — a port of `fixref.c`
+  (`crates/bcftools-rs/src/commands/plugins/fixref.rs`). FASTA-reference
+  REF/ALT strand fixing: `ref-alt` & `swap` (REF/ALT column only),
+  `flip` & `flip-all` (also flip + swap genotypes); `nt2int`/`revint`
+  complement, the FASTA base lookup via `FastaReference`, the
+  `FIXREF` dirty-bit annotation (`none`/`swap`/`flip`/`flip,swap`/`skip`
+  /`err`/`GT`), non-SNP/non-biallelic/non-ACGT skip, and header
+  injection. Byte-for-byte against `fixref.{4,5,6,7}.out`. This brings
+  the in-process plugin total to 19 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -330,7 +332,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 18 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast` |
+| `plugin` | registry + 19 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -341,12 +343,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-18 of 41 plugin record-processing implementations done (see Wave F);
-23 remain.
+19 of 41 plugin record-processing implementations done (see Wave F);
+22 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+contrast`, PR #55 landed): approximately
+- 2026-05-16 (post `+fixref`, PR #56 landed): approximately
+  37-40% complete toward the full stated goal. Movement since the prior
+  estimate is `+fixref` (FASTA REF/ALT strand fixing:
+  ref-alt/swap/flip/flip-all) verified byte-for-byte against
+  `fixref.{4,5,6,7}.out`. 19 of 41 plugins done.
+- 2026-05-16 (post `+contrast`, PR #56 landed): approximately
   36-39% complete toward the full stated goal. Movement since the prior
   estimate is `+contrast` (control/case association: PASSOC Fisher exact,
   FASSOC, NASSOC, NOVELAL/NOVELGT) verified byte-for-byte against
@@ -596,13 +603,13 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#55 + `progress/contrast`): 18 plugins
+Implemented so far (PRs #45–#56 + `progress/fixref`): 19 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
-`indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`.
-Every one
+`indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
+`fixref`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -620,8 +627,10 @@ on FORMAT/AD), `prune` matches `prune.1.{1,2,3,4,6}.out` and
 `guess-ploidy` matches `guess-ploidy.{PL,GL}.out` (PL/GL/GT
 haploid/diploid log-likelihood sex inference, `f64`), and `contrast`
 matches `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out` (control/case
-PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT). The 23 remaining
-plugins are heavier and coupled to shared infra still in progress: the
+PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), and `fixref` matches
+`fixref.{4,5,6,7}.out` (FASTA REF/ALT ref-alt/swap/flip/flip-all). The
+22 remaining plugins are heavier and coupled to shared infra still in
+progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
 -i/-e`), `hts_drand48` parity (`prune -N rand`), FASTA/reference
@@ -848,6 +857,22 @@ Current local slice:
   in `crates/bcftools-rs/tests/plugin_contrast.rs` + 2 unit tests.
   Remaining: `-f` rare-allele enrichment (`max_AC`) and `-i`/`-e`
   filtering (filter engine).
+- [x] `+fixref` (`crates/bcftools-rs/src/commands/plugins/fixref.rs`):
+  port of `fixref.c` FASTA-reference strand fixing — `ref-alt` & `swap`
+  (REF/ALT column changes only), `flip` & `flip-all` (also flip + swap
+  genotypes 0<->1). `nt2int`/`int2nt`/`revint` complement, the
+  single-base FASTA lookup via `crate::reference::FastaReference`
+  (`faidx_compat`, builds the `.fai` on the fly), the exact `ir`/`ia`/`ib`
+  decision tree per mode, the `FIXREF` dirty-bit INFO annotation
+  (err/skip/none/flip/swap/GT order), non-SNP/non-biallelic/non-ACGT →
+  `skip` (record written verbatim unless `-d`), whole-sequence suppress
+  when the contig is absent from the FASTA, and `##INFO`/PASS header
+  injection. Byte-for-byte parity with `fixref.4.out` (ref-alt),
+  `fixref.5.out` (flip), `fixref.6.out` (flip-all), `fixref.7.out`
+  (swap). 4 integration tests in `crates/bcftools-rs/tests/plugin_fixref.rs`
+  + 3 unit tests. Remaining: `-m top` (Illumina TOP-strand sequence
+  walking), `-i`/`-m id` (dbSNP second-VCF), and `-m stats` reporting
+  (stats go to stderr, not exercised by `test.pl`).
 
 Grouped roughly by complexity / shared dependencies:
 
