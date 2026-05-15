@@ -68,3 +68,64 @@ fn prune_maxaf_af_tag() {
 fn prune_first_mode() {
     check(&["-w", "2bp", "-n", "1", "-N", "1st"], "prune.1.6.out");
 }
+
+fn check_in(input: &str, args: &[&str], expected_fixture: &str) {
+    ensure_binary_built();
+    let input = fixture_path(input);
+    let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+    let mut full = vec!["+prune", input.to_str().unwrap()];
+    full.extend_from_slice(args);
+    let out = Command::new(bin_path())
+        .args(&full)
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{full:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected, "mismatch for {full:?}");
+}
+
+#[test]
+fn prune_ld_annotate_r2_ld_hd() {
+    check_in(
+        "prune.1.vcf",
+        &["-w", "1", "-a", "r2,LD,HD"],
+        "prune.1.1.out",
+    );
+}
+
+#[test]
+fn prune_ld_max_soft_filter() {
+    check_in(
+        "prune.1.vcf",
+        &["-w", "2", "-a", "r2", "-m", "0.5", "-f", "MaxR2"],
+        "prune.1.2.out",
+    );
+}
+
+#[test]
+fn prune_ld_max_hard_filter() {
+    check_in(
+        "prune.1.vcf",
+        &["-w", "2", "-a", "r2", "-m", "0.5"],
+        "prune.1.3.out",
+    );
+}
+
+#[test]
+fn prune_ld_annotate_multisample() {
+    check_in(
+        "prune.2.vcf",
+        &["-w", "1", "-a", "r2,LD,HD"],
+        "prune.2.1.out",
+    );
+}

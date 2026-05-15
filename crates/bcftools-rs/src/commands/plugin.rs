@@ -280,6 +280,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut nsites: Option<i32> = None;
     let mut nsites_mode: Option<String> = None;
     let mut prune_af_tag: Option<String> = None;
+    let mut prune_annot: Option<String> = None;
+    let mut prune_max: Option<String> = None;
+    let mut prune_set_filter: Option<String> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -453,10 +456,21 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-a" if plugin_name.as_deref() == Some("ad-bias") => {
                 min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
-            // `-m` is `--mark EXPR` (value) for remove-overlaps, but the
-            // boolean `--use-missing` flag for check-ploidy.
+            "-a" | "--annotate" if plugin_name.as_deref() == Some("prune") => {
+                prune_annot = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-f" | "--set-filter" if plugin_name.as_deref() == Some("prune") => {
+                prune_set_filter = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "--max" if plugin_name.as_deref() == Some("prune") => {
+                prune_max = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            // `-m` is `--max` for prune, `--mark EXPR` for remove-overlaps,
+            // the boolean `--use-missing` flag otherwise.
             "-m" => {
-                if plugin_name.as_deref() == Some("remove-overlaps") {
+                if plugin_name.as_deref() == Some("prune") {
+                    prune_max = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else if plugin_name.as_deref() == Some("remove-overlaps") {
                     mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else {
                     use_missing = true;
@@ -688,18 +702,77 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     }
 
     if plugin.name == "prune" {
-        use crate::commands::plugins::prune::{self, Mode};
+        use crate::commands::plugins::prune::{self, LdAnnot, Mode};
         let input = input.unwrap_or_else(|| "-".to_owned());
-        let Some(n) = nsites else {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "prune in this slice requires -n/--nsites-per-win (LD `-a`/`-m` modes are not yet ported)",
-            ));
-        };
         let win = match window.as_deref() {
             Some(w) => prune::parse_window(w)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             None => 0,
+        };
+
+        // LD path: `-a`/`--annotate` or `-m`/`--max`.
+        if prune_annot.is_some() || prune_max.is_some() {
+            let mut annot = LdAnnot::default();
+            if let Some(a) = prune_annot.as_deref() {
+                for t in a.split(',') {
+                    match t.to_ascii_uppercase().as_str() {
+                        "R2" => annot.annot[0] = true,
+                        "LD" => annot.annot[1] = true,
+                        "RD" | "HD" => annot.annot[2] = true,
+                        "COUNT" => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "prune -a count is not supported in this slice",
+                            ));
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                format!("The tag \"{other}\" is not supported"),
+                            ));
+                        }
+                    }
+                }
+            }
+            let mut max: [Option<f64>; 3] = [None; 3];
+            if let Some(m) = prune_max.as_deref() {
+                let (idx, num) = if let Some(v) = m.strip_prefix("R2=") {
+                    (0, v)
+                } else if let Some(v) = m.strip_prefix("LD=") {
+                    (1, v)
+                } else if let Some(v) = m.strip_prefix("RD=").or_else(|| m.strip_prefix("HD=")) {
+                    (2, v)
+                } else if m.starts_with("count=") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "prune -m count= is not supported in this slice",
+                    ));
+                } else {
+                    (0, m)
+                };
+                max[idx] = Some(num.parse().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Could not parse: --max {m}"),
+                    )
+                })?);
+            }
+            let vcf = prune::run_ld(
+                Path::new(&input),
+                win,
+                annot,
+                max,
+                prune_set_filter.as_deref(),
+            )?;
+            write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+
+        let Some(n) = nsites else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "prune in this slice requires -n/--nsites-per-win or -a/-m",
+            ));
         };
         let mode = Mode::parse(nsites_mode.as_deref().unwrap_or("maxAF"))
             .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
