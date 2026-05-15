@@ -816,6 +816,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "GTsubset" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(spec) = samples_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GTsubset requires -s SAMPLE[,SAMPLE..]",
+            ));
+        };
+        let vcf = crate::commands::plugins::gtsubset::run(Path::new(&input), spec)?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     if plugin.name == "fixploidy" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let vcf = crate::commands::plugins::fixploidy::run(
