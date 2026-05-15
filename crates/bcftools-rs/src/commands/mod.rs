@@ -12,6 +12,7 @@
 
 pub mod bgzip;
 pub mod concat;
+pub mod consensus;
 pub mod convert;
 pub mod filter;
 pub mod head;
