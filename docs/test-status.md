@@ -12,10 +12,10 @@ Status values:
 
 | `test.pl` function | Status | Notes |
 | --- | --- | --- |
-| `test_vcf_head` | enabled | Plain VCF `bcftools head`; CI runs `-f '^test_vcf_head$'`. |
+| `test_vcf_head` | enabled | Plain VCF `bcftools head`; CI runs it in the enabled parity slice regex. |
 | `test_vcf_head2` | blocked-local-tool | Exercises compressed VCF/BCF paths and currently needs external `bgzip`/`tabix` availability in the Perl harness. |
-| `test_index` | partial-rust-covered | Rust integration coverage exists for BCF/VCF.gz CSI/TBI builds, stdin indexing, stats, large-coordinate CSI queries, and option validation; Perl slice not enabled yet. |
-| `test_vcf_idxstats` | partial-rust-covered | Rust integration coverage exists for `index -s`/`-n`; Perl slice not enabled yet. |
+| `test_index` | enabled | VCF/BCF indexing, explicit output path, and streaming index creation pass in CI. |
+| `test_vcf_idxstats` | enabled | `bcftools index -s/-n` over TBI/CSI, VCF.gz, BCF, and direct CSI paths passes in CI. |
 | `test_vcf_sort` | partial-rust-covered | Rust integration coverage exists for coordinate sorting, compressed writes, indexing, temp-run spill, Kestrel headers, and threading; full Perl slice still depends on broader command parity. |
 | `test_vcf_view` | partial-rust-covered | Rust integration coverage exists for VCF/VCF.gz/BCF I/O, sample/region/target filtering, many simple filters, expressions, Kestrel headers, and threaded writes; full Perl slice still needs complete expression and structured-path parity. |
 | `test_csq` | not-yet-ported | `csq` not ported. |
