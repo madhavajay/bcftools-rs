@@ -744,7 +744,7 @@ fn evaluate(fields: &[&str], args: &Args) -> io::Result<bool> {
 }
 
 fn evaluate_expression(expr: &str, fields: &[&str]) -> io::Result<FilterValue> {
-    let context = EvalContext::new();
+    let context = record_context(fields);
     let fields_owned: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
     bcffilter::eval_expression_with(expr, &context, |name, sample_index| {
         if sample_index.is_some() {
@@ -752,6 +752,19 @@ fn evaluate_expression(expr: &str, fields: &[&str]) -> io::Result<FilterValue> {
         }
         record_lookup(name, &fields_owned)
     })
+}
+
+fn record_context(fields: &[&str]) -> EvalContext {
+    if fields.len() <= 9 {
+        return EvalContext::new();
+    }
+
+    let format_keys: Vec<&str> = fields[8].split(':').collect();
+    fields[9..]
+        .iter()
+        .fold(EvalContext::new(), |context, sample| {
+            context.with_sample(sample_values(&format_keys, sample))
+        })
 }
 
 fn sample_passes_for_set_gts(fields: &[&str], args: &Args) -> io::Result<Option<Vec<bool>>> {
