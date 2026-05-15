@@ -283,6 +283,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut prune_annot: Option<String> = None;
     let mut prune_max: Option<String> = None;
     let mut prune_set_filter: Option<String> = None;
+    // contrast options.
+    let mut contrast_annots: Option<String> = None;
+    let mut contrast_control: Option<String> = None;
+    let mut contrast_case: Option<String> = None;
+    let mut force_samples = false;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -453,6 +458,16 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "--min-alt-dp" => {
                 min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
+            "-a" | "--annots" if plugin_name.as_deref() == Some("contrast") => {
+                contrast_annots = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-0" | "--control-samples" | "--bg-samples" => {
+                contrast_control = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-1" | "--case-samples" | "--novel-samples" => {
+                contrast_case = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "--force-samples" => force_samples = true,
             "-a" if plugin_name.as_deref() == Some("ad-bias") => {
                 min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
@@ -698,6 +713,23 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "contrast" {
+        use crate::commands::plugins::contrast::{self, Annots};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let annots = Annots::parse(contrast_annots.as_deref().unwrap_or("PASSOC,FASSOC"))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let (Some(ctrl), Some(case)) = (contrast_control.as_deref(), contrast_case.as_deref())
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "contrast requires -0/--control-samples and -1/--case-samples",
+            ));
+        };
+        let vcf = contrast::run(Path::new(&input), annots, ctrl, case, force_samples)?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

@@ -10,6 +10,7 @@ pub mod add_variantkey;
 pub mod af_dist;
 pub mod allele_length;
 pub mod check_ploidy;
+pub mod contrast;
 pub mod counts;
 pub mod dosage;
 pub mod fill_an_ac;
