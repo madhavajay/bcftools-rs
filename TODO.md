@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #55 (`progress/prune-ld`, merge commit `f4996b0`) landed
+  the `+prune` LD `-a`/`-m`/`-f` modes (`calc_ld` + HTSlib `kputd`),
+  byte-for-byte against `prune.1.{1,2,3}.out` / `prune.2.1.out`.
 - 2026-05-15: PR #54 (`progress/guess-ploidy`, merge commit `901d5a1`)
   landed `+guess-ploidy` — PL/GL/GT haploid/diploid log-likelihood sex
   inference in `f64`, byte-for-byte against `guess-ploidy.{PL,GL}.out`.
@@ -286,18 +289,17 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/prune-ld`, single open PR per the one-branch
-  directive): the `+prune -a`/`-m` LD modes — a port of `vcfbuf.c`
-  `_calc_r2_ld` (genotype-dosage r2 / Lewontin's D' / Ragsdale's hd, all
-  `f64`), the `vcfbuf_ld` window driver, the HTSlib `kstring.c:kputd`
-  float formatter, and the `prune.c` `-a` annotate (`POS_*`/`R2`/`LD`/`RD`
-  + INFO header injection) / `-m` hard-filter / `-f` soft-FILTER paths
-  (`crates/bcftools-rs/src/commands/plugins/prune.rs`). Byte-for-byte
-  against `prune.1.1.out` (`-w 1 -a r2,LD,HD`), `prune.1.2.out` (`-m 0.5
-  -f MaxR2` soft), `prune.1.3.out` (`-m 0.5` hard), and `prune.2.1.out`
-  (20-sample). `+prune` is now functionally complete except `-i`/`-e`
-  (filter engine) and `-N rand` (`hts_drand48` parity). Plugin total
-  stays 17 of 41 (deeper `prune` coverage).
+- In-flight (branch `progress/contrast`, single open PR per the one-branch
+  directive): the `+contrast` plugin — a port of `contrast.c`
+  (`crates/bcftools-rs/src/commands/plugins/contrast.rs`). `-0`/`-1`
+  control/case sample groups (comma list or file, `--force-samples`),
+  per-record `control_als`/`gt` bitmasks + `nals[4]`, `PASSOC`
+  (`kt_fisher_exact` two-tail), `FASSOC` (`f32` non-REF proportions),
+  `NASSOC` (4 ints), `NOVELAL`/`NOVELGT` (case samples with a novel
+  allele/genotype vs controls), INFO + header injection, `kputd` floats.
+  Byte-for-byte against `contrast.out`, `contrast.1.out`,
+  `contrast.1.1.out`, `contrast.1.2.out` (list and file sample inputs).
+  This brings the in-process plugin total to 18 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -328,7 +330,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 17 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy` |
+| `plugin` | registry + 18 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -339,12 +341,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-17 of 41 plugin record-processing implementations done (see Wave F);
-24 remain.
+18 of 41 plugin record-processing implementations done (see Wave F);
+23 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+prune -a/-m` LD modes, PR #54 landed): approximately
+- 2026-05-16 (post `+contrast`, PR #55 landed): approximately
+  36-39% complete toward the full stated goal. Movement since the prior
+  estimate is `+contrast` (control/case association: PASSOC Fisher exact,
+  FASSOC, NASSOC, NOVELAL/NOVELGT) verified byte-for-byte against
+  `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out`. 18 of 41 plugins done.
+- 2026-05-16 (post `+prune -a/-m` LD modes, PR #55 landed): approximately
   35-38% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
@@ -589,12 +596,13 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#53 + `progress/guess-ploidy`): 17 plugins
+Implemented so far (PRs #45–#55 + `progress/contrast`): 18 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
-`indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`. Every one
+`indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`.
+Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -610,7 +618,9 @@ on FORMAT/AD), `prune` matches `prune.1.{1,2,3,4,6}.out` and
 `calc_ld` r2/LD'/RD `-a`/`-m`/`-f` LD modes), `dosage` matches
 `dosage.{1,2,3}.out` (PL/GL/GT likelihood/genotype dosages, `f32`), and
 `guess-ploidy` matches `guess-ploidy.{PL,GL}.out` (PL/GL/GT
-haploid/diploid log-likelihood sex inference, `f64`). The 24 remaining
+haploid/diploid log-likelihood sex inference, `f64`), and `contrast`
+matches `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out` (control/case
+PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT). The 23 remaining
 plugins are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -820,6 +830,24 @@ Current local slice:
   2 integration tests in `crates/bcftools-rs/tests/plugin_guess_ploidy.rs`
   + 2 unit tests. Remaining: `-g` genome shortcut begin-end sub-region,
   `--AF-tag`, and `-i`/`-e` filtering (filter engine).
+- [x] `+contrast` (`crates/bcftools-rs/src/commands/plugins/contrast.rs`):
+  port of `contrast.c`. `-0`/`-1` control/case sample groups (comma
+  list or one-per-line file, sample-name precedence, `--force-samples`
+  drops absent names); per-record `control_als`/`gt` allele bitmasks and
+  `nals[4]` (ctrl-ref/ctrl-alt/case-ref/case-alt); `PASSOC`
+  (`kt_fisher_exact` two-tail), `FASSOC` (`f32` non-REF proportions, `.`
+  when undefined), `NASSOC` (4 ints), `NOVELAL` (case samples with an
+  allele absent from controls), `NOVELGT` (novel genotype bitmask vs the
+  control genotype set; `else if` after NOVELAL exactly as upstream); the
+  requested `##INFO` defs + htslib `##FILTER=<ID=PASS>` header injection;
+  every record written (skipped ones verbatim); floats via the shared
+  `kputd`. Byte-for-byte parity with `contrast.out` (PASSOC,FASSOC,
+  NOVELAL,NOVELGT; list **and** file `-0`/`-1`), `contrast.1.out`
+  (NASSOC, `--force-samples` with an absent case sample), `contrast.1.1.out`
+  (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 5 integration tests
+  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 2 unit tests.
+  Remaining: `-f` rare-allele enrichment (`max_AC`) and `-i`/`-e`
+  filtering (filter engine).
 
 Grouped roughly by complexity / shared dependencies:
 
