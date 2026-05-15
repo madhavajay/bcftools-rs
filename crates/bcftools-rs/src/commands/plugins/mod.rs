@@ -14,6 +14,7 @@ pub mod contrast;
 pub mod counts;
 pub mod dosage;
 pub mod fill_an_ac;
+pub mod fixploidy;
 pub mod fixref;
 pub mod guess_ploidy;
 pub mod indel_stats;
