@@ -21,16 +21,30 @@ sibling [`htslib-rs`](htslib-rs/) workspace.
 
 ## Status
 
-Phase 0 (workspace skeleton) and the Wave A foundation are in. Implemented
-subcommands:
+Phase 0 (workspace skeleton), shared infrastructure, and the first local-only
+parity batches are in. The project is still far from full upstream parity, but
+these commands have meaningful Rust-native coverage:
 
 | Subcommand | Coverage |
 | --- | --- |
 | `bcftools head` | Full upstream surface: `-h N`, `-n N`, `-s N`, `-v N`. VCF + VCF.gz + BCF input, including stdin. |
-| `bcftools index` | BCF→CSI and VCF.gz→CSI/TBI. `-c`/`-t`/`-m`/`-o`/`-f`/`-v`, plus `--stats`/`--nrecords` from existing CSI/TBI metadata. |
-| `bcftools view` | I/O backbone: `-O v\|z\|u\|b`, `-o`, `-h` (header-only), `-H` (no-header), `--no-version`, positional `CHROM` / `CHROM:START-END` region filtering. Filtering expressions and sample subsetting not yet wired. |
+| `bcftools index` | BCF CSI and VCF.gz CSI/TBI builds, stdin indexing with `-o`, overwrite protection, `--stats`, `--nrecords`, and large-coordinate CSI fixture coverage. |
+| `bcftools tabix` | Preset BGZF indexes and queries for VCF/BED/GFF/SAM, plus all-record streaming. Custom `-s/-b/-e/-0/-S/-c` text layouts are dependency-blocked on `htslib-rs` API surface. |
+| `bcftools view` | VCF/VCF.gz/BCF reads and VCF/BGZF/BCF writes, stdin spooling, header modes, `--no-version`, sample subsetting, simple region/target restriction, many simple site filters, limited expression filtering, Kestrel-compatible VCF headers, and threaded writes. |
+| `bcftools query` | Sample listing and selection, POS-based regions/targets, a text-backed subset of record/sample expressions, and a growing subset of the `convert.c` formatter including sample loops, numeric functions, `%N_PASS(...)`, and `%PBINOM(...)`. |
+| `bcftools sort` | Coordinate sorting with disk-backed temp-run spill, VCF/BGZF output, automatic indexing, Kestrel-compatible VCF headers, and threaded BGZF writes. |
+| `bcftools concat` | Same-sample vertical concat for VCF/VCF.gz/BCF inputs, file lists, genotype dropping, duplicate removal, naive concat, region restriction, indexing, Kestrel-compatible headers, and threaded writes. |
+| `bcftools convert` | Focused TSV/23andMe, gVCF, GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE conversion paths with fixture-backed text parity, BCF stdin/output paths, indexing, filtering hooks, and sample selection. |
+| `bcftools filter` | Text-backed expression filtering, soft-filter tagging, masks, gap filters, simple genotype rewrites, region/target restriction, indexing, Kestrel-compatible headers, and threaded writes. |
+| `bcftools isec` | Text-backed set intersections/complements, collapse modes for common fixtures, target/region filtering, prefix output, directory output, record-output selection, indexing, and Kestrel-compatible reads. |
+| `bcftools reheader` | VCF/BGZF VCF header replacement, sample rename, FAI contig updates, stdin handling, BCF output, BCF `--in-place`, and threaded output. |
+| `bcftools stats` | Substantial single-input and pairwise text-backed stats sections, sample selection, AF/depth/user-TSTV options, expression filtering, regions/targets, and selected indel-context/exon summaries. |
 
-Subcommand parity beyond Wave A is tracked in [`TODO.md`](TODO.md).
+The remaining large subcommands (`annotate`, `merge`, `norm`, `mpileup`,
+`call`, `consensus`, `csq`, `roh`, `cnv`, `gtcheck`) and most plugins are not
+ported yet. Detailed parity status is tracked in [`TODO.md`](TODO.md), and
+upstream Perl harness enablement is tracked in
+[`docs/test-status.md`](docs/test-status.md).
 
 ## Build and test
 
@@ -43,9 +57,9 @@ git clone --recurse-submodules git@github.com:madhavajay/bcftools-rs.git
 Run the Rust gate:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy -p bcftools-rs -p bcftools-rs-cli --all-targets -- -D warnings
-cargo test -p bcftools-rs -p bcftools-rs-cli
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 This produces a `bcftools` binary at `target/debug/bcftools` (or `target/release/bcftools`).
@@ -89,7 +103,7 @@ mirroring the split used by `htslib-rs`:
   `ff1604d4622dc715a921f8e21e0e5d88438d10d1`. This is the version emitted in
   `##bcftools_<cmd>Version=...+htslib-...` header lines.
 - **`htslib-rs/`** is pinned at commit
-  `56ddf62df73efe96a3a906081ca50fbc3a350b70` on `main`. The two
+  `6bd6fb051ee7898c2afa4e619bf99dbad5f60dd7` on `main`. The two
   consumer-driven extensions added for bcftools-rs are merged upstream:
   - `index_compat::build_vcf_csi_from_path` /
     `build_vcf_csi_from_path_with_min_shift` /
