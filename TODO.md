@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #48 (`progress/af-dist`, merge commit `c14c442`) landed
+  `+af-dist` with the `bin.c` histogram port (`f32` binning), byte-for-byte
+  against `af-dist.out`.
 - 2026-05-15: PR #47 (`progress/remove-overlaps`, merge commit `25ecebf`)
   landed `+remove-overlaps` — a faithful port of the `vcfbuf`
   `MARK_OVERLAP`/`MARK_DUP` streaming state machine plus the
@@ -261,16 +264,19 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/af-dist`, single open PR per the one-branch
-  directive): the `+af-dist` plugin — a port of `af-dist.c` + `bin.c`
-  (`crates/bcftools-rs/src/commands/plugins/af_dist.rs`). Computes the HWE
-  genotype-probability distribution (`2*AF*(1-AF)` RA, `AF**2` AA) and the
-  AF-deviation distribution, with all binning arithmetic in `f32` to match
-  upstream's `float` edge sensitivity. Byte-for-byte against `af-dist.out`
-  (post harness `grep -v bcftools`). This brings the in-process plugin
-  total to 11 of 41.
-- Next local-only queue: `+smpl-stats` / `+indel-stats` no-PED variants
-  (self-contained stats reports); the `+prune` LD/distance window port
+- In-flight (branch `progress/smpl-stats`, single open PR per the one-branch
+  directive): the `+smpl-stats` plugin (default "all" filter) — a port of
+  `smpl-stats.c` `process_record`/`destroy`
+  (`crates/bcftools-rs/src/commands/plugins/smpl_stats.rs`). Per-sample and
+  per-site genotype stats (npass/non-ref/homRR/homAA/het/hemi/SNV/indel/
+  singleton/missing/ts/tv + SITE rollup), `bcf_calc_ac` (INFO/AC+AN else
+  GT-tallied) for singleton detection, the upstream per-base `bcf_acgt2int`
+  ts/tv walk, and `classify_variant` for SNV/MNP/indel typing. Byte-for-byte
+  against `smpl-stats.1.out` (post harness `grep -v ^CMD`). This brings the
+  in-process plugin total to 12 of 41. The `-i`/`-e` filter-threshold
+  scanning is blocked on the not-yet-ported filter engine.
+- Next local-only queue: `+indel-stats` no-PED variant (shares the
+  per-sample stats scaffolding); the `+prune` LD/distance window port
   (`calc_ld` genotype-correlation math — heavier, partly blocked on the
   filter engine for the `-i`/`-e` variants);
   extend the `merge` slice toward synced-reader multi-input alignment +
@@ -302,7 +308,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 11 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist` |
+| `plugin` | registry + 12 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -313,26 +319,28 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-11 of 41 plugin record-processing implementations done (see Wave F);
-30 remain.
+12 of 41 plugin record-processing implementations done (see Wave F);
+29 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+af-dist`, PR #47 landed): approximately
-  28-31% complete toward the full stated goal of a pure Rust
+- 2026-05-15 (post `+smpl-stats`, PR #48 landed): approximately
+  29-32% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
-  prior estimate is 11 of 41 plugins now implemented (`af-dist` with its
-  `bin.c` histogram port, verified byte-for-byte against `af-dist.out`) on
-  top of the `vcfbuf` overlap/dup state machine, the VariantKey pair, the
+  prior estimate is 12 of 41 plugins now implemented (`smpl-stats`
+  per-sample/per-site genotype stats with `bcf_calc_ac` + ts/tv walk,
+  verified byte-for-byte against `smpl-stats.1.out`) on top of `af-dist`,
+  the `vcfbuf` overlap/dup state machine, the VariantKey pair, the
   PR #45 7-plugin batch and the PRs #10-#41 command slices. The
   raw checklist is well past two-thirds checked, but the estimate still
   weights the unfinished large subcommands (`mpileup`, `call`, `csq`, full
-  `merge`/`annotate`/`norm`), the 30 remaining plugins (most coupled to the
+  `merge`/`annotate`/`norm`), the 29 remaining plugins (most coupled to the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post `+af-dist`): approximately 28-31% (kept for trend).
 - 2026-05-15 (post `+remove-overlaps`): approximately 27-30% (kept for trend).
 - 2026-05-15 (post VariantKey pair): approximately 26-29% (kept for trend).
 - 2026-05-15 (post 7-plugin batch): approximately 25-28% (kept for trend).
@@ -551,25 +559,28 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45/#46/#47 + `progress/af-dist`): 11 plugins
-under `crates/bcftools-rs/src/commands/plugins/` —
+Implemented so far (PRs #45/#46/#47/#48 + `progress/smpl-stats`): 12
+plugins under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
-`variantkey-hex`, `remove-overlaps`, `af-dist`. Every one with an upstream
-`*.out` fixture is byte-for-byte verified; `variant-distance`/`check-ploidy`
-pass their entire `test_vcf_plugin` slices, the two VariantKey plugins match
-the full `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66
-records, 3 hash/non-reversible), `remove-overlaps` matches all six
-`remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), and
-`af-dist` matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32`
-binning). The 30 remaining plugins are heavier and coupled to shared infra
+`variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`. Every one with
+an upstream `*.out` fixture is byte-for-byte verified;
+`variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
+slices, the two VariantKey plugins match the full
+`query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records, 3
+hash/non-reversible), `remove-overlaps` matches all six
+`remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), `af-dist`
+matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32` binning),
+and `smpl-stats` matches `smpl-stats.1.out` (per-sample/per-site genotype
+stats). The 29 remaining plugins are heavier and coupled to shared infra
 still in progress: the `vcfbuf` LD/distance window port (`+prune`), the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
-`remove-overlaps -m 'min(QUAL)'`), FASTA/reference (`+fixref`,
-`+fill-from-fasta`), PED/trio handling (`+trio-stats`, `+mendelian2`,
-`+trio-dnm3`), or `%g`-exact float formatting (`+dosage`, `+guess-ploidy`,
-`+tag2tag --gl-to-gp`). The self-contained no-PED `+smpl-stats` /
-`+indel-stats` stats reports are the preferred next pick.
+`remove-overlaps -m 'min(QUAL)'`, `smpl-stats -i/-e`), FASTA/reference
+(`+fixref`, `+fill-from-fasta`), PED/trio handling (`+trio-stats`,
+`+mendelian2`, `+trio-dnm3`), or `%g`-exact float formatting (`+dosage`,
+`+guess-ploidy`, `+tag2tag --gl-to-gp`). The self-contained no-PED
+`+indel-stats` stats report (shares the per-sample scaffolding) is the
+preferred next pick.
 
 Current local slice:
 
@@ -685,6 +696,19 @@ Current local slice:
   `grep -v bcftools`. 1 integration test in
   `crates/bcftools-rs/tests/plugin_af_dist.rs` + 4 unit tests. Remaining:
   the `-l`/`--list` debug genotype dump.
+- [x] `+smpl-stats` (`crates/bcftools-rs/src/commands/plugins/smpl_stats.rs`,
+  default "all" filter): port of `smpl-stats.c` `process_record`/`destroy`.
+  Per-sample stats (npass, non-ref, homRR, homAA, het, hemi, SNV, indel,
+  singleton, missing, ts, tv, ts/tv) and the per-site rollup; `parse_genotype`
+  hemizygous/vector_end semantics; `bcf_calc_ac` allele counts (INFO/AC+AN
+  when present, else tallied from FORMAT/GT across all samples) for
+  singleton detection; the upstream per-base `bcf_acgt2int` ts/tv walk;
+  `classify_variant` for SNV/MNP-vs-indel typing; `ntv==0` → `inf` ts/tv.
+  Emits the verbatim comment block + `CMD` line (harness strips `^CMD`).
+  Byte-for-byte parity with `smpl-stats.1.out`. 1 integration test in
+  `crates/bcftools-rs/tests/plugin_smpl_stats.rs` + 4 unit tests.
+  Remaining: `-i`/`-e` filter-threshold scanning (curly-brace expansion +
+  per-sample filter), blocked on the bcftools filter engine port.
 
 Grouped roughly by complexity / shared dependencies:
 
