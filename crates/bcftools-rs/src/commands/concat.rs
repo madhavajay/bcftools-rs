@@ -476,10 +476,11 @@ fn run_naive(args: &Args) -> io::Result<()> {
         let text = read_vcf_text(input)?;
         let header_end = header_text_len(&text);
         let header = &text[..header_end];
+        let comparable_header = comparable_naive_header(header);
         if i == 0 {
-            expected_header = Some(header.to_owned());
+            expected_header = Some(comparable_header);
             buffer.extend_from_slice(header.as_bytes());
-        } else if !args.naive_force && expected_header.as_deref() != Some(header) {
+        } else if !args.naive_force && expected_header.as_deref() != Some(&comparable_header) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -501,10 +502,7 @@ fn run_naive(args: &Args) -> io::Result<()> {
 fn read_vcf_text(path: &Path) -> io::Result<String> {
     let fmt = format::detect_path(path).map_err(|e| io::Error::other(e.to_string()))?;
     if fmt.exact == Exact::Bcf {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "naive concat does not support BCF input",
-        ));
+        return read_bcf_as_vcf_text(path);
     }
     let mut text = String::new();
     if fmt.compression == Compression::Bgzf || fmt.compression == Compression::Gzip {
@@ -516,6 +514,21 @@ fn read_vcf_text(path: &Path) -> io::Result<String> {
     }
     crate::vcf_compat::normalize_vcf_text(&mut text);
     Ok(text)
+}
+
+fn read_bcf_as_vcf_text(path: &Path) -> io::Result<String> {
+    let mut reader = File::open(path).map(htslib_rs::bcf::io::Reader::new)?;
+    let header = reader.read_header()?;
+    let mut out = Vec::new();
+    {
+        let mut writer = vcf::io::Writer::new(&mut out);
+        writer.write_header(&header)?;
+        for result in reader.record_bufs(&header) {
+            let record = result?;
+            writer.write_variant_record(&header, &record)?;
+        }
+    }
+    String::from_utf8(out).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 fn header_text_len(text: &str) -> usize {
@@ -530,6 +543,17 @@ fn header_text_len(text: &str) -> usize {
         }
     }
     len
+}
+
+fn comparable_naive_header(header: &str) -> String {
+    header
+        .lines()
+        .filter(|line| {
+            !line.starts_with("##bcftools_")
+                || !(line.contains("Version=") || line.contains("Command="))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn write_naive_output(args: &Args, buffer: &[u8]) -> io::Result<()> {
