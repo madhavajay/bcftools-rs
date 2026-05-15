@@ -239,20 +239,34 @@ Latest landed progress:
 - Validation before each merge: `cargo fmt --all --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, plus GitHub CI Rust tests and bcftools Perl parity
-  tests. As of `7543a42` the workspace runs 20 test binaries green (186 lib
-  unit tests + 354 integration tests across `annotate`/`concat`/`consensus`/
-  `convert`/`filter`/`head`/`index`/`isec`/`merge`/`norm`/`query`/`reheader`/
-  `sort`/`stats`/`tabix`/`view`).
-- Next local-only queue: extend the `merge` slice toward synced-reader multi-
-  input alignment + `-m none|snps|indels|both|all|id` semantics; deepen the
-  `consensus`, `annotate`, and `norm` first slices; continue tightening
-  `concat`, `filter`, `stats`, `isec`, `query`, `view`, `reheader`, and
-  `convert` edge cases that do not require changes in `htslib-rs`, `noodles`,
-  or their submodules. Remaining `convert` HAP/SAMPLE and gVCF `-Ou` pipe gaps
-  are blocked on BCF writer support for haploid missing `GT=.` and the
-  out-of-range/missing typed-value blockers listed at the end of this file.
+  tests. Run these as **separate, fully-completed commands** (clippy, then
+  fmt, then test) — concurrent `cargo` invocations share the `target/` lock
+  and report stale green results that fail CI. Per-suite test counts are kept
+  current in each command/plugin snapshot bullet rather than enumerated here
+  (that enumeration drifted repeatedly); the workspace is green as of the
+  latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
+  and per-plugin integration suites).
+- In-flight (branch `progress/todo-batch`, not yet on `main`, no PR per the
+  one-branch directive): 7 in-process plugins implemented under
+  `crates/bcftools-rs/src/commands/plugins/` — `counts`, `missing2ref`,
+  `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`,
+  `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream `*.out` fixture is
+  byte-for-byte verified; `variant-distance` and `check-ploidy` pass their
+  entire `test_vcf_plugin` slices.
+- Next local-only queue: self-contained plugin algorithm ports that need no
+  shared-infra (`+add-variantkey`, `+variantkey-hex`); then the `vcfbuf`
+  overlap/window port that unblocks `+remove-overlaps`/`+prune`/`norm`;
+  extend the `merge` slice toward synced-reader multi-input alignment +
+  `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
+  and `norm` first slices; continue tightening `concat`, `filter`, `stats`,
+  `isec`, `query`, `view`, `reheader`, and `convert` edge cases that do not
+  require changes in `htslib-rs`, `noodles`, or their submodules. Remaining
+  `convert` HAP/SAMPLE and gVCF `-Ou` pipe gaps are blocked on BCF writer
+  support for haploid missing `GT=.` and the out-of-range/missing typed-value
+  blockers listed at the end of this file.
 
-Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
+Subcommand coverage at a glance (CLI dispatcher state; plugin rows reflect
+branch `progress/todo-batch`):
 
 | Subcommand | Status | Module / notes |
 | --- | --- | --- |
@@ -271,7 +285,7 @@ Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | listing only | `commands/plugin.rs` — static registry of 41 names |
+| `plugin` | registry + 7 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -282,24 +296,25 @@ Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-41 plugin record-processing implementations remain entirely below.
+7 of 41 plugin record-processing implementations done (see Wave F);
+34 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15: approximately 22-25% complete toward the full stated goal of a
-  pure Rust bcftools replacement with full subcommand, plugin, upstream
-  `test.pl`, Rust integration-test, and parity-polishing coverage. The
-  2026-05-15 batch (PRs #10-#41) added first local slices of `merge`,
-  `consensus`, `annotate --rename-chrs`, and `norm -d`, the static plugin
-  registry listing, three more `enabled` upstream Perl parity slices
-  (`test_index`, `test_vcf_idxstats`, `test_vcf_head2`, `test_tabix`) plus
-  `test_naive_concat`, plus broad tightening of `view`/`query`/`filter`/
-  `stats`/`isec`/`concat`/`sort`/`convert`/`reheader` edge cases. The raw
-  checklist is roughly two-thirds checked, but the estimate still weights the
-  unfinished large subcommands (`mpileup`, `call`, `csq`, full `merge`/
-  `annotate`/`norm`), most plugins, full upstream byte-for-byte parity,
-  exit-code parity, and performance triage more heavily than scaffolding. The
-  narrower BioScript VNtyper-useful local parity slice is roughly 75%+.
+- 2026-05-15 (post 7-plugin batch on `progress/todo-batch`): approximately
+  25-28% complete toward the full stated goal of a pure Rust bcftools
+  replacement with full subcommand, plugin, upstream `test.pl`, Rust
+  integration-test, and parity-polishing coverage. Movement since the prior
+  estimate is 7 of 41 plugins now implemented (two with full
+  `test_vcf_plugin` slice parity) on top of the PRs #10-#41 command slices.
+  The raw checklist is well past two-thirds checked, but the estimate still
+  weights the unfinished large subcommands (`mpileup`, `call`, `csq`, full
+  `merge`/`annotate`/`norm`), the 34 remaining plugins (most coupled to the
+  `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
+  byte-for-byte parity, exit-code parity, and performance triage more
+  heavily than scaffolding. The narrower BioScript VNtyper-useful local
+  parity slice is roughly 75%+.
+- 2026-05-15 (prior): approximately 22-25% (kept for trend).
 - 2026-05-14: approximately 20% complete (prior estimate, kept for trend).
 
 ## Current Inputs
@@ -513,6 +528,21 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
+Implemented so far (2026-05-15 batch branch `progress/todo-batch`): 7 plugins
+under `crates/bcftools-rs/src/commands/plugins/` —
+`counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
+`check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream
+`*.out` fixture is byte-for-byte verified; `variant-distance` and
+`check-ploidy` pass their entire `test_vcf_plugin` slices. Most remaining
+plugins are heavier and coupled to shared infra still in progress: the
+`vcfbuf` overlap/window port (`+remove-overlaps`, `+prune`), the bcftools
+filter engine (`+setGT`, `+split-vep` expressions), FASTA/reference
+(`+fixref`, `+fill-from-fasta`), PED/trio handling (`+trio-stats`,
+`+mendelian2`, `+trio-dnm3`), or `%g`-exact float formatting (`+dosage`,
+`+guess-ploidy`, `+af-dist`, `+tag2tag --gl-to-gp`). Self-contained
+algorithm ports without those dependencies (e.g. `+add-variantkey`,
+`+variantkey-hex`) are the preferred next picks.
+
 Current local slice:
 
 - [x] Static registry/listing surface in `crates/bcftools-rs/src/commands/plugin.rs`:
@@ -530,6 +560,57 @@ Current local slice:
   upstream-shaped six-line report. 5 integration tests in
   `crates/bcftools-rs/tests/plugin_counts.rs` + 3 unit tests. No upstream
   `test.pl` case exists for `+counts`.
+- [x] `+fill-AN-AC` (`crates/bcftools-rs/src/commands/plugins/fill_an_ac.rs`):
+  fills `INFO/AN` (total called alleles) and per-ALT `INFO/AC` from
+  `FORMAT/GT`; existing AN/AC stripped first; `AC` omitted when there are no
+  ALT alleles; `##INFO` lines for `AC` then `AN` inserted after the last
+  existing `##INFO` line (HTSlib `bcf_hdr_append` grouping). VCF/VCF.gz/BCF +
+  stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
+  upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
+  6 unit tests. Remaining: `+fill-tags` superset semantics.
+- [x] `+tag2tag` (`crates/bcftools-rs/src/commands/plugins/tag2tag.rs`):
+  exact integer conversions `--gl-to-pl` (`PL = lround(-10*GL)`, missing
+  preserved) and `--gp-to-gt` (hard-call from normalized `GP`,
+  `-t`/`--threshold`, call iff max posterior >= 1 - threshold, alleles via
+  the HTSlib `bcf_gt2alleles` layout); `-r`/`--replace` drops the source
+  FORMAT tag and its `##FORMAT` header and appends the dst header as the
+  last `##` line. Byte-for-byte parity with upstream `view.GL.vcf`->`view.PL.vcf`
+  and `view.GP.vcf`->`view.GT.vcf` (`test.pl` lines 676, 678). 4 integration
+  tests + 4 unit tests. Remaining: float `--gl-to-gp` (`%g`) and the
+  localized `--LXX-to-XX` family (`test.pl` 677, 679-681).
+- [x] `+check-ploidy` (`crates/bcftools-rs/src/commands/plugins/check_ploidy.rs`):
+  per-sample contiguous constant-ploidy regions
+  (`Sample Chrom Start End Ploidy`); default ignores genotypes with any
+  missing allele, `-m`/`--use-missing` counts missing slots; faithful
+  upstream flush timing (chrom-change flush uses the previous chrom name,
+  ploidy-change flush the current). Byte-for-byte parity with the upstream
+  `checkploidy{,.2}.vcf` -> `checkploidy.{1,2,3}.out` fixtures covering
+  `test.pl` lines 646-648. 4 integration tests + 4 unit tests.
+- [x] `+variant-distance` (`crates/bcftools-rs/src/commands/plugins/variant_distance.rs`):
+  annotates `INFO/<tag>` (default `DIST`) with distance to the nearest
+  variant; `-d nearest|fwd|rev|both` (`both` is a Number=2 `<rev>,<fwd>` tag
+  with `0` for a missing side), `-n`/`--tag-name`; same-POS records are
+  duplicates sharing one distance; injects the implicit
+  `##FILTER=<ID=PASS>` after `##fileformat` (HTSlib write behavior) and the
+  `##INFO` tag line after the last `##INFO` (or before `#CHROM`). Byte-for-byte
+  parity with all four upstream fixtures `variant-distance.{1,2,3,4}.out`
+  covering `test.pl` lines 873-877. 7 integration tests + 5 unit tests.
+- [x] `+allele-length` (`crates/bcftools-rs/src/commands/plugins/allele_length.rs`):
+  REF / first-ALT / REF+ALT length histograms (MAXLEN=512, clamped) plus a
+  non-base (`[^ACGTacgt]`) tally; first ALT only, matching upstream's
+  `rec->d.allele[1]`. Text report. Byte-for-byte parity with the upstream
+  `query.nucleotide.vcf` -> `query.allele-length.tsv` fixture. 2 integration
+  tests + 3 unit tests.
+- [x] `+missing2ref` (`crates/bcftools-rs/src/commands/plugins/missing2ref.rs`):
+  default missing-genotype-to-ref behavior — every `.` allele token inside the
+  `GT` FORMAT subfield becomes `0` while phase/unphase separators and all other
+  FORMAT subfields are byte-preserved; GT located by FORMAT key index (not
+  position). VCF/VCF.gz/BCF and stdin input; `-o`/`-O u|b|v|z` output via a
+  shared `write_plugin_output` helper in `plugin.rs`. Byte-for-byte parity
+  with the upstream `plugin1.vcf` -> `missing2ref.out` fixture
+  (`test_vcf_plugin` / `+missing2ref --no-version`). 5 integration tests in
+  `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 5 unit tests. Remaining:
+  `-e`/expression-gated and major-allele set modes.
 
 Grouped roughly by complexity / shared dependencies:
 
@@ -549,7 +630,7 @@ For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plug
 - [x] **Parity gate setup**: confirm `bcftools/test/test.pl` can be driven against our Rust binary. Identify the harness's binary-override mechanism (read the `$$opts{bin}` setup at the top of `test.pl`) and document the exact invocation in `README.md`.
 - [x] **`##bcftools_*` handling**: where upstream expected outputs include `##bcftools_<cmd>{Version,Command,Date}` lines we cannot reproduce, prefer adding `--no-version` to the test invocation (already used pervasively in `test.pl`). For tests that intentionally exercise the version line, pin the date via env var.
 - [x] **Run progressively**: as each subcommand or plugin lands in Phase 3, enable its `test_*` in CI. Disabled tests should be tracked in `docs/test-status.md` as `not-yet-ported` (NOT just commented out).
-- [x] **Rust integration tests per subcommand**: every implemented subcommand has its own `crates/bcftools-rs/tests/<name>.rs` covering happy paths, error paths, regions/`-i`/`-e`/`-R`/`-T`/`-s` variants, and threaded writes where applicable. As of `7543a42` the workspace runs: 186 lib unit tests + integration suites for `annotate` (3), `concat` (29), `consensus` (4), `convert` (50), `filter` (31), `head` (16), `index` (12), `isec` (13), `merge` (7), `norm` (4), `query` (77), `reheader` (14), `sort` (11), `stats` (25), `tabix` (6), and `view` (52). Continue extending alongside each new slice rather than re-opening this item.
+- [x] **Rust integration tests per subcommand**: every implemented subcommand and plugin has its own `crates/bcftools-rs/tests/<name>.rs` (e.g. `tests/view.rs`, `tests/plugin_variant_distance.rs`) covering happy paths, error paths, regions/`-i`/`-e`/`-R`/`-T`/`-s` variants, threaded writes where applicable, and upstream `*.out` fixture parity where a fixture exists. The authoritative per-suite counts live in each command/plugin snapshot bullet (they drift if duplicated here). This item stays done; extend alongside each new slice rather than re-opening it.
 - [ ] **`trio-dnm3` harness**: `bcftools/test/trio-dnm3/test.sh` is shelled out from `test.pl`. Confirm it works against the Rust binary unchanged, or port it to a Rust integration test.
 - [x] **`csq` and `mpileup` fixtures**: `bcftools/test/csq/` and `bcftools/test/mpileup/` have nested fixture directories. The Rust gate must locate them via the `--path` form `test.pl` already uses.
 

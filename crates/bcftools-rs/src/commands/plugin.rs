@@ -39,6 +39,21 @@ Plugin options:\n\
    -W, --write-index[=FMT]        Automatically index the output files [off]\n\
 \n";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutKind {
+    VcfText,
+    VcfGz,
+    Bcf,
+}
+
+fn parse_out_kind(raw: &str) -> OutKind {
+    match raw.as_bytes().first().copied() {
+        Some(b'z') => OutKind::VcfGz,
+        Some(b'u' | b'b') => OutKind::Bcf,
+        _ => OutKind::VcfText,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Plugin {
     name: &'static str,
@@ -233,6 +248,16 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut version = false;
     let mut plugin_name: Option<String> = None;
     let mut input: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut output_kind = OutKind::VcfText;
+    // Plugin-specific options consumed for the plugins ported so far.
+    let mut direction: Option<String> = None;
+    let mut tag_name: Option<String> = None;
+    let mut use_missing = false;
+    let mut past_separator = false;
+    let mut replace = false;
+    let mut threshold: f64 = 0.1;
+    let mut conversion: Option<&'static str> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -257,11 +282,73 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-vv" => verbose += 2,
             "-vvv" => verbose += 3,
             "-W" | "--write-index" => {}
-            "-o" | "--output" | "-O" | "--output-type" | "-i" | "--include" | "-e"
-            | "--exclude" | "-r" | "--regions" | "-R" | "--regions-file" | "-t" | "--targets"
-            | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap" | "--threads" => {
+            "-o" | "--output" => {
+                output = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-O" | "--output-type" => {
+                if let Some(v) = iter.next() {
+                    output_kind = parse_out_kind(&v.to_string_lossy());
+                }
+            }
+            _ if raw.starts_with("--output=") => {
+                output = Some(raw["--output=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--output-type=") => {
+                output_kind = parse_out_kind(&raw["--output-type=".len()..]);
+            }
+            _ if raw.starts_with("-o") && raw.len() > 2 => {
+                output = Some(raw[2..].to_owned());
+            }
+            _ if raw.starts_with("-O") && raw.len() > 2 => {
+                output_kind = parse_out_kind(&raw[2..]);
+            }
+            "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
+            | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
+            | "--threads" => {
                 let _ = iter.next();
             }
+            // `-r` is `--regions` (value) before `--`, `--replace` (flag) after.
+            "-r" => {
+                if past_separator {
+                    replace = true;
+                } else {
+                    let _ = iter.next();
+                }
+            }
+            "--replace" => replace = true,
+            // `-t` is `--targets` (value) before `--`, `--threshold` after.
+            "-t" | "--threshold" => {
+                if past_separator || raw == "--threshold" {
+                    if let Some(v) = iter.next() {
+                        threshold = v.to_string_lossy().parse().unwrap_or(threshold);
+                    }
+                } else {
+                    let _ = iter.next();
+                }
+            }
+            "--gl-to-pl" => conversion = Some("gl-to-pl"),
+            "--gp-to-gt" => conversion = Some("gp-to-gt"),
+            "--gl-to-gp" => conversion = Some("gl-to-gp"),
+            "-d" | "--direction" => {
+                direction = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-n" | "--tag-name" => {
+                tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-m" | "--use-missing" => use_missing = true,
+            _ if raw.starts_with("--direction=") => {
+                direction = Some(raw["--direction=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--tag-name=") => {
+                tag_name = Some(raw["--tag-name=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-d") && raw.len() > 2 => {
+                direction = Some(raw[2..].to_owned());
+            }
+            _ if raw.starts_with("-n") && raw.len() > 2 => {
+                tag_name = Some(raw[2..].to_owned());
+            }
+            "--" => past_separator = true,
             "--no-version" => {}
             _ if raw.starts_with("--verbosity=") => {
                 verbose = raw["--verbosity=".len()..].parse().unwrap_or(verbose);
@@ -336,6 +423,76 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "allele-length" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::allele_length::run(Path::new(&input))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "check-ploidy" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::check_ploidy::run(Path::new(&input), use_missing)?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "tag2tag" {
+        use crate::commands::plugins::tag2tag::{self, Conversion};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let conv = match conversion {
+            Some("gl-to-pl") => Conversion::GlToPl,
+            Some("gp-to-gt") => Conversion::GpToGt,
+            Some("gl-to-gp") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "tag2tag --gl-to-gp is not supported in this local slice",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "tag2tag requires one of --gl-to-pl or --gp-to-gt in this local slice",
+                ));
+            }
+        };
+        let vcf = tag2tag::run(Path::new(&input), conv, replace, threshold)?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "missing2ref" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::missing2ref::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "fill-AN-AC" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::fill_an_ac::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "variant-distance" {
+        use crate::commands::plugins::variant_distance::{self, Direction};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let dir = match direction.as_deref() {
+            None => Direction::Nearest,
+            Some(d) => Direction::parse(d).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown -d direction '{d}' (expected nearest|fwd|rev|both)"),
+                )
+            })?,
+        };
+        let tag = tag_name.as_deref().unwrap_or("DIST");
+        let vcf = variant_distance::run(Path::new(&input), dir, tag)?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
@@ -343,6 +500,39 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             plugin.name
         ),
     ))
+}
+
+fn write_plugin_output(bytes: &[u8], output: Option<&str>, kind: OutKind) -> io::Result<()> {
+    use std::fs::File;
+    match output {
+        Some(path) if path != "-" => write_kind(bytes, kind, File::create(path)?),
+        _ => write_kind(bytes, kind, io::stdout().lock()),
+    }
+}
+
+fn write_kind<W: Write>(bytes: &[u8], kind: OutKind, out: W) -> io::Result<()> {
+    match kind {
+        OutKind::VcfText => {
+            let mut w = io::BufWriter::new(out);
+            w.write_all(bytes)
+        }
+        OutKind::VcfGz => {
+            let mut bgzf = htslib_rs::bgzf::io::Writer::new(out);
+            bgzf.write_all(bytes)?;
+            bgzf.finish().map(|_| ())
+        }
+        OutKind::Bcf => {
+            use htslib_rs::vcf::variant::io::Write as _;
+            let mut reader = htslib_rs::vcf::io::Reader::new(std::io::BufReader::new(bytes));
+            let header = reader.read_header()?;
+            let mut writer = htslib_rs::bcf::io::Writer::new(out);
+            writer.write_variant_header(&header)?;
+            for result in reader.records() {
+                writer.write_variant_record(&header, &result?)?;
+            }
+            writer.try_finish()
+        }
+    }
 }
 
 fn list_plugins<W: Write>(out: &mut W, verbose: bool) -> io::Result<()> {
