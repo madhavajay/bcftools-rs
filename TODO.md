@@ -201,6 +201,12 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #45 (`progress/todo-batch`, merge commit `3572038`)
+  squash-landed the 7-plugin batch onto `main`: in-process
+  `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`,
+  `variant-distance`, `check-ploidy`, and `tag2tag` (gl-to-pl/gp-to-gt),
+  every one with an upstream `*.out` fixture byte-for-byte verified, plus
+  the plugin output writer and dispatcher wiring.
 - 2026-05-15: PR #41 (`progress/merge-same-site-slice`, merge commit
   `7543a42`) added the first local-text `bcftools merge` slice: same-position
   record merging across VCF/VCF.gz/BCF inputs with identical fixed site fields,
@@ -246,15 +252,16 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/todo-batch`, not yet on `main`, no PR per the
-  one-branch directive): 7 in-process plugins implemented under
-  `crates/bcftools-rs/src/commands/plugins/` — `counts`, `missing2ref`,
-  `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`,
-  `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream `*.out` fixture is
-  byte-for-byte verified; `variant-distance` and `check-ploidy` pass their
-  entire `test_vcf_plugin` slices.
-- Next local-only queue: self-contained plugin algorithm ports that need no
-  shared-infra (`+add-variantkey`, `+variantkey-hex`); then the `vcfbuf`
+- In-flight (branch `progress/variantkey-plugins`, single open PR per the
+  one-branch directive): the `+add-variantkey` and `+variantkey-hex`
+  plugins, sharing a faithful port of the MIT VariantKey algorithm
+  (`crates/bcftools-rs/src/commands/plugins/variantkey.rs`). Both pass
+  byte-for-byte against the full upstream fixtures: `+add-variantkey` vs
+  `query.add-variantkey.vcf` (66 records, 3 hash/non-reversible) and
+  `+variantkey-hex` vs `variantkey-hex.out` plus regenerated
+  `vkrs`/`rsvk`/`nrvk` lookup files. This brings the in-process plugin
+  total to 9 of 41.
+- Next local-only queue: the `vcfbuf`
   overlap/window port that unblocks `+remove-overlaps`/`+prune`/`norm`;
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -285,7 +292,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 7 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag` |
+| `plugin` | registry + 9 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -296,24 +303,26 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-7 of 41 plugin record-processing implementations done (see Wave F);
-34 remain.
+9 of 41 plugin record-processing implementations done (see Wave F);
+32 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post 7-plugin batch on `progress/todo-batch`): approximately
-  25-28% complete toward the full stated goal of a pure Rust bcftools
-  replacement with full subcommand, plugin, upstream `test.pl`, Rust
-  integration-test, and parity-polishing coverage. Movement since the prior
-  estimate is 7 of 41 plugins now implemented (two with full
-  `test_vcf_plugin` slice parity) on top of the PRs #10-#41 command slices.
-  The raw checklist is well past two-thirds checked, but the estimate still
-  weights the unfinished large subcommands (`mpileup`, `call`, `csq`, full
-  `merge`/`annotate`/`norm`), the 34 remaining plugins (most coupled to the
+- 2026-05-15 (post `+add-variantkey`/`+variantkey-hex`, PR #45 landed):
+  approximately 26-29% complete toward the full stated goal of a pure Rust
+  bcftools replacement with full subcommand, plugin, upstream `test.pl`,
+  Rust integration-test, and parity-polishing coverage. Movement since the
+  prior estimate is 9 of 41 plugins now implemented (the two VariantKey
+  plugins verified byte-for-byte against the full upstream fixtures) on top
+  of the PR #45 7-plugin batch and the PRs #10-#41 command slices. The raw
+  checklist is well past two-thirds checked, but the estimate still weights
+  the unfinished large subcommands (`mpileup`, `call`, `csq`, full
+  `merge`/`annotate`/`norm`), the 32 remaining plugins (most coupled to the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post 7-plugin batch): approximately 25-28% (kept for trend).
 - 2026-05-15 (prior): approximately 22-25% (kept for trend).
 - 2026-05-14: approximately 20% complete (prior estimate, kept for trend).
 
@@ -528,20 +537,22 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (2026-05-15 batch branch `progress/todo-batch`): 7 plugins
+Implemented so far (PR #45 + `progress/variantkey-plugins`): 9 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
-`check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream
-`*.out` fixture is byte-for-byte verified; `variant-distance` and
-`check-ploidy` pass their entire `test_vcf_plugin` slices. Most remaining
-plugins are heavier and coupled to shared infra still in progress: the
-`vcfbuf` overlap/window port (`+remove-overlaps`, `+prune`), the bcftools
-filter engine (`+setGT`, `+split-vep` expressions), FASTA/reference
-(`+fixref`, `+fill-from-fasta`), PED/trio handling (`+trio-stats`,
-`+mendelian2`, `+trio-dnm3`), or `%g`-exact float formatting (`+dosage`,
-`+guess-ploidy`, `+af-dist`, `+tag2tag --gl-to-gp`). Self-contained
-algorithm ports without those dependencies (e.g. `+add-variantkey`,
-`+variantkey-hex`) are the preferred next picks.
+`check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
+`variantkey-hex`. Every one with an upstream `*.out` fixture is
+byte-for-byte verified; `variant-distance`/`check-ploidy` pass their entire
+`test_vcf_plugin` slices, and the two VariantKey plugins match the full
+`query.add-variantkey.vcf` and `variantkey-hex.out` fixtures (66 records, 3
+hash/non-reversible). The 32 remaining plugins are heavier and coupled to
+shared infra still in progress: the `vcfbuf` overlap/window port
+(`+remove-overlaps`, `+prune`), the bcftools filter engine (`+setGT`,
+`+split-vep` expressions), FASTA/reference (`+fixref`, `+fill-from-fasta`),
+PED/trio handling (`+trio-stats`, `+mendelian2`, `+trio-dnm3`), or
+`%g`-exact float formatting (`+dosage`, `+guess-ploidy`, `+af-dist`,
+`+tag2tag --gl-to-gp`). The `vcfbuf` overlap/window port is the preferred
+next pick now that the self-contained VariantKey ports are done.
 
 Current local slice:
 
@@ -611,6 +622,26 @@ Current local slice:
   (`test_vcf_plugin` / `+missing2ref --no-version`). 5 integration tests in
   `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 5 unit tests. Remaining:
   `-e`/expression-gated and major-allele set modes.
+- [x] `+add-variantkey` (`crates/bcftools-rs/src/commands/plugins/add_variantkey.rs`,
+  shared algorithm in `plugins/variantkey.rs`): appends `VKX` (16-hex 64-bit
+  VariantKey over CHROM, 0-based POS, REF, first ALT) and `RSX` (8-hex of the
+  numeric `rs` ID) INFO fields, injecting the two `##INFO` lines immediately
+  before `#CHROM` to match upstream `bcf_hdr_append` ordering after the
+  harness `grep -v ^##bcftools_`. Faithful port of the MIT VariantKey
+  reference (reversible ACGT encoding + MurmurHash3-like non-reversible
+  path, exact `uint8_t`/`uint32_t` wrapping). VCF/VCF.gz/BCF and stdin input;
+  `-o`/`-O u|b|v|z` via `write_plugin_output`. Byte-for-byte parity with
+  `query.add-variantkey.vcf` (66 records, 3 hash/non-reversible).
+  1 integration test in `crates/bcftools-rs/tests/plugin_add_variantkey.rs`
+  + 5 unit tests.
+- [x] `+variantkey-hex` (`crates/bcftools-rs/src/commands/plugins/variantkey_hex.rs`):
+  suppresses VCF output and generates the three unsorted lookup files
+  (`vkrs.unsorted.hex`, `rsvk.unsorted.hex`, `nrvk.unsorted.tsv`) under the
+  optional output-directory positional (raw `strcat`-style concatenation,
+  default `./`); `destroy()` summary (`VariantKeys:`/`Non-reversible
+  VariantKeys:`) to stdout. Byte-for-byte parity with `variantkey-hex.out`
+  plus regenerated lookup files. 1 integration test in
+  `crates/bcftools-rs/tests/plugin_variantkey_hex.rs` + 1 unit test.
 
 Grouped roughly by complexity / shared dependencies:
 
