@@ -378,6 +378,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave B — File-Level Manipulation
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion for normalized VCF text, and `--no-version` command-shape compatibility.
+  - [ ] Remaining: left alignment, reference-check modes (`-c`), split/join multiallelics (`-m`), atomization, old-record tags, keep-sum INFO/FORMAT projection, overlap handling, right alignment with GFF, symbolic allele edge cases, and full upstream `test_vcf_norm` parity.
 - [x] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
   - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:
         `bcftools sort <output_indel.vcf> -o <output_indel.vcf.gz> -W -O z`.

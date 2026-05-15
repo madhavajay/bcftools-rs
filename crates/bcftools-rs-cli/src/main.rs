@@ -80,7 +80,7 @@ const CMDS: &[Cmd] = &[
         help: "merge VCF/BCF files files from non-overlapping sample sets",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::norm::main),
         alias: "norm",
         help: "left-align and normalize indels",
     },
