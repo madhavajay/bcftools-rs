@@ -709,6 +709,54 @@ fn stats_pairwise_collapse_snps_matches_same_position_snps() {
 }
 
 #[test]
+fn stats_pairwise_collapse_both_keeps_snp_and_indel_groups_separate() {
+    let dir = TempDir::new().unwrap();
+    let left = dir.path().join("left.vcf");
+    let right = dir.path().join("right.vcf");
+    let header = "##fileformat=VCFv4.2\n\
+##FILTER=<ID=PASS,Description=\"All filters passed\">\n\
+##contig=<ID=1,length=1000>\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
+    std::fs::write(
+        &left,
+        format!(
+            "{header}\
+1\t100\t.\tA\tG\t100\tPASS\t.\n\
+1\t200\t.\tC\tCT\t100\tPASS\t.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &right,
+        format!(
+            "{header}\
+1\t100\t.\tA\tAT\t100\tPASS\t.\n\
+1\t200\t.\tC\tCG\t100\tPASS\t.\n"
+        ),
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "stats",
+        "--collapse",
+        "both",
+        left.to_str().unwrap(),
+        right.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "pairwise -c both stats failed: {err}");
+    assert_eq!(
+        extract_value(&out, "SN\t2\tnumber of records:"),
+        Some("1"),
+        "-c both should match indel-vs-indel but not SNP-vs-indel:\n{out}"
+    );
+    assert_eq!(
+        extract_value(&out, "SN\t0\tnumber of SNPs:"),
+        Some("1"),
+        "left SNP should remain left-only:\n{out}"
+    );
+}
+
+#[test]
 fn stats_no_args_prints_usage() {
     let (_out, err, code) = run(&["stats"]);
     assert_ne!(code, 0);

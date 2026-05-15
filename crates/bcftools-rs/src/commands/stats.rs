@@ -939,15 +939,17 @@ fn pairwise_key(fields: &[&str], collapse: CollapseMode) -> PairwiseKey {
             }
         }
         CollapseMode::Both => {
-            if alts.iter().any(|alt| {
-                matches!(
-                    classify(reference, alt),
-                    VariantKind::Snp | VariantKind::Indel
-                )
-            }) {
-                "variant".to_owned()
-            } else {
-                format!("{}>{}", reference, fields[4])
+            let has_snp = alts
+                .iter()
+                .any(|alt| classify(reference, alt) == VariantKind::Snp);
+            let has_indel = alts
+                .iter()
+                .any(|alt| classify(reference, alt) == VariantKind::Indel);
+            match (has_snp, has_indel) {
+                (true, false) => "snp".to_owned(),
+                (false, true) => "indel".to_owned(),
+                (true, true) => "variant".to_owned(),
+                (false, false) => format!("{}>{}", reference, fields[4]),
             }
         }
     };
