@@ -253,6 +253,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // Plugin-specific options consumed for the plugins ported so far.
     let mut direction: Option<String> = None;
     let mut tag_name: Option<String> = None;
+    let mut use_missing = false;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -308,6 +309,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-n" | "--tag-name" => {
                 tag_name = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
+            "-m" | "--use-missing" => use_missing = true,
             _ if raw.starts_with("--direction=") => {
                 direction = Some(raw["--direction=".len()..].to_owned());
             }
@@ -398,6 +400,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "allele-length" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let report = crate::commands::plugins::allele_length::run(Path::new(&input))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "check-ploidy" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::check_ploidy::run(Path::new(&input), use_missing)?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }

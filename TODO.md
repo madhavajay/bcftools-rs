@@ -538,6 +538,14 @@ Current local slice:
   stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
   upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
   6 unit tests. Remaining: `+fill-tags` superset semantics.
+- [x] `+check-ploidy` (`crates/bcftools-rs/src/commands/plugins/check_ploidy.rs`):
+  per-sample contiguous constant-ploidy regions
+  (`Sample Chrom Start End Ploidy`); default ignores genotypes with any
+  missing allele, `-m`/`--use-missing` counts missing slots; faithful
+  upstream flush timing (chrom-change flush uses the previous chrom name,
+  ploidy-change flush the current). Byte-for-byte parity with the upstream
+  `checkploidy{,.2}.vcf` -> `checkploidy.{1,2,3}.out` fixtures covering
+  `test.pl` lines 646-648. 4 integration tests + 4 unit tests.
 - [x] `+variant-distance` (`crates/bcftools-rs/src/commands/plugins/variant_distance.rs`):
   annotates `INFO/<tag>` (default `DIST`) with distance to the nearest
   variant; `-d nearest|fwd|rev|both` (`both` is a Number=2 `<rev>,<fwd>` tag
