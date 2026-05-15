@@ -102,6 +102,17 @@ fn reheader_samples_list_renames_matching_pairs() {
 }
 
 #[test]
+fn reheader_samples_list_long_option_replaces_all_sample_names() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = write_vcf(&dir);
+
+    let (out, err, code) = run(&["reheader", "--samples-list", "X,Y", input.to_str().unwrap()]);
+    assert_eq!(code, 0, "reheader --samples-list failed: {err}");
+    assert!(out.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tX\tY\n"));
+    assert!(out.ends_with("1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t0/0\n"));
+}
+
+#[test]
 fn reheader_output_writes_file() {
     let dir = TempDir::new().expect("tempdir");
     let input = write_vcf(&dir);
