@@ -1601,6 +1601,45 @@ impl<'a> TextRecord<'a> {
         }
         ".".into()
     }
+
+    fn translated_gt(&self, sample_index: usize) -> String {
+        let gt = self.format_value(sample_index, "GT");
+        if gt.is_empty() {
+            return ".".into();
+        }
+
+        let alleles = std::iter::once(self.fields.get(3).copied().unwrap_or("."))
+            .chain(
+                self.fields
+                    .get(4)
+                    .copied()
+                    .unwrap_or(".")
+                    .split(',')
+                    .filter(|allele| !allele.is_empty()),
+            )
+            .collect::<Vec<_>>();
+        let mut out = String::new();
+        let mut allele = String::new();
+        let flush_allele = |allele: &mut String, out: &mut String| {
+            let translated = allele
+                .parse::<usize>()
+                .ok()
+                .and_then(|idx| alleles.get(idx).copied())
+                .unwrap_or(".");
+            out.push_str(translated);
+            allele.clear();
+        };
+        for ch in gt.chars() {
+            if matches!(ch, '/' | '|') {
+                flush_allele(&mut allele, &mut out);
+                out.push(ch);
+            } else {
+                allele.push(ch);
+            }
+        }
+        flush_allele(&mut allele, &mut out);
+        out
+    }
 }
 
 fn render_format(format: &str, record: &TextRecord<'_>, filter: Option<&QueryFilter>) -> String {
@@ -2708,6 +2747,11 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
             .and_then(|i| record.sample_indices.get(i))
             .and_then(|&i| record.samples.get(i))
             .cloned()
+            .unwrap_or_else(|| ".".into());
+    }
+    if token == "TGT" {
+        return sample_index
+            .map(|i| record.translated_gt(i))
             .unwrap_or_else(|| ".".into());
     }
     if let Some(key) = token.strip_prefix("INFO/") {
