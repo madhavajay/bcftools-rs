@@ -176,6 +176,33 @@ fn head_reads_bcf_from_stdin_pipe() {
 }
 
 #[test]
+fn head_reads_bgzf_vcf_file_with_records() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let input = fixture_path("mpileup.2.vcf");
+    let compressed = tmp.path().join("mpileup.2.vcf.gz");
+
+    let (_out, err, code) = run(&[
+        "view",
+        "--no-version",
+        "-Oz",
+        "-o",
+        compressed.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "view -Oz failed: {err}");
+
+    let (out, err, code) = run(&["head", "-n", "2", compressed.to_str().unwrap()]);
+    assert_eq!(code, 0, "head -n on BGZF VCF failed: {err}");
+    assert!(out.starts_with("##fileformat=VCFv4.2\n"));
+    let records: Vec<_> = out
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert!(records[0].starts_with("chr1\t212740\t"));
+}
+
+#[test]
 fn head_with_s_accepts_kestrel_non_canonical_fileformat_header() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let path = dir.path().join("kestrel.vcf");
