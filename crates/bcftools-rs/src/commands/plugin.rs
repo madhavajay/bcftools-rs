@@ -297,6 +297,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut trio_stats_alt: Option<i32> = None;
     let mut trio_stats_debug: Option<String> = None;
     let mut mendelian_mode: Option<String> = None;
+    // parental-origin options.
+    let mut po_region: Option<String> = None;
+    let mut po_type: Option<String> = None;
+    let mut po_greedy = false;
+    let mut po_min_binom: Option<f64> = None;
+    let mut po_debug = false;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -360,6 +366,28 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 && plugin_name.as_deref() == Some("guess-ploidy") =>
             {
                 gp_region = Some(raw[2..].to_owned());
+            }
+            // parental-origin: -r REGION, -t del|dup, -g, -b, -d.
+            "-r" | "--region" if plugin_name.as_deref() == Some("parental-origin") => {
+                po_region = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("-r")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                po_region = Some(raw[2..].to_owned());
+            }
+            "-t" | "--type" if plugin_name.as_deref() == Some("parental-origin") => {
+                po_type = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-g" | "--greedy" if plugin_name.as_deref() == Some("parental-origin") => {
+                po_greedy = true;
+            }
+            "-b" | "--min-binom-prob" if plugin_name.as_deref() == Some("parental-origin") => {
+                po_min_binom = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
+            "-d" | "--debug" if plugin_name.as_deref() == Some("parental-origin") => {
+                po_debug = true;
             }
             "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
             | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
@@ -770,6 +798,52 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let report = mendelian2::run(Path::new(&input), pfm, mode)?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "parental-origin" {
+        use crate::commands::plugins::parental_origin::{self, CnvType};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        if po_debug {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "parental-origin -d/--debug informative-site listing is not yet ported",
+            ));
+        }
+        let Some(region) = po_region.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "parental-origin requires -r REGION",
+            ));
+        };
+        let Some(pfm) = ped_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "parental-origin requires -p P,F,M",
+            ));
+        };
+        let cnv = match po_type.as_deref() {
+            Some(t) => CnvType::parse(t).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("parental-origin: unknown -t type '{t}' (expected del|dup)"),
+                )
+            })?,
+            None => CnvType::Del,
+        };
+        let min_pbinom = po_min_binom.unwrap_or(1e-2);
+        let cnv_str = if cnv == CnvType::Dup { "dup" } else { "del" };
+        let tail = format!(" {input} -r {region} -p {pfm} -t {cnv_str}");
+        let report = parental_origin::run(
+            Path::new(&input),
+            region,
+            pfm,
+            cnv,
+            po_greedy,
+            min_pbinom,
+            &tail,
+        )?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 

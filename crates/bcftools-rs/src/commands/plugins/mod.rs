@@ -19,6 +19,7 @@ pub mod guess_ploidy;
 pub mod indel_stats;
 pub mod mendelian2;
 pub mod missing2ref;
+pub mod parental_origin;
 pub mod prune;
 pub mod remove_overlaps;
 pub mod smpl_stats;
