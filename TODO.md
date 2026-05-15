@@ -239,20 +239,34 @@ Latest landed progress:
 - Validation before each merge: `cargo fmt --all --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, plus GitHub CI Rust tests and bcftools Perl parity
-  tests. As of `7543a42` the workspace runs 20 test binaries green (186 lib
-  unit tests + 354 integration tests across `annotate`/`concat`/`consensus`/
-  `convert`/`filter`/`head`/`index`/`isec`/`merge`/`norm`/`query`/`reheader`/
-  `sort`/`stats`/`tabix`/`view`).
-- Next local-only queue: extend the `merge` slice toward synced-reader multi-
-  input alignment + `-m none|snps|indels|both|all|id` semantics; deepen the
-  `consensus`, `annotate`, and `norm` first slices; continue tightening
-  `concat`, `filter`, `stats`, `isec`, `query`, `view`, `reheader`, and
-  `convert` edge cases that do not require changes in `htslib-rs`, `noodles`,
-  or their submodules. Remaining `convert` HAP/SAMPLE and gVCF `-Ou` pipe gaps
-  are blocked on BCF writer support for haploid missing `GT=.` and the
-  out-of-range/missing typed-value blockers listed at the end of this file.
+  tests. Run these as **separate, fully-completed commands** (clippy, then
+  fmt, then test) — concurrent `cargo` invocations share the `target/` lock
+  and report stale green results that fail CI. Per-suite test counts are kept
+  current in each command/plugin snapshot bullet rather than enumerated here
+  (that enumeration drifted repeatedly); the workspace is green as of the
+  latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
+  and per-plugin integration suites).
+- In-flight (branch `progress/todo-batch`, not yet on `main`, no PR per the
+  one-branch directive): 7 in-process plugins implemented under
+  `crates/bcftools-rs/src/commands/plugins/` — `counts`, `missing2ref`,
+  `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`,
+  `tag2tag` (gl-to-pl/gp-to-gt). Every one with an upstream `*.out` fixture is
+  byte-for-byte verified; `variant-distance` and `check-ploidy` pass their
+  entire `test_vcf_plugin` slices.
+- Next local-only queue: self-contained plugin algorithm ports that need no
+  shared-infra (`+add-variantkey`, `+variantkey-hex`); then the `vcfbuf`
+  overlap/window port that unblocks `+remove-overlaps`/`+prune`/`norm`;
+  extend the `merge` slice toward synced-reader multi-input alignment +
+  `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
+  and `norm` first slices; continue tightening `concat`, `filter`, `stats`,
+  `isec`, `query`, `view`, `reheader`, and `convert` edge cases that do not
+  require changes in `htslib-rs`, `noodles`, or their submodules. Remaining
+  `convert` HAP/SAMPLE and gVCF `-Ou` pipe gaps are blocked on BCF writer
+  support for haploid missing `GT=.` and the out-of-range/missing typed-value
+  blockers listed at the end of this file.
 
-Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
+Subcommand coverage at a glance (CLI dispatcher state; plugin rows reflect
+branch `progress/todo-batch`):
 
 | Subcommand | Status | Module / notes |
 | --- | --- | --- |
@@ -271,7 +285,7 @@ Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | listing only | `commands/plugin.rs` — static registry of 41 names |
+| `plugin` | registry + 7 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -282,24 +296,25 @@ Subcommand coverage at a glance (CLI dispatcher state, `7543a42`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-41 plugin record-processing implementations remain entirely below.
+7 of 41 plugin record-processing implementations done (see Wave F);
+34 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15: approximately 22-25% complete toward the full stated goal of a
-  pure Rust bcftools replacement with full subcommand, plugin, upstream
-  `test.pl`, Rust integration-test, and parity-polishing coverage. The
-  2026-05-15 batch (PRs #10-#41) added first local slices of `merge`,
-  `consensus`, `annotate --rename-chrs`, and `norm -d`, the static plugin
-  registry listing, three more `enabled` upstream Perl parity slices
-  (`test_index`, `test_vcf_idxstats`, `test_vcf_head2`, `test_tabix`) plus
-  `test_naive_concat`, plus broad tightening of `view`/`query`/`filter`/
-  `stats`/`isec`/`concat`/`sort`/`convert`/`reheader` edge cases. The raw
-  checklist is roughly two-thirds checked, but the estimate still weights the
-  unfinished large subcommands (`mpileup`, `call`, `csq`, full `merge`/
-  `annotate`/`norm`), most plugins, full upstream byte-for-byte parity,
-  exit-code parity, and performance triage more heavily than scaffolding. The
-  narrower BioScript VNtyper-useful local parity slice is roughly 75%+.
+- 2026-05-15 (post 7-plugin batch on `progress/todo-batch`): approximately
+  25-28% complete toward the full stated goal of a pure Rust bcftools
+  replacement with full subcommand, plugin, upstream `test.pl`, Rust
+  integration-test, and parity-polishing coverage. Movement since the prior
+  estimate is 7 of 41 plugins now implemented (two with full
+  `test_vcf_plugin` slice parity) on top of the PRs #10-#41 command slices.
+  The raw checklist is well past two-thirds checked, but the estimate still
+  weights the unfinished large subcommands (`mpileup`, `call`, `csq`, full
+  `merge`/`annotate`/`norm`), the 34 remaining plugins (most coupled to the
+  `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
+  byte-for-byte parity, exit-code parity, and performance triage more
+  heavily than scaffolding. The narrower BioScript VNtyper-useful local
+  parity slice is roughly 75%+.
+- 2026-05-15 (prior): approximately 22-25% (kept for trend).
 - 2026-05-14: approximately 20% complete (prior estimate, kept for trend).
 
 ## Current Inputs
@@ -615,7 +630,7 @@ For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plug
 - [x] **Parity gate setup**: confirm `bcftools/test/test.pl` can be driven against our Rust binary. Identify the harness's binary-override mechanism (read the `$$opts{bin}` setup at the top of `test.pl`) and document the exact invocation in `README.md`.
 - [x] **`##bcftools_*` handling**: where upstream expected outputs include `##bcftools_<cmd>{Version,Command,Date}` lines we cannot reproduce, prefer adding `--no-version` to the test invocation (already used pervasively in `test.pl`). For tests that intentionally exercise the version line, pin the date via env var.
 - [x] **Run progressively**: as each subcommand or plugin lands in Phase 3, enable its `test_*` in CI. Disabled tests should be tracked in `docs/test-status.md` as `not-yet-ported` (NOT just commented out).
-- [x] **Rust integration tests per subcommand**: every implemented subcommand has its own `crates/bcftools-rs/tests/<name>.rs` covering happy paths, error paths, regions/`-i`/`-e`/`-R`/`-T`/`-s` variants, and threaded writes where applicable. As of `7543a42` the workspace runs: 186 lib unit tests + integration suites for `annotate` (3), `concat` (29), `consensus` (4), `convert` (50), `filter` (31), `head` (16), `index` (12), `isec` (13), `merge` (7), `norm` (4), `query` (77), `reheader` (14), `sort` (11), `stats` (25), `tabix` (6), and `view` (52). Continue extending alongside each new slice rather than re-opening this item.
+- [x] **Rust integration tests per subcommand**: every implemented subcommand and plugin has its own `crates/bcftools-rs/tests/<name>.rs` (e.g. `tests/view.rs`, `tests/plugin_variant_distance.rs`) covering happy paths, error paths, regions/`-i`/`-e`/`-R`/`-T`/`-s` variants, threaded writes where applicable, and upstream `*.out` fixture parity where a fixture exists. The authoritative per-suite counts live in each command/plugin snapshot bullet (they drift if duplicated here). This item stays done; extend alongside each new slice rather than re-opening it.
 - [ ] **`trio-dnm3` harness**: `bcftools/test/trio-dnm3/test.sh` is shelled out from `test.pl`. Confirm it works against the Rust binary unchanged, or port it to a Rust integration test.
 - [x] **`csq` and `mpileup` fixtures**: `bcftools/test/csq/` and `bcftools/test/mpileup/` have nested fixture directories. The Rust gate must locate them via the `--path` form `test.pl` already uses.
 
