@@ -302,6 +302,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut fp_force_ploidy: Option<i32> = None;
     // GTisec options (collected short flags, e.g. "Hm").
     let mut gtisec_flags = String::new();
+    // fill-from-fasta options.
+    let mut ff_column: Option<String> = None;
+    let mut ff_fasta: Option<String> = None;
+    let mut ff_header: Option<String> = None;
+    let mut ff_replace_n = false;
+    let mut ff_has_filter = false;
     // parental-origin options.
     let mut po_region: Option<String> = None;
     let mut po_type: Option<String> = None;
@@ -338,6 +344,26 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 && raw.len() > 1 =>
             {
                 gtisec_flags.push_str(&raw[1..]);
+            }
+            // fill-from-fasta: -c COL, -f FASTA, -h HDR, -N, -i/-e EXPR.
+            // These guarded arms must precede the global -h/-c/-f arms.
+            "-c" | "--column" if plugin_name.as_deref() == Some("fill-from-fasta") => {
+                ff_column = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-f" | "--fasta" if plugin_name.as_deref() == Some("fill-from-fasta") => {
+                ff_fasta = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-h" | "--header-lines" if plugin_name.as_deref() == Some("fill-from-fasta") => {
+                ff_header = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-N" | "--replace-non-ACGTN" if plugin_name.as_deref() == Some("fill-from-fasta") => {
+                ff_replace_n = true;
+            }
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() == Some("fill-from-fasta") =>
+            {
+                ff_has_filter = true;
+                let _ = iter.next();
             }
             "-h" | "--help" | "-?" => help = true,
             "-V" | "--version" => version = true,
@@ -824,6 +850,32 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let report = mendelian2::run(Path::new(&input), pfm, mode)?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "fill-from-fasta" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(col) = ff_column.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fill-from-fasta requires -c REF|TAG",
+            ));
+        };
+        let Some(fa) = ff_fasta.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fill-from-fasta requires -f FASTA",
+            ));
+        };
+        let vcf = crate::commands::plugins::fill_from_fasta::run(
+            Path::new(&input),
+            Path::new(fa),
+            col,
+            ff_header.as_deref().map(Path::new),
+            ff_replace_n,
+            ff_has_filter,
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

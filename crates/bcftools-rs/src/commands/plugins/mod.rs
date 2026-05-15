@@ -14,6 +14,7 @@ pub mod contrast;
 pub mod counts;
 pub mod dosage;
 pub mod fill_an_ac;
+pub mod fill_from_fasta;
 pub mod fixploidy;
 pub mod fixref;
 pub mod gtisec;
