@@ -1326,6 +1326,24 @@ fn query_numeric_format_functions_match_upstream_fixtures() {
 }
 
 #[test]
+fn query_median_filter_functions_match_upstream_fixture() {
+    let path = fixture_path("query.filter.7.vcf");
+    for expression in ["median(II)==2", "median(FORMAT/FI)==1.5"] {
+        let expected = std::fs::read_to_string(fixture_path("query.68.out")).unwrap();
+        let (out, err, code) = run(&[
+            "query",
+            "-f",
+            "%POS\\t%II[\\t%FI]\\n",
+            "-i",
+            expression,
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "query -i {expression} failed: {err}");
+        assert_eq!(out, expected, "expression {expression}");
+    }
+}
+
+#[test]
 fn query_sample_count_formatter_matches_upstream_fixture() {
     let path = fixture_path("smpl-count.vcf");
     let expected = std::fs::read_to_string(fixture_path("smpl-count.1.out")).unwrap();
