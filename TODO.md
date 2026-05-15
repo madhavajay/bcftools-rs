@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #61 (`progress/parental-origin`, merge commit
+  `bbae5f4`) landed `+parental-origin` — DEL/DUP genotype-likelihood
+  parental-origin models + a local `kf_betai` port for the binomial
+  parental-het filters, byte-for-byte against
+  `parental-origin.{1,2,3,4,5}.out`.
 - 2026-05-16: PR #60 (`progress/mendelian2`, merge commit `3dde694`)
   landed `+mendelian2` — built-in default GRCh37 ruleset → per-record
   region ploidy/inheritance, haploid + diploid consistency branches,
@@ -308,18 +313,16 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/parental-origin`, single open PR per the
-  one-branch directive): the `+parental-origin` plugin — a port of
-  `parental-origin.c` (`crates/bcftools-rs/src/commands/plugins/
-  parental_origin.rs`). `-p P,F,M` trio, `-r REGION`, `-t del|dup`:
-  per-SNP FORMAT/PL→normalized GL, FORMAT/GT ALT-allele dosage and
-  FORMAT/AD, the DEL and DUP genotype-likelihood origin models
-  (including the deliberate observed-vs-deleted-allele swap), the
-  `-g` greedy and `-b` skewed-parental-het exclusion via a local
-  `kf_betai` port of HTSlib `kfunc.c` (`calc_binom_one_sided` /
-  `calc_binom_two_sided`), and the `type/origin/quality/nmarkers`
-  summary. Byte-for-byte against `parental-origin.{1,2,3,4,5}.out`.
-  This brings the in-process plugin total to 23 of 41.
+- In-flight (branch `progress/fixploidy`, single open PR per the
+  one-branch directive): the `+fixploidy` plugin — a port of
+  `fixploidy.c` plus the needed `ploidy.c` subset
+  (`crates/bcftools-rs/src/commands/plugins/fixploidy.rs`). Rewrites
+  FORMAT/GT to the ploidy implied by a `CHROM FROM TO SEX PLOIDY`
+  regions file (`-p`) + a `NAME SEX` sex file (`-s`), or a forced
+  ploidy (`-f`); mirrors `ploidy_query` (non-default `_max`, default
+  fallback) and the bcf expand/in-place GT-rewrite with separator and
+  phase preservation. Byte-for-byte against `fixploidy.out`. This
+  brings the in-process plugin total to 24 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -350,7 +353,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 23 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin` |
+| `plugin` | registry + 24 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -361,17 +364,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-23 of 41 plugin record-processing implementations done (see Wave F);
-18 remain.
+24 of 41 plugin record-processing implementations done (see Wave F);
+17 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+parental-origin`, PR #60 `+mendelian2` landed):
-  approximately 42-45% complete toward the full stated goal. Movement
-  since the prior estimate is `+parental-origin` (DEL/DUP
-  genotype-likelihood parental-origin models + a local `kf_betai`
-  port for the binomial parental-het filters) verified byte-for-byte
-  against `parental-origin.{1,2,3,4,5}.out`. 23 of 41 plugins done.
+- 2026-05-16 (post `+fixploidy`, PR #61 `+parental-origin` landed):
+  approximately 43-46% complete toward the full stated goal. Movement
+  since the prior estimate is `+fixploidy` (a port of `fixploidy.c`
+  plus the needed `ploidy.c` query subset and bcf GT expand/in-place
+  rewrite) verified byte-for-byte against `fixploidy.out`. 24 of 41
+  plugins done.
 - 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
@@ -632,14 +635,14 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#60 + `progress/parental-origin`): 23 plugins
+Implemented so far (PRs #45–#61 + `progress/fixploidy`): 24 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
-`parental-origin`. Every one
+`parental-origin`, `fixploidy`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -967,6 +970,19 @@ Current local slice:
   plugin_parental_origin.rs` + 3 unit tests. Remaining: `-i`/`-e`
   filtering and the `-d` informative-site debug listing (filter
   engine).
+- [x] `+fixploidy` (`crates/bcftools-rs/src/commands/plugins/fixploidy.rs`):
+  port of `fixploidy.c` plus the needed `ploidy.c` subset. Parses the
+  `CHROM FROM TO SEX PLOIDY` regions file (`-p`) and the `NAME SEX`
+  sex file (`-s`); supports `-f` forced ploidy, `-d` default ploidy,
+  and the built-in default ruleset when neither `-p` nor `-f` is
+  given. Mirrors `ploidy_query` (overlap vs default, non-default
+  `_max`) and the bcf GT expand / in-place rewrite, preserving
+  per-sample separators and phasing and producing exactly the
+  per-sample ploidy (single `.` for ploidy 0). Byte-for-byte parity
+  with `fixploidy.out`. 1 integration test in
+  `crates/bcftools-rs/tests/plugin_fixploidy.rs` + 3 unit tests.
+  Remaining: the `* * *` default-ploidy line form and `-t` tags
+  other than GT (upstream also only supports GT).
 
 Grouped roughly by complexity / shared dependencies:
 

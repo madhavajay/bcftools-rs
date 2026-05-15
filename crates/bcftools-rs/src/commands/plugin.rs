@@ -297,6 +297,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut trio_stats_alt: Option<i32> = None;
     let mut trio_stats_debug: Option<String> = None;
     let mut mendelian_mode: Option<String> = None;
+    // fixploidy options.
+    let mut fp_default_ploidy: i32 = 2;
+    let mut fp_force_ploidy: Option<i32> = None;
     // parental-origin options.
     let mut po_region: Option<String> = None;
     let mut po_type: Option<String> = None;
@@ -388,6 +391,18 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-d" | "--debug" if plugin_name.as_deref() == Some("parental-origin") => {
                 po_debug = true;
+            }
+            // fixploidy: -d default-ploidy, -f force-ploidy, -t tags (GT).
+            "-d" | "--default-ploidy" if plugin_name.as_deref() == Some("fixploidy") => {
+                if let Some(v) = iter.next() {
+                    fp_default_ploidy = v.to_string_lossy().parse().unwrap_or(2);
+                }
+            }
+            "-f" | "--force-ploidy" if plugin_name.as_deref() == Some("fixploidy") => {
+                fp_force_ploidy = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
+            }
+            "-t" | "--tags" if plugin_name.as_deref() == Some("fixploidy") => {
+                let _ = iter.next();
             }
             "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
             | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
@@ -798,6 +813,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let report = mendelian2::run(Path::new(&input), pfm, mode)?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "fixploidy" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::fixploidy::run(
+            Path::new(&input),
+            samples_file.as_deref().map(Path::new),
+            ped_file.as_deref().map(Path::new),
+            fp_default_ploidy,
+            fp_force_ploidy,
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 
