@@ -225,7 +225,36 @@ fn read_header_text(path: &Path, fmt: format::Format) -> io::Result<String> {
     let header = read_bcf_header_from_path(path)?;
     let mut buf = Vec::new();
     htslib_rs::vcf::io::Writer::new(&mut buf).write_header(&header)?;
-    String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    String::from_utf8(buf)
+        .map(reorder_bcf_header_text_for_head)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn reorder_bcf_header_text_for_head(header: String) -> String {
+    let mut fileformat = Vec::new();
+    let mut filters = Vec::new();
+    let mut rest = Vec::new();
+    let mut chrom = Vec::new();
+
+    for line in header.split_inclusive('\n') {
+        if line.starts_with("##fileformat=") {
+            fileformat.push(line);
+        } else if line.starts_with("##FILTER=") {
+            filters.push(line);
+        } else if line.starts_with("#CHROM\t") {
+            chrom.push(line);
+        } else {
+            rest.push(line);
+        }
+    }
+
+    let mut out = String::with_capacity(header.len());
+    for group in [fileformat, filters, rest, chrom] {
+        for line in group {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 fn read_vcf_header_text<R: BufRead>(mut reader: R) -> io::Result<String> {

@@ -222,6 +222,14 @@ fn usage<W: Write>(out: &mut W) -> std::io::Result<()> {
 
 fn main() -> ExitCode {
     let argv: Vec<OsString> = env::args_os().collect();
+    if argv
+        .first()
+        .and_then(|path| std::path::Path::new(path).file_stem())
+        .is_some_and(|name| name == "bgzip")
+    {
+        return commands::bgzip::main(&argv);
+    }
+
     if argv.len() < 2 {
         let mut err = std::io::stderr().lock();
         let _ = usage(&mut err);
