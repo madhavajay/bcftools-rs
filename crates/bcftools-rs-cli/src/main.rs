@@ -75,7 +75,7 @@ const CMDS: &[Cmd] = &[
         help: "intersections of VCF/BCF files",
     },
     Cmd {
-        func: Some(unsupported),
+        func: Some(commands::merge::main),
         alias: "merge",
         help: "merge VCF/BCF files files from non-overlapping sample sets",
     },
