@@ -300,6 +300,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // fixploidy options.
     let mut fp_default_ploidy: i32 = 2;
     let mut fp_force_ploidy: Option<i32> = None;
+    // GTisec options (collected short flags, e.g. "Hm").
+    let mut gtisec_flags = String::new();
     // parental-origin options.
     let mut po_region: Option<String> = None;
     let mut po_type: Option<String> = None;
@@ -327,6 +329,15 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-lvvv" => {
                 list = true;
                 verbose += 3;
+            }
+            // GTisec: bundled short flags (-m, -v, -H, -Hmv, ...) take
+            // precedence over the global -v/-h verbosity arms.
+            _ if plugin_name.as_deref() == Some("GTisec")
+                && raw.starts_with('-')
+                && !raw.starts_with("--")
+                && raw.len() > 1 =>
+            {
+                gtisec_flags.push_str(&raw[1..]);
             }
             "-h" | "--help" | "-?" => help = true,
             "-V" | "--version" => version = true,
@@ -813,6 +824,20 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let report = mendelian2::run(Path::new(&input), pfm, mode)?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "GTisec" {
+        use crate::commands::plugins::gtisec;
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let flag = gtisec::parse_flags(&gtisec_flags);
+        let tail = if gtisec_flags.is_empty() {
+            String::new()
+        } else {
+            format!(" -{gtisec_flags}")
+        };
+        let report = gtisec::run(Path::new(&input), flag, &tail)?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 

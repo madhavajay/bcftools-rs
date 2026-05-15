@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #63 (`progress/gtsubset`, merge commit `7a0f7e0`)
+  landed `+GTsubset` — exclusive-shared-genotype site filter on
+  bcf-encoded allele/phase ints, byte-for-byte against
+  `view.GTsubset.{NA1,NA1NA2,NA1NA2NA3}.out`.
 - 2026-05-16: PR #62 (`progress/fixploidy`, merge commit `b4bc138`)
   landed `+fixploidy` — `ploidy.c`-subset region/sex ploidy query +
   bcf GT expand/in-place rewrite, byte-for-byte against
@@ -317,17 +321,17 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/gtsubset`, single open PR per the
-  one-branch directive): the `+GTsubset` plugin — a port of
-  `GTsubset.c` (`crates/bcftools-rs/src/commands/plugins/
-  gtsubset.rs`). Outputs only sites where every `-s` sample
-  exclusively shares a genotype (all selected equal, no other equal);
-  missing GTs always pass. The comparison is on the bcf-encoded
-  allele/phase ints (phasing significant), with vector-end padding for
-  haploid samples and the lone-`.`-sample expansion bcftools applies
-  on write. Byte-for-byte against `view.GTsubset.{NA1,NA1NA2,
-  NA1NA2NA3}.out`. This brings the in-process plugin total to 25 of
-  41.
+- In-flight (branch `progress/gtisec`, single open PR per the
+  one-branch directive): the `+GTisec` plugin — a port of
+  `GTisec.c` (`crates/bcftools-rs/src/commands/plugins/gtisec.rs`).
+  Counts genotype intersections across all sample subsets and emits
+  them in banker's-sequence order (the upstream `compute_bankers` /
+  `choose` recursion ported verbatim), grouping samples per record by
+  `bcf_alleles2gt` key (haploid → vector-end second allele), with the
+  `-m` missing-count, `-v` sample-list, and `-H` human-readable
+  (implies `-v`) modes and the verbatim comment header. Byte-for-byte
+  against `view.GTisec.{,H,Hm,Hmv,Hv,m,mv,v}.out`. This brings the
+  in-process plugin total to 26 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -358,7 +362,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 25 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset` |
+| `plugin` | registry + 26 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -369,17 +373,16 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-25 of 41 plugin record-processing implementations done (see Wave F);
-16 remain.
+26 of 41 plugin record-processing implementations done (see Wave F);
+15 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+GTsubset`, PR #62 `+fixploidy` landed):
-  approximately 44-47% complete toward the full stated goal. Movement
-  since the prior estimate is `+GTsubset` (exclusive-shared-genotype
-  site filter on bcf-encoded allele/phase ints) verified byte-for-byte
-  against `view.GTsubset.{NA1,NA1NA2,NA1NA2NA3}.out`. 25 of 41 plugins
-  done.
+- 2026-05-16 (post `+GTisec`, PR #63 `+GTsubset` landed):
+  approximately 45-48% complete toward the full stated goal. Movement
+  since the prior estimate is `+GTisec` (genotype-intersection subset
+  counts in banker's-sequence order) verified byte-for-byte against
+  `view.GTisec.{,H,Hm,Hmv,Hv,m,mv,v}.out`. 26 of 41 plugins done.
 - 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
@@ -640,14 +643,14 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#62 + `progress/gtsubset`): 25 plugins
+Implemented so far (PRs #45–#63 + `progress/gtisec`): 26 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
-`parental-origin`, `fixploidy`, `GTsubset`. Every one
+`parental-origin`, `fixploidy`, `GTsubset`, `GTisec`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -999,6 +1002,20 @@ Current local slice:
   Byte-for-byte parity with `view.GTsubset.{NA1,NA1NA2,NA1NA2NA3}.out`.
   3 integration tests in `crates/bcftools-rs/tests/plugin_gtsubset.rs`
   + 1 unit test.
+- [x] `+GTisec` (`crates/bcftools-rs/src/commands/plugins/gtisec.rs`):
+  port of `GTisec.c`. Counts genotype intersections across all
+  possible sample subsets, emitting subset counts in banker's-sequence
+  order — the upstream `compute_bankers` / `choose` recursion is
+  ported verbatim (bitwise-symmetry shortcut included). Per record,
+  samples are grouped by their `bcf_alleles2gt` key (haploid/short
+  genotypes use a vector-end second allele so they never collide with
+  diploid keys); each distinct genotype increments its sample-set
+  bucket. Supports `-m` (per-sample missing counts), `-v` (annotate
+  with sample lists) and `-H` (human-readable, implies `-v`, repeats
+  each subset per contained sample) plus the verbatim comment header.
+  Byte-for-byte parity with `view.GTisec.{,H,Hm,Hmv,Hv,m,mv,v}.out`.
+  8 integration tests in `crates/bcftools-rs/tests/plugin_gtisec.rs`
+  + 2 unit tests.
 
 Grouped roughly by complexity / shared dependencies:
 
