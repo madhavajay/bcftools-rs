@@ -64,6 +64,27 @@ fn tabix_builds_tbi_and_queries_vcf_regions() {
 }
 
 #[test]
+fn tabix_accepts_long_option_aliases_for_vcf_csi() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("in.vcf.gz");
+    write_bgzf(&input, VCF);
+
+    let (_out, err, code) = run(&[
+        "tabix",
+        "--force",
+        "--preset=vcf",
+        "--csi",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "tabix --preset=vcf --csi failed: {err}");
+    assert!(dir.path().join("in.vcf.gz.csi").exists());
+
+    let (out, err, code) = run(&["tabix", input.to_str().unwrap(), "2:1-20"]);
+    assert_eq!(code, 0, "tabix CSI query failed: {err}");
+    assert_eq!(out, "2\t15\t.\tG\tA\t.\tPASS\t.\n");
+}
+
+#[test]
 fn tabix_all_streams_all_bgzf_lines() {
     let dir = TempDir::new().expect("tempdir");
     let input = dir.path().join("in.vcf.gz");
