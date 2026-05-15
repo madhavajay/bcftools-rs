@@ -3,6 +3,8 @@
 Status values:
 
 - `enabled`: runs in CI through `scripts/run-bcftools-test-pl.sh`.
+- `rust-covered`: Rust-native tests cover a meaningful local slice, but the
+  upstream Perl function is not enabled in CI yet.
 - `not-yet-ported`: upstream test exists, but the required Rust subcommand or
   shared infrastructure is not complete enough to enable it.
 - `partial-rust-covered`: the Rust command has meaningful unit/integration
@@ -16,13 +18,13 @@ Status values:
 | `test_vcf_head2` | enabled | Compressed VCF and BCF-pipe `head` coverage runs with Rust-backed staged `bgzip`/`tabix` harness helpers. |
 | `test_index` | enabled | VCF/BCF indexing, explicit output path, and streaming index creation pass in CI. |
 | `test_vcf_idxstats` | enabled | `bcftools index -s/-n` over TBI/CSI, VCF.gz, BCF, and direct CSI paths passes in CI. |
-| `test_vcf_sort` | partial-rust-covered | Rust integration coverage exists for coordinate sorting, compressed writes, indexing, temp-run spill, Kestrel headers, and threading; full Perl slice still depends on broader command parity. |
-| `test_vcf_view` | partial-rust-covered | Rust integration coverage exists for VCF/VCF.gz/BCF I/O, sample/region/target filtering, many simple filters, expressions, Kestrel headers, and threaded writes; full Perl slice still needs complete expression and structured-path parity. |
+| `test_vcf_sort` | rust-covered | Rust integration coverage covers coordinate sorting, output formats, write-index, temp-prefix/compression-level shape, and Kestrel header compatibility; full Perl slice still depends on broader `query` parity. |
+| `test_vcf_view` | rust-covered | Rust integration coverage includes VCF/VCF.gz/BCF I/O, sample/region/target filtering, common site filters, genotype/phasing filters, expressions over core/INFO fields, output formats, threading, and Kestrel headers; full Perl parity remains incomplete for advanced FORMAT/sample expression and structured writer semantics. |
 | `test_csq` | not-yet-ported | `csq` not ported. |
 | `test_csq_real` | not-yet-ported | `csq` not ported. |
 | `test_gtcheck` | not-yet-ported | `gtcheck` not ported. |
 | `test_mpileup` | not-yet-ported | `mpileup` not ported. |
-| `test_naive_concat` | partial-rust-covered | Rust `concat` has naive concat coverage, but full Perl slice is not enabled yet. |
+| `test_naive_concat` | rust-covered | Rust integration coverage includes `--naive` and `--naive-force`; Perl slice not enabled yet. |
 | `test_plugin_scatter` | not-yet-ported | Plugin not ported. |
 | `test_plugin_split` | not-yet-ported | Plugin not ported. |
 | `test_plugin_vrfs` | not-yet-ported | Plugin not ported. |
@@ -35,24 +37,24 @@ Status values:
 | `test_vcf_annotate` | not-yet-ported | `annotate` not ported. |
 | `test_vcf_call` | not-yet-ported | `call` not ported. |
 | `test_vcf_call_cAls` | not-yet-ported | `call` not ported. |
-| `test_vcf_check` | partial-rust-covered | Depends on `stats`; Rust `stats` has substantial local coverage but full Perl slice is not enabled yet. |
-| `test_vcf_check_merge` | not-yet-ported | Depends on full `stats`/`merge`; `merge` is not ported. |
-| `test_vcf_concat` | partial-rust-covered | Rust `concat` covers same-sample vertical concat, naive concat, duplicate handling, region restriction, indexing, Kestrel headers, and threading; full Perl slice is not enabled yet. |
+| `test_vcf_check` | rust-covered | Rust `stats` has integration coverage for the local stats slice; the upstream check Perl flow is not enabled yet. |
+| `test_vcf_check_merge` | not-yet-ported | Depends on `stats`/`merge`. |
+| `test_vcf_concat` | rust-covered | Rust integration coverage includes same-sample concat, regions, duplicate removal, output formats, indexing, headers, threads, and Kestrel reads; ligation and full synced-reader edge cases remain. |
 | `test_vcf_consensus` | not-yet-ported | `consensus` not ported. |
 | `test_vcf_consensus_chain` | not-yet-ported | `consensus` not ported. |
-| `test_vcf_convert` | partial-rust-covered | Rust `convert` has broad GEN/SAMPLE, HAP/SAMPLE, HAP/LEGEND/SAMPLE, TSV, gVCF, BCF stdin, output/indexing, and fixture parity coverage; full Perl slice is not enabled yet. |
-| `test_vcf_convert_gvcf` | partial-rust-covered | Rust gVCF conversion has FASTA-backed reference-block expansion and fixture-pipe coverage; advanced expression parity remains. |
-| `test_vcf_convert_hls2vcf` | partial-rust-covered | Rust HAP/LEGEND/SAMPLE back-conversion has text and BCF output coverage; haploid missing `GT=.` BCF serialization remains dependency-blocked. |
-| `test_vcf_convert_hs2vcf` | partial-rust-covered | Rust HAP/SAMPLE back-conversion has text and BCF output coverage; haploid missing `GT=.` BCF serialization remains dependency-blocked. |
-| `test_vcf_convert_tsv2vcf` | partial-rust-covered | Rust TSV/23andMe conversion has fixture parity and `-Ou | view` coverage; full diagnostics and edge-case parity remain. |
-| `test_vcf_filter` | partial-rust-covered | Rust `filter` has text-mode expression, mask, soft-filter, set-GTs, region/target, index, Kestrel, and threading coverage; full FORMAT/sample-vector and structured-path parity remain. |
-| `test_vcf_isec` | partial-rust-covered | Rust `isec` has text-backed set intersection, complement, prefix output, collapse modes, targets, regions, and VCF/BCF record-output coverage; full synced-reader parity remains. |
-| `test_vcf_isec2` | partial-rust-covered | Same Rust `isec` coverage as `test_vcf_isec`; full upstream multi-file edge parity remains. |
+| `test_vcf_convert` | rust-covered | Rust integration coverage includes TSV/23andMe-style conversion, gVCF expansion, Oxford GEN/HAP/HAP-LEGEND forward and reverse paths, sample selection, filters, output formats, indexing, and many upstream fixtures; full edge-case parity remains. |
+| `test_vcf_convert_gvcf` | rust-covered | Rust integration coverage includes VCF/VCF.gz/BCF gVCF expansion and filter-gated expansion behavior; Perl slice not enabled yet. |
+| `test_vcf_convert_hls2vcf` | rust-covered | Rust integration coverage includes HAP/LEGEND/SAMPLE back-conversion, text/VCF.gz/BCF output, indexing, and fixture parity for the current slice; haploid-missing BCF serialization remains dependency-blocked. |
+| `test_vcf_convert_hs2vcf` | rust-covered | Rust integration coverage includes HAP/SAMPLE back-conversion, sample selection, sex/haploid2diploid handling, output formats, indexing, and fixture parity for the current slice; haploid-missing BCF serialization remains dependency-blocked. |
+| `test_vcf_convert_tsv2vcf` | rust-covered | Rust integration coverage includes explicit-column TSV, AA/reference-derived alleles, GT sample fields, skipped malformed rows, diagnostics counters, output formats, and indexing; full 23andMe edge-case parity remains. |
+| `test_vcf_filter` | rust-covered | Rust integration coverage includes VCF/VCF.gz/BCF I/O, expression filtering over the current shared filter slice, soft/hard FILTER rewriting, masks, gap filters, set-GTs, regions/targets, output formats, indexing, headers, threads, and Kestrel reads; full FORMAT/sample-vector parity remains. |
+| `test_vcf_isec` | rust-covered | Rust integration coverage includes pairwise intersections, collapse modes, record/target filters, directory output, output formats, indexing, and Kestrel reads; full synced-reader parity remains. |
+| `test_vcf_isec2` | rust-covered | Rust integration coverage covers the current multi-file/directory-output slice; full upstream parity remains. |
 | `test_vcf_merge` | not-yet-ported | `merge` not ported. |
 | `test_vcf_merge_big` | not-yet-ported | `merge` not ported. |
 | `test_vcf_norm` | not-yet-ported | `norm` not ported. |
 | `test_vcf_plugin` | not-yet-ported | Plugin registry and plugin implementations not ported. |
-| `test_vcf_query` | partial-rust-covered | Rust `query` has list-samples, sample selection, region/target, expression, formatter, numeric function, and PBINOM fixture coverage; full formatter and sample-vector parity remain. |
-| `test_vcf_regions` | partial-rust-covered | Depends on `query` and full region/target semantics; Rust `view`/`query` have substantial POS-based region/target coverage but not full indexed overlap parity. |
-| `test_vcf_reheader` | partial-rust-covered | Rust `reheader` has header replacement, sample rename, FAI contig update, stdin, BCF, in-place, and threading coverage; rename-chrs still depends on `annotate`/full `query`. |
-| `test_vcf_stats` | partial-rust-covered | Rust `stats` has substantial single-input and pairwise text-backed section coverage; full indexed synced-reader and edge-case parity remain. |
+| `test_vcf_query` | rust-covered | Rust integration coverage includes list-samples, sample selection, headers, regions/targets, record and sample filters, and many formatter tokens/functions; full shared formatter parity remains. |
+| `test_vcf_regions` | rust-covered | Rust `query`/`view`/`filter`/`isec` have local region and target coverage, but full upstream region/target semantics are not complete. |
+| `test_vcf_reheader` | rust-covered | Rust integration coverage includes header replacement, sample renaming, FAI contig updates, stdin, BCF output, in-place BCF, and threads; `test_rename_chrs` still depends on `annotate`/full `query`. |
+| `test_vcf_stats` | rust-covered | Rust integration coverage includes the current stats report slice, region filtering, sample selection, two-input comparison, computed TYPE expressions, and upstream fixture checks; full stats parity remains. |
