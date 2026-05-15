@@ -13,6 +13,7 @@ pub mod check_ploidy;
 pub mod counts;
 pub mod dosage;
 pub mod fill_an_ac;
+pub mod guess_ploidy;
 pub mod indel_stats;
 pub mod missing2ref;
 pub mod prune;

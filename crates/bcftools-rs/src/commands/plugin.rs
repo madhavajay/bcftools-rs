@@ -282,6 +282,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut prune_af_tag: Option<String> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
+    // guess-ploidy options.
+    let mut gp_region: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -329,6 +331,18 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 out_type_raw = Some(raw[2..].to_owned());
                 output_kind = parse_out_kind(&raw[2..]);
+            }
+            // guess-ploidy region restriction (`-r X` / `-rX` / `-R file`).
+            "-r" | "--regions" | "-R" | "--regions-file"
+                if plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                gp_region = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("-r")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                gp_region = Some(raw[2..].to_owned());
             }
             "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
             | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
@@ -714,6 +728,22 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             ad_threshold.unwrap_or(1e-3),
             min_dp.unwrap_or(0),
             min_alt_dp.unwrap_or(1),
+        )?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "guess-ploidy" {
+        use crate::commands::plugins::guess_ploidy::{self, Tag};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = guess_ploidy::run(
+            Path::new(&input),
+            Tag::Pl, // default; auto-switches PL->GL->GT on header
+            gp_region.as_deref(),
+            1e-3,
+            0.5,
+            false,
+            verbose as u32,
         )?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
