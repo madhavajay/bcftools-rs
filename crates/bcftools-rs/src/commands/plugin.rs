@@ -280,6 +280,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut nsites: Option<i32> = None;
     let mut nsites_mode: Option<String> = None;
     let mut prune_af_tag: Option<String> = None;
+    // dosage options.
+    let mut tags_list: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -344,8 +346,16 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "--replace" => replace = true,
             // `-t` is `--af-tag` for af-dist, `--threshold` after `--` for
             // tag2tag, otherwise `--targets` (value, ignored).
+            "--tags" => {
+                tags_list = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--tags=") => {
+                tags_list = Some(raw["--tags=".len()..].to_owned());
+            }
             "-t" | "--threshold" | "--af-tag" => {
-                if raw == "--af-tag" || plugin_name.as_deref() == Some("af-dist") {
+                if plugin_name.as_deref() == Some("dosage") {
+                    tags_list = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else if raw == "--af-tag" || plugin_name.as_deref() == Some("af-dist") {
                     af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else if past_separator || raw == "--threshold" {
                     if let Some(v) = iter.next() {
@@ -705,6 +715,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             min_dp.unwrap_or(0),
             min_alt_dp.unwrap_or(1),
         )?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "dosage" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let tags: Vec<String> = tags_list
+            .as_deref()
+            .unwrap_or("PL,GL,GT")
+            .split(',')
+            .map(|s| s.to_owned())
+            .collect();
+        let report = crate::commands::plugins::dosage::run(Path::new(&input), &tags)?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }

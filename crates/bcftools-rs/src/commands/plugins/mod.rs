@@ -11,6 +11,7 @@ pub mod af_dist;
 pub mod allele_length;
 pub mod check_ploidy;
 pub mod counts;
+pub mod dosage;
 pub mod fill_an_ac;
 pub mod indel_stats;
 pub mod missing2ref;
