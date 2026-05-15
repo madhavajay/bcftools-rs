@@ -6,6 +6,7 @@
 //! actual per-plugin algorithms as they are ported.
 
 pub mod add_variantkey;
+pub mod af_dist;
 pub mod allele_length;
 pub mod check_ploidy;
 pub mod counts;

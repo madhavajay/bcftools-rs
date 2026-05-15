@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #47 (`progress/remove-overlaps`, merge commit `25ecebf`)
+  landed `+remove-overlaps` — a faithful port of the `vcfbuf`
+  `MARK_OVERLAP`/`MARK_DUP` streaming state machine plus the
+  `remove-overlaps.c` driver (`-m overlap|dup`, `-M TAG`, `--reverse`,
+  `-O t`), byte-for-byte against all six `remove-overlaps.1.*` fixtures.
 - 2026-05-15: PR #46 (`progress/variantkey-plugins`, merge commit
   `07cebd2`) landed `+add-variantkey` and `+variantkey-hex` with a shared
   faithful MIT VariantKey algorithm port, byte-for-byte against the full
@@ -256,18 +261,18 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/remove-overlaps`, single open PR per the
-  one-branch directive): the `+remove-overlaps` plugin — a faithful port
-  of the `vcfbuf` `MARK_OVERLAP`/`MARK_DUP` streaming state machine plus
-  the `remove-overlaps.c` driver
-  (`crates/bcftools-rs/src/commands/plugins/remove_overlaps.rs`). Covers
-  `-m overlap`, `-m dup`, `-M TAG`, `--reverse`, and `-O t`; byte-for-byte
-  against all six `remove-overlaps.1.{1..6}.out` fixtures. The
-  `-m 'min(QUAL)'` expression mode, `--missing`, and `-i`/`-e` filtering
-  are blocked on the not-yet-ported bcftools filter engine. This brings
-  the in-process plugin total to 10 of 41.
-- Next local-only queue: extend `vcfbuf` toward `+prune` (LD/distance
-  windowed pruning) reusing the ported overlap/window buffer;
+- In-flight (branch `progress/af-dist`, single open PR per the one-branch
+  directive): the `+af-dist` plugin — a port of `af-dist.c` + `bin.c`
+  (`crates/bcftools-rs/src/commands/plugins/af_dist.rs`). Computes the HWE
+  genotype-probability distribution (`2*AF*(1-AF)` RA, `AF**2` AA) and the
+  AF-deviation distribution, with all binning arithmetic in `f32` to match
+  upstream's `float` edge sensitivity. Byte-for-byte against `af-dist.out`
+  (post harness `grep -v bcftools`). This brings the in-process plugin
+  total to 11 of 41.
+- Next local-only queue: `+smpl-stats` / `+indel-stats` no-PED variants
+  (self-contained stats reports); the `+prune` LD/distance window port
+  (`calc_ld` genotype-correlation math — heavier, partly blocked on the
+  filter engine for the `-i`/`-e` variants);
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
   and `norm` first slices; continue tightening `concat`, `filter`, `stats`,
@@ -297,7 +302,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 10 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps` |
+| `plugin` | registry + 11 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -308,26 +313,27 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-10 of 41 plugin record-processing implementations done (see Wave F);
-31 remain.
+11 of 41 plugin record-processing implementations done (see Wave F);
+30 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+remove-overlaps`, PR #46 landed): approximately
-  27-30% complete toward the full stated goal of a pure Rust
+- 2026-05-15 (post `+af-dist`, PR #47 landed): approximately
+  28-31% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
-  prior estimate is 10 of 41 plugins now implemented (the `vcfbuf`
-  overlap/dup streaming state machine ported, verified byte-for-byte
-  against all six `remove-overlaps.1.*` fixtures) on top of the VariantKey
-  pair, the PR #45 7-plugin batch and the PRs #10-#41 command slices. The
+  prior estimate is 11 of 41 plugins now implemented (`af-dist` with its
+  `bin.c` histogram port, verified byte-for-byte against `af-dist.out`) on
+  top of the `vcfbuf` overlap/dup state machine, the VariantKey pair, the
+  PR #45 7-plugin batch and the PRs #10-#41 command slices. The
   raw checklist is well past two-thirds checked, but the estimate still
   weights the unfinished large subcommands (`mpileup`, `call`, `csq`, full
-  `merge`/`annotate`/`norm`), the 31 remaining plugins (most coupled to the
+  `merge`/`annotate`/`norm`), the 30 remaining plugins (most coupled to the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post `+remove-overlaps`): approximately 27-30% (kept for trend).
 - 2026-05-15 (post VariantKey pair): approximately 26-29% (kept for trend).
 - 2026-05-15 (post 7-plugin batch): approximately 25-28% (kept for trend).
 - 2026-05-15 (prior): approximately 22-25% (kept for trend).
@@ -545,24 +551,25 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PR #45/#46 + `progress/remove-overlaps`): 10 plugins
+Implemented so far (PRs #45/#46/#47 + `progress/af-dist`): 11 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
-`variantkey-hex`, `remove-overlaps`. Every one with an upstream `*.out`
-fixture is byte-for-byte verified; `variant-distance`/`check-ploidy` pass
-their entire `test_vcf_plugin` slices, the two VariantKey plugins match the
-full `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records,
-3 hash/non-reversible), and `remove-overlaps` matches all six
-`remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`). The 31
-remaining plugins are heavier and coupled to shared infra still in progress:
-the `vcfbuf` LD/distance window port (`+prune`), the bcftools filter engine
-(`+setGT`, `+split-vep` expressions, `remove-overlaps -m 'min(QUAL)'`),
-FASTA/reference (`+fixref`, `+fill-from-fasta`), PED/trio handling
-(`+trio-stats`, `+mendelian2`, `+trio-dnm3`), or `%g`-exact float
-formatting (`+dosage`, `+guess-ploidy`, `+af-dist`, `+tag2tag --gl-to-gp`).
-The `+prune` LD/distance window port (reusing the now-ported overlap/window
-buffer) is the preferred next pick.
+`variantkey-hex`, `remove-overlaps`, `af-dist`. Every one with an upstream
+`*.out` fixture is byte-for-byte verified; `variant-distance`/`check-ploidy`
+pass their entire `test_vcf_plugin` slices, the two VariantKey plugins match
+the full `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66
+records, 3 hash/non-reversible), `remove-overlaps` matches all six
+`remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), and
+`af-dist` matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32`
+binning). The 30 remaining plugins are heavier and coupled to shared infra
+still in progress: the `vcfbuf` LD/distance window port (`+prune`), the
+bcftools filter engine (`+setGT`, `+split-vep` expressions,
+`remove-overlaps -m 'min(QUAL)'`), FASTA/reference (`+fixref`,
+`+fill-from-fasta`), PED/trio handling (`+trio-stats`, `+mendelian2`,
+`+trio-dnm3`), or `%g`-exact float formatting (`+dosage`, `+guess-ploidy`,
+`+tag2tag --gl-to-gp`). The self-contained no-PED `+smpl-stats` /
+`+indel-stats` stats reports are the preferred next pick.
 
 Current local slice:
 
@@ -665,6 +672,19 @@ Current local slice:
   `crates/bcftools-rs/tests/plugin_remove_overlaps.rs` + 5 unit tests.
   Remaining: `-m 'min(QUAL)'` expression mode, `--missing`, and `-i`/`-e`
   filtering (all blocked on the bcftools filter engine port).
+- [x] `+af-dist` (`crates/bcftools-rs/src/commands/plugins/af_dist.rs`):
+  port of `af-dist.c` + the `bin.c` histogram (`bin_init`/`bin_get_idx`/
+  `bin_get_value` for the `0..1` boundary case). Computes the HWE
+  genotype-probability distribution (`2*AF*(1-AF)` for RA, `AF**2` for AA;
+  `dosage==1`/`==2` only) and the AF-deviation distribution
+  (`|AF - nALT/nALL|`), with all binning arithmetic in `f32` to match
+  upstream's `float` edge sensitivity. Skips records with no INFO/AF and
+  samples that are not fully called (vector_end/missing). VCF/VCF.gz/BCF
+  and stdin input; `-t`/`--af-tag`, `-d`/`--dev-bins`, `-p`/`--prob-bins`.
+  Byte-for-byte parity with `af-dist.out` after the harness
+  `grep -v bcftools`. 1 integration test in
+  `crates/bcftools-rs/tests/plugin_af_dist.rs` + 4 unit tests. Remaining:
+  the `-l`/`--list` debug genotype dump.
 
 Grouped roughly by complexity / shared dependencies:
 
