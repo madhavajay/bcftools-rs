@@ -746,7 +746,10 @@ fn write_vcf_to_gensample(input: &Path, output: &str, args: &Args) -> io::Result
     if !matches!(args.tag.as_str(), "GT" | "GP" | "PL" | "GL") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("todo: --tag {}", args.tag),
+            format!(
+                "unsupported --tag {} for --gensample output; expected GT, GP, PL, or GL",
+                args.tag
+            ),
         ));
     }
     let (gen_path, sample_path) = gensample_output_paths(output)?;
