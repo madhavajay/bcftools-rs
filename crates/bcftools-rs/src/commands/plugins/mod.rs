@@ -10,4 +10,5 @@ pub mod check_ploidy;
 pub mod counts;
 pub mod fill_an_ac;
 pub mod missing2ref;
+pub mod tag2tag;
 pub mod variant_distance;

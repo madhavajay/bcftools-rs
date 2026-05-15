@@ -254,6 +254,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut direction: Option<String> = None;
     let mut tag_name: Option<String> = None;
     let mut use_missing = false;
+    let mut past_separator = false;
+    let mut replace = false;
+    let mut threshold: f64 = 0.1;
+    let mut conversion: Option<&'static str> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -298,11 +302,33 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_out_kind(&raw[2..]);
             }
-            "-i" | "--include" | "-e" | "--exclude" | "-r" | "--regions" | "-R"
-            | "--regions-file" | "-t" | "--targets" | "-T" | "--targets-file"
-            | "--regions-overlap" | "--targets-overlap" | "--threads" => {
+            "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
+            | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
+            | "--threads" => {
                 let _ = iter.next();
             }
+            // `-r` is `--regions` (value) before `--`, `--replace` (flag) after.
+            "-r" => {
+                if past_separator {
+                    replace = true;
+                } else {
+                    let _ = iter.next();
+                }
+            }
+            "--replace" => replace = true,
+            // `-t` is `--targets` (value) before `--`, `--threshold` after.
+            "-t" | "--threshold" => {
+                if past_separator || raw == "--threshold" {
+                    if let Some(v) = iter.next() {
+                        threshold = v.to_string_lossy().parse().unwrap_or(threshold);
+                    }
+                } else {
+                    let _ = iter.next();
+                }
+            }
+            "--gl-to-pl" => conversion = Some("gl-to-pl"),
+            "--gp-to-gt" => conversion = Some("gp-to-gt"),
+            "--gl-to-gp" => conversion = Some("gl-to-gp"),
             "-d" | "--direction" => {
                 direction = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -322,7 +348,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with("-n") && raw.len() > 2 => {
                 tag_name = Some(raw[2..].to_owned());
             }
-            "--" => {}
+            "--" => past_separator = true,
             "--no-version" => {}
             _ if raw.starts_with("--verbosity=") => {
                 verbose = raw["--verbosity=".len()..].parse().unwrap_or(verbose);
@@ -408,6 +434,30 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let report = crate::commands::plugins::check_ploidy::run(Path::new(&input), use_missing)?;
         io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "tag2tag" {
+        use crate::commands::plugins::tag2tag::{self, Conversion};
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let conv = match conversion {
+            Some("gl-to-pl") => Conversion::GlToPl,
+            Some("gp-to-gt") => Conversion::GpToGt,
+            Some("gl-to-gp") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "tag2tag --gl-to-gp is not supported in this local slice",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "tag2tag requires one of --gl-to-pl or --gp-to-gt in this local slice",
+                ));
+            }
+        };
+        let vcf = tag2tag::run(Path::new(&input), conv, replace, threshold)?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

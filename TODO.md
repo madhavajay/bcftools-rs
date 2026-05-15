@@ -538,6 +538,16 @@ Current local slice:
   stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
   upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
   6 unit tests. Remaining: `+fill-tags` superset semantics.
+- [x] `+tag2tag` (`crates/bcftools-rs/src/commands/plugins/tag2tag.rs`):
+  exact integer conversions `--gl-to-pl` (`PL = lround(-10*GL)`, missing
+  preserved) and `--gp-to-gt` (hard-call from normalized `GP`,
+  `-t`/`--threshold`, call iff max posterior >= 1 - threshold, alleles via
+  the HTSlib `bcf_gt2alleles` layout); `-r`/`--replace` drops the source
+  FORMAT tag and its `##FORMAT` header and appends the dst header as the
+  last `##` line. Byte-for-byte parity with upstream `view.GL.vcf`->`view.PL.vcf`
+  and `view.GP.vcf`->`view.GT.vcf` (`test.pl` lines 676, 678). 4 integration
+  tests + 4 unit tests. Remaining: float `--gl-to-gp` (`%g`) and the
+  localized `--LXX-to-XX` family (`test.pl` 677, 679-681).
 - [x] `+check-ploidy` (`crates/bcftools-rs/src/commands/plugins/check_ploidy.rs`):
   per-sample contiguous constant-ploidy regions
   (`Sample Chrom Start End Ploidy`); default ignores genotypes with any
