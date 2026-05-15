@@ -255,15 +255,44 @@ fn help_lists_upstream_dispatch_sections() {
     assert!(out.contains("    annotate"));
     assert!(out.contains("    mpileup"));
     assert!(out.contains("    plugin"));
+    assert!(out.contains("41 plugins available"));
     assert!(!out.contains("    tabix"));
     assert!(!out.contains("    som"));
 }
 
 #[test]
-fn plugin_shortcut_routes_to_plugin_command() {
+fn plugin_lists_static_registry() {
+    let (out, err, code) = run(&["plugin", "-l"]);
+    assert_eq!(code, 0, "plugin -l failed: {err}");
+    let names: Vec<_> = out.lines().collect();
+    assert_eq!(names.len(), 41);
+    assert!(names.contains(&"fill-tags"));
+    assert!(names.contains(&"missing2ref"));
+    assert!(names.contains(&"trio-dnm2"));
+}
+
+#[test]
+fn plugin_verbose_list_includes_descriptions() {
+    let (out, err, code) = run(&["plugin", "-lv"]);
+    assert_eq!(code, 0, "plugin -lv failed: {err}");
+    assert!(out.contains("-- fill-tags --"));
+    assert!(out.contains("Fill INFO tags"));
+    assert!(out.contains("-- split-vep --"));
+}
+
+#[test]
+fn plugin_shortcut_help_uses_registry() {
     let (_out, err, code) = run(&["+fill-tags", "--help"]);
+    assert_eq!(code, 0, "+fill-tags --help failed: {err}");
+    assert!(err.contains("About:   Fill INFO tags"));
+    assert!(err.contains("registered but its record-processing implementation is not yet ported"));
+}
+
+#[test]
+fn plugin_known_name_without_implementation_errors() {
+    let (_out, err, code) = run(&["+fill-tags"]);
     assert_ne!(code, 0);
-    assert!(err.contains("command 'plugin' is not yet implemented"));
+    assert!(err.contains("plugin 'fill-tags' is registered but not yet implemented"));
 }
 
 #[test]

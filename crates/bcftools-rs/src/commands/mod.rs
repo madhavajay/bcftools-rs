@@ -17,6 +17,7 @@ pub mod filter;
 pub mod head;
 pub mod index;
 pub mod isec;
+pub mod plugin;
 pub mod query;
 pub mod reheader;
 pub mod sort;
