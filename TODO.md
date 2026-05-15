@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-15: PR #53 (`progress/dosage`, merge commit `6e35df2`) landed
+  `+dosage` — PL/GL/GT diploid likelihood/genotype dosages in `f32`,
+  byte-for-byte against `dosage.{1,2,3}.out`.
 - 2026-05-15: PR #52 (`progress/prune`, merge commit `c4ecd2e`) landed
   the `+prune` window subset — the `vcfbuf` windowed `_prune_sites`
   `1st`/`maxAF` modes, byte-for-byte against `prune.1.4.out`/
@@ -280,15 +283,16 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/dosage`, single open PR per the one-branch
-  directive): the `+dosage` plugin — a port of `dosage.c`
-  (`crates/bcftools-rs/src/commands/plugins/dosage.rs`). `-t PL|GL|GT`
-  ordered handlers: PL/GL diploid GL-ordered likelihood dosages
-  (`10^(-0.1*PL)` / `10^GL` normalized, accumulated per allele, all in
-  `f32` to match upstream `float` precision), GT alt-allele-count dosage,
-  missing → `-1`, the `#[1]CHROM…` header + CHROM/POS/REF/ALT table with
-  `%f`/`%.1f` formatting. Byte-for-byte against `dosage.{1,2,3}.out`.
-  This brings the in-process plugin total to 16 of 41.
+- In-flight (branch `progress/guess-ploidy`, single open PR per the
+  one-branch directive): the `+guess-ploidy` plugin — a port of
+  `guess-ploidy.c` (`crates/bcftools-rs/src/commands/plugins/
+  guess_ploidy.rs`). `-r` region filter, SNP-only sites, the PL/GL/GT
+  per-site genotype-probability → observed-AF → per-sample
+  `log P(haploid)`/`log P(diploid)` accumulation (all `f64` to match
+  upstream `double`), `pl2p=10^(-i/10)`, the PL→GL→GT header auto-switch,
+  and the verbose `SEX` report with `%f`. Byte-for-byte against
+  `guess-ploidy.PL.out` and `guess-ploidy.GL.out` (post harness
+  `grep -v bcftools`). This brings the in-process plugin total to 17 of 41.
 - Next local-only queue: `calc_ld` genotype-correlation math to unblock
   the `+prune -a r2,LD,RD`/`-m` modes;
   extend the `merge` slice toward synced-reader multi-input alignment +
@@ -320,7 +324,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 16 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage` |
+| `plugin` | registry + 17 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -331,28 +335,30 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-16 of 41 plugin record-processing implementations done (see Wave F);
-25 remain.
+17 of 41 plugin record-processing implementations done (see Wave F);
+24 remain.
 
 Current whole-project estimate:
 
-- 2026-05-15 (post `+dosage`, PR #52 landed): approximately
-  33-36% complete toward the full stated goal of a pure Rust
+- 2026-05-15 (post `+guess-ploidy`, PR #53 landed): approximately
+  34-37% complete toward the full stated goal of a pure Rust
   bcftools replacement with full subcommand, plugin, upstream `test.pl`,
   Rust integration-test, and parity-polishing coverage. Movement since the
-  prior estimate is 16 of 41 plugins now implemented (`dosage` PL/GL/GT
-  diploid likelihood/genotype dosages in `f32`, verified byte-for-byte
-  against `dosage.{1,2,3}.out`) on top of `prune`, `ad-bias`,
-  `indel-stats`, `smpl-stats`, `af-dist`, the `vcfbuf` overlap/dup state
-  machine, the VariantKey pair, the PR #45 7-plugin batch and the
-  PRs #10-#41 command slices. The raw checklist is well past two-thirds
-  checked, but the estimate still weights the unfinished large
-  subcommands (`mpileup`, `call`, `csq`, full `merge`/`annotate`/`norm`),
-  the 25 remaining plugins (most coupled to the
+  prior estimate is 17 of 41 plugins now implemented (`guess-ploidy`
+  PL/GL/GT haploid/diploid log-likelihood sex inference in `f64`, verified
+  byte-for-byte against `guess-ploidy.{PL,GL}.out`) on top of `dosage`,
+  `prune`, `ad-bias`, `indel-stats`, `smpl-stats`, `af-dist`, the `vcfbuf`
+  overlap/dup state machine, the VariantKey pair, the PR #45 7-plugin
+  batch and the PRs #10-#41 command slices. The raw checklist is well
+  past two-thirds checked, but the estimate still weights the unfinished
+  large subcommands (`mpileup`, `call`, `csq`, full
+  `merge`/`annotate`/`norm`), the 24 remaining plugins (most coupled to
+  the
   `vcfbuf`/filter-engine/FASTA/PED infra still in progress), full upstream
   byte-for-byte parity, exit-code parity, and performance triage more
   heavily than scaffolding. The narrower BioScript VNtyper-useful local
   parity slice is roughly 75%+.
+- 2026-05-15 (post `+dosage`): approximately 33-36% (kept for trend).
 - 2026-05-15 (post `+prune`): approximately 32-35% (kept for trend).
 - 2026-05-15 (post `+ad-bias`): approximately 31-34% (kept for trend).
 - 2026-05-15 (post `+indel-stats`): approximately 30-33% (kept for trend).
@@ -576,28 +582,30 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#51 + `progress/prune`): 15 plugins
+Implemented so far (PRs #45–#53 + `progress/guess-ploidy`): 17 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
-`indel-stats`, `ad-bias`, `prune`, `dosage`. Every one with an upstream
-`*.out` fixture is byte-for-byte verified; `variant-distance`/
-`check-ploidy` pass their entire `test_vcf_plugin` slices, the two
-VariantKey plugins match the full `query.add-variantkey.vcf` /
-`variantkey-hex.out` fixtures (66 records, 3 hash/non-reversible),
-`remove-overlaps` matches all six `remove-overlaps.1.*` fixtures
-(overlap/dup/`-O t`/`--reverse`), `af-dist` matches `af-dist.out` (HWE
-prob + AF-deviation histograms, `f32` binning), `smpl-stats` matches
-`smpl-stats.1.out` (per-sample/per-site genotype stats), `indel-stats`
-matches `indel-stats.1.out` (SN/DVAF/DLEN/DFRAC/NFRAC), `ad-bias` matches
-`ad-bias.out` for both inputs (Fisher exact test on FORMAT/AD), `prune`
-matches `prune.1.4.out`/`prune.1.6.out` (windowed `_prune_sites`
-maxAF/1st), and `dosage` matches `dosage.{1,2,3}.out` (PL/GL/GT
-likelihood/genotype dosages, `f32`). The 25 remaining plugins are heavier
-and coupled to shared infra still in progress: the `vcfbuf` `calc_ld`
-LD/RD/r2 math (`+prune -a/-m`), the bcftools filter engine (`+setGT`,
-`+split-vep` expressions, `remove-overlaps -m 'min(QUAL)'`,
+`indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`. Every one
+with an upstream `*.out` fixture is byte-for-byte verified;
+`variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
+slices, the two VariantKey plugins match the full
+`query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records, 3
+hash/non-reversible), `remove-overlaps` matches all six
+`remove-overlaps.1.*` fixtures (overlap/dup/`-O t`/`--reverse`), `af-dist`
+matches `af-dist.out` (HWE prob + AF-deviation histograms, `f32` binning),
+`smpl-stats` matches `smpl-stats.1.out` (per-sample/per-site genotype
+stats), `indel-stats` matches `indel-stats.1.out` (SN/DVAF/DLEN/DFRAC/
+NFRAC), `ad-bias` matches `ad-bias.out` for both inputs (Fisher exact test
+on FORMAT/AD), `prune` matches `prune.1.4.out`/`prune.1.6.out` (windowed
+`_prune_sites` maxAF/1st), `dosage` matches `dosage.{1,2,3}.out` (PL/GL/GT
+likelihood/genotype dosages, `f32`), and `guess-ploidy` matches
+`guess-ploidy.{PL,GL}.out` (PL/GL/GT haploid/diploid log-likelihood sex
+inference, `f64`). The 24 remaining plugins are heavier and coupled to
+shared infra still in progress: the `vcfbuf` `calc_ld` LD/RD/r2 math
+(`+prune -a/-m`), the bcftools filter engine (`+setGT`, `+split-vep`
+expressions, `remove-overlaps -m 'min(QUAL)'`,
 `smpl-stats`/`indel-stats`/`prune -i/-e`), `hts_drand48` parity
 (`prune -N rand`), FASTA/reference (`+fixref`, `+fill-from-fasta`),
 PED/trio handling (`+trio-stats`, `+mendelian2`, `+trio-dnm3`,
@@ -785,6 +793,21 @@ Current local slice:
   Byte-for-byte parity with `dosage.1.out` (`-t PL`), `dosage.2.out`
   (`-t GL`), and `dosage.3.out` (`-t GT`). 3 integration tests in
   `crates/bcftools-rs/tests/plugin_dosage.rs` + 4 unit tests.
+- [x] `+guess-ploidy` (`crates/bcftools-rs/src/commands/plugins/guess_ploidy.rs`):
+  port of `guess-ploidy.c`. `-r`/`-R` region restriction, SNP-only sites,
+  the PL/GL/GT per-site genotype-probability derivation (PL via
+  `pl2p[i]=10^(-i/10)` with the `<0||>=256→pl2p[255]` clamp, GL via
+  `10^GL`, GT via the `-e` error model), per-site observed AF from the
+  summed probabilities, then per-sample `log P(haploid)` /
+  `log P(diploid)` accumulation (all `f64` to match upstream `double`);
+  the diploid/all-haploid record split, the `vector_end`/missing/
+  non-informative skips, the PL→GL→GT header auto-switch, and the
+  verbose `SEX` report (`%f`, score computed at full precision). 
+  Byte-for-byte parity with `guess-ploidy.PL.out` and
+  `guess-ploidy.GL.out` (identical, exercising the PL→GL auto-switch).
+  2 integration tests in `crates/bcftools-rs/tests/plugin_guess_ploidy.rs`
+  + 2 unit tests. Remaining: `-g` genome shortcut begin-end sub-region,
+  `--AF-tag`, and `-i`/`-e` filtering (filter engine).
 
 Grouped roughly by complexity / shared dependencies:
 
