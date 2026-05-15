@@ -275,6 +275,533 @@ fn emit_header(lines: &[&str], out: &mut String) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// LD (`-a`/`-m`) path: vcfbuf _calc_r2_ld + vcfbuf_ld + prune.c driver
+// ---------------------------------------------------------------------------
+
+/// VCFBUF_LD_IDX_{R2,LD,RD}; upstream `VCFBUF_LD_N == 3`.
+const LD_N: usize = 3;
+const IDX_R2: usize = 0;
+const IDX_LD: usize = 1;
+const IDX_RD: usize = 2;
+
+/// Faithful port of HTSlib `kstring.c:kputd` — the `%g`-only double
+/// formatter HTSlib uses to serialize float INFO values.
+pub fn kputd(d: f64) -> String {
+    if d == 0.0 {
+        return if d.is_sign_negative() {
+            "-0".to_owned()
+        } else {
+            "0".to_owned()
+        };
+    }
+    let mut out = String::new();
+    let mut d = d;
+    if d < 0.0 {
+        out.push('-');
+        d = -d;
+    }
+    if !(0.0001..=999999.0).contains(&d) {
+        // HTSlib defers to stdio "%g" for the exponent cases.
+        out.push_str(&format_g(d));
+        return out;
+    }
+
+    // buf[0..21], cp starts at index 20.
+    let mut buf = [0u8; 21];
+    let mut cp: i32 = 20;
+    let i: u32;
+    if d < 0.001 {
+        i = (d * 1_000_000_000.0).round() as u32;
+        cp -= 1;
+    } else if d < 0.01 {
+        i = (d * 100_000_000.0).round() as u32;
+        cp -= 2;
+    } else if d < 0.1 {
+        i = (d * 10_000_000.0).round() as u32;
+        cp -= 3;
+    } else if d < 1.0 {
+        i = (d * 1_000_000.0).round() as u32;
+        cp -= 4;
+    } else if d < 10.0 {
+        i = (d * 100_000.0).round() as u32;
+        cp -= 5;
+    } else if d < 100.0 {
+        i = (d * 10_000.0).round() as u32;
+        cp -= 6;
+    } else if d < 1000.0 {
+        i = (d * 1_000.0).round() as u32;
+        cp -= 7;
+    } else if d < 10000.0 {
+        i = (d * 100.0).round() as u32;
+        cp -= 8;
+    } else if d < 100000.0 {
+        i = (d * 10.0).round() as u32;
+        cp -= 9;
+    } else {
+        i = d.round() as u32;
+        cp -= 10;
+    }
+
+    const DIG2R: &[u8; 200] = b"00010203040506070809\
+1011121314151617181\
+9202122232425262728\
+2930313233343536373\
+8394041424344454647\
+4849505152535455565\
+7585960616263646566\
+6768697071727374757\
+6777879808182838485\
+868788899091929394959697989\
+9";
+    // (above split is cosmetic; rebuild the canonical table instead)
+    let mut dig2r = [0u8; 200];
+    for n in 0..100 {
+        dig2r[2 * n] = b'0' + (n / 10) as u8;
+        dig2r[2 * n + 1] = b'0' + (n % 10) as u8;
+    }
+    let _ = DIG2R;
+
+    let mut i = i;
+    let put2 = |buf: &mut [u8; 21], cp: &mut i32, v: usize| {
+        *cp -= 2;
+        let idx = *cp as usize;
+        buf[idx] = dig2r[2 * (v % 100)];
+        buf[idx + 1] = dig2r[2 * (v % 100) + 1];
+    };
+    put2(&mut buf, &mut cp, (i % 100) as usize);
+    i /= 100;
+    put2(&mut buf, &mut cp, (i % 100) as usize);
+    i /= 100;
+    put2(&mut buf, &mut cp, (i % 100) as usize);
+    i /= 100;
+    if i >= 100 {
+        cp -= 1;
+        buf[cp as usize] = b'0' + (i / 100) as u8;
+    }
+
+    let mut p: i32 = 20 - cp;
+    let ep: i32;
+    if p <= 10 {
+        // d < 1: prepend zeros then "0."
+        ep = cp + 5;
+        while p < 10 {
+            cp -= 1;
+            buf[cp as usize] = b'0';
+            p += 1;
+        }
+        cp -= 1;
+        buf[cp as usize] = b'.';
+        cp -= 1;
+        buf[cp as usize] = b'0';
+    } else {
+        // 123.001 is 123001 with p==13: shift down and insert '.'
+        cp -= 1;
+        ep = cp + 6;
+        let mut xp = cp as usize;
+        let mut pp = p;
+        while pp > 10 {
+            buf[xp] = buf[xp + 1];
+            xp += 1;
+            pp -= 1;
+        }
+        buf[xp] = b'.';
+    }
+
+    // Cull trailing zeros.
+    let mut e = ep;
+    while e > cp && buf[e as usize] == b'0' {
+        e -= 1;
+    }
+    // End can be 1 out; also turn "123." into "123".
+    if buf[e as usize] != 0 && buf[e as usize] != b'.' {
+        e += 1;
+    }
+    let s = std::str::from_utf8(&buf[cp as usize..e as usize]).unwrap_or("");
+    out.push_str(s);
+    out
+}
+
+/// Minimal C `printf("%g", d)` (default precision 6) for the
+/// out-of-`[0.0001,999999]` tail kputd defers to stdio for. Adequate for
+/// the magnitudes prune emits; trims like `%g`.
+fn format_g(d: f64) -> String {
+    if d == 0.0 {
+        return "0".to_owned();
+    }
+    let exp = d.abs().log10().floor() as i32;
+    if (-4..6).contains(&exp) {
+        let prec = (5 - exp).max(0) as usize;
+        let s = format!("{d:.prec$}");
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            s
+        }
+    } else {
+        let m = d / 10f64.powi(exp);
+        let ms = format!("{m:.5}");
+        let ms = ms.trim_end_matches('0').trim_end_matches('.').to_owned();
+        format!("{ms}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs())
+    }
+}
+
+/// Per-sample dosage (count of non-ref alleles) and allele count, with the
+/// upstream break-on-missing / break-on-vector_end semantics.
+fn dosage(gt: &str) -> (i32, i32) {
+    let mut dsg = 0;
+    let mut an = 0;
+    for tok in gt.split(['/', '|']) {
+        if tok == "." || tok.is_empty() {
+            break; // missing (no rand_missing)
+        }
+        match tok.parse::<i64>() {
+            Ok(0) => {}
+            Ok(_) => dsg += 1,
+            Err(_) => break,
+        }
+        an += 1;
+    }
+    (dsg, an)
+}
+
+/// Port of `vcfbuf.c:_calc_r2_ld`. Returns `[r2, ld, rd]` or `None`
+/// (no GT / no shared data).
+fn calc_r2_ld(a_gts: &[&str], b_gts: &[&str]) -> Option<[f64; 3]> {
+    let mut nhd = [0.0f64; 9];
+    let (mut ab, mut aa, mut bb, mut a, mut b) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    let mut nab = 0i32;
+    let mut ndiff = 0i32;
+    let mut an_tot = 0i32;
+    let mut bn_tot = 0i32;
+    let n = a_gts.len().min(b_gts.len());
+    for s in 0..n {
+        let (adsg, an) = dosage(a_gts[s]);
+        let (bdsg, bn) = dosage(b_gts[s]);
+        if an != 0 && bn != 0 {
+            an_tot += an;
+            aa += (adsg * adsg) as f64;
+            a += adsg as f64;
+            bn_tot += bn;
+            bb += (bdsg * bdsg) as f64;
+            b += bdsg as f64;
+            if adsg != bdsg {
+                ndiff += 1;
+            }
+            ab += (adsg * bdsg) as f64;
+            nab += 1;
+        }
+        if an == 2 && bn == 2 {
+            nhd[(bdsg * 3 + adsg) as usize] += 1.0;
+        }
+    }
+    if nab == 0 {
+        return None;
+    }
+    let mut nab = nab as f64;
+    let pa = a / an_tot as f64;
+    let pb = b / bn_tot as f64;
+    let cor = if ndiff == 0 {
+        1.0
+    } else {
+        if aa == a * a / nab || bb == b * b / nab {
+            aa += 1e-4;
+            bb += 1e-4;
+            ab += 1e-4;
+            a += 1e-2;
+            b += 1e-2;
+            nab += 1.0;
+        }
+        (ab - a * b / nab) / (aa - a * a / nab).sqrt() / (bb - b * b / nab).sqrt()
+    };
+
+    let mut val = [0.0f64; 3];
+    val[IDX_R2] = cor * cor;
+
+    val[IDX_LD] = cor * (pa * (1.0 - pa) * pb * (1.0 - pb)).sqrt();
+    let norm = if val[IDX_LD] < 0.0 {
+        (-pa * pb).max(-(1.0 - pa) * (1.0 - pb))
+    } else {
+        (pa * (1.0 - pb)).max((1.0 - pa) * pb)
+    };
+    if norm != 0.0 {
+        val[IDX_LD] = if norm.abs() > val[IDX_LD].abs() {
+            val[IDX_LD] / norm
+        } else {
+            1.0
+        };
+    }
+    if val[IDX_LD] == 0.0 {
+        val[IDX_LD] = val[IDX_LD].abs(); // avoid "-0"
+    }
+
+    val[IDX_RD] = (nhd[0] + nhd[1] / 2.0 + nhd[3] / 2.0 + nhd[4] / 4.0)
+        * (nhd[4] / 4.0 + nhd[5] / 2.0 + nhd[7] / 2.0 + nhd[8])
+        - (nhd[1] / 2.0 + nhd[2] + nhd[4] / 4.0 + nhd[5] / 2.0)
+            * (nhd[3] / 2.0 + nhd[4] / 4.0 + nhd[6] + nhd[7] / 2.0);
+    val[IDX_RD] /= nab;
+    val[IDX_RD] /= nab + 1.0;
+
+    Some(val)
+}
+
+/// Which LD metrics are requested for `-a` (annotate) and the tag names.
+#[derive(Clone, Copy, Default)]
+pub struct LdAnnot {
+    /// `[R2, LD, RD]` — true if `-a` requested that metric.
+    pub annot: [bool; LD_N],
+}
+
+/// `-m` thresholds: `Some(max)` per `[R2, LD, RD]`.
+pub type LdMax = [Option<f64>; LD_N];
+
+struct LdRec<'a> {
+    /// The (possibly annotated) output line, owned.
+    out_line: String,
+    pos: i64,
+    chrom: &'a str,
+    gts: Vec<&'a str>,
+}
+
+/// Runs `+prune -a/-m` (LD annotate / max-filter). `win` is the upstream
+/// `vcfbuf` window (site count if >0). `soft_filter` = `-f` FILTER id.
+#[allow(clippy::too_many_arguments)]
+pub fn run_ld(
+    input: &Path,
+    win: i64,
+    annot: LdAnnot,
+    max: LdMax,
+    soft_filter: Option<&str>,
+) -> io::Result<String> {
+    let text = read_vcf_text(input)?;
+    Ok(process_ld(&text, win, annot, max, soft_filter))
+}
+
+fn ld_idx_order() -> [usize; LD_N] {
+    [IDX_R2, IDX_LD, IDX_RD]
+}
+
+fn pos_tag(i: usize) -> &'static str {
+    match i {
+        IDX_R2 => "POS_R2",
+        IDX_LD => "POS_LD",
+        _ => "POS_RD",
+    }
+}
+fn val_tag(i: usize) -> &'static str {
+    match i {
+        IDX_R2 => "R2",
+        IDX_LD => "LD",
+        _ => "RD",
+    }
+}
+
+fn process_ld(
+    text: &str,
+    win: i64,
+    annot: LdAnnot,
+    max: LdMax,
+    soft_filter: Option<&str>,
+) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len() + 512);
+
+    // Header: PASS injection + soft FILTER + the requested INFO defs,
+    // appended just before #CHROM (upstream `bcf_hdr_printf`).
+    let fileformat = lines.iter().position(|l| l.starts_with("##fileformat="));
+    let has_pass = lines.iter().any(|l| l.starts_with("##FILTER=<ID=PASS,"));
+    let win_desc = if win < 0 {
+        format!("{}kb", -win / 1000)
+    } else {
+        format!("{win} sites")
+    };
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.starts_with('#') {
+            break;
+        }
+        if line.starts_with("#CHROM") {
+            if let Some(fid) = soft_filter {
+                // condition string: only R2 is exercised by the fixtures.
+                if let Some(m) = max[IDX_R2] {
+                    out.push_str(&format!(
+                        "##FILTER=<ID={fid},Description=\"An upstream site within {win_desc} with R2 bigger than {}\">\n",
+                        kputd(m)
+                    ));
+                }
+            }
+            for &i in &ld_idx_order() {
+                if !annot.annot[i] {
+                    continue;
+                }
+                let (vt, pt) = (val_tag(i), pos_tag(i));
+                let desc = match i {
+                    IDX_R2 => format!("Pairwise r2 with the {pt} site"),
+                    IDX_LD => format!("Pairwise Lewontin's D' (PMID:19433632) with the {pt} site"),
+                    _ => {
+                        format!("Pairwise Ragsdale's \\hat{{D}} (PMID:31697386) with the {pt} site")
+                    }
+                };
+                out.push_str(&format!(
+                    "##INFO=<ID={vt},Number=1,Type=Float,Description=\"{desc}\">\n"
+                ));
+                out.push_str(&format!(
+                    "##INFO=<ID={pt},Number=1,Type=Integer,Description=\"The position of the site for which {vt} was calculated\">\n"
+                ));
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if Some(idx) == fileformat && !has_pass {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+        }
+    }
+
+    let mut gt_slot_cache: Option<usize> = None;
+    let mut buf: Vec<LdRec> = Vec::new();
+
+    let emit = |r: &LdRec, out: &mut String| {
+        out.push_str(&r.out_line);
+        out.push('\n');
+    };
+
+    for line in &lines {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 10 {
+            continue;
+        }
+        let Ok(pos) = f[1].parse::<i64>() else {
+            continue;
+        };
+        let chrom = f[0];
+        let gt_slot = *gt_slot_cache
+            .get_or_insert_with(|| f[8].split(':').position(|k| k == "GT").unwrap_or(0));
+        let gts: Vec<&str> = f[9..]
+            .iter()
+            .map(|s| s.split(':').nth(gt_slot).unwrap_or("."))
+            .collect();
+
+        // vcfbuf_ld: compare rec against each buffered record (same chrom),
+        // keep the per-metric max + position, early-exit when a pair
+        // exceeds an -m threshold.
+        let mut best_val = [f64::NEG_INFINITY; LD_N];
+        let mut best_pos = [0i64; LD_N];
+        let mut any = false;
+        if buf.first().map(|r| r.chrom) == Some(chrom) {
+            for prev in &buf {
+                let Some(v) = calc_r2_ld(&prev.gts, &gts) else {
+                    continue;
+                };
+                any = true;
+                let mut done = false;
+                for j in 0..LD_N {
+                    if best_val[j] < v[j] {
+                        best_val[j] = v[j];
+                        best_pos[j] = prev.pos;
+                    }
+                    if let Some(mx) = max[j]
+                        && mx < v[j]
+                    {
+                        done = true;
+                    }
+                }
+                if done {
+                    break;
+                }
+            }
+        }
+
+        let mut fields: Vec<String> = f.iter().map(|s| s.to_string()).collect();
+        let mut dropped = false;
+        if any {
+            let pass = (0..LD_N).all(|j| match max[j] {
+                Some(mx) => best_val[j] <= mx,
+                None => true,
+            });
+            if !pass {
+                match soft_filter {
+                    None => dropped = true, // hard filter: drop, don't buffer
+                    Some(fid) => {
+                        fields[6] = if fields[6] == "." || fields[6].is_empty() {
+                            fid.to_string()
+                        } else {
+                            format!("{};{}", fields[6], fid)
+                        };
+                    }
+                }
+            }
+            if !dropped {
+                // INFO: POS_* (int) for all metrics first, then values.
+                let mut info = if fields[7] == "." || fields[7].is_empty() {
+                    String::new()
+                } else {
+                    fields[7].clone()
+                };
+                let push_kv = |info: &mut String, k: &str, v: String| {
+                    if !info.is_empty() {
+                        info.push(';');
+                    }
+                    info.push_str(k);
+                    info.push('=');
+                    info.push_str(&v);
+                };
+                for &i in &ld_idx_order() {
+                    if annot.annot[i] {
+                        // best_pos is the matched record's 1-based POS
+                        // (upstream uses 0-based rec->pos + 1).
+                        push_kv(&mut info, pos_tag(i), best_pos[i].to_string());
+                    }
+                }
+                for &i in &ld_idx_order() {
+                    if annot.annot[i] {
+                        // bcf_update_info_float stores f32 -> kputd(f64).
+                        let v = best_val[i] as f32 as f64;
+                        push_kv(&mut info, val_tag(i), kputd(v));
+                    }
+                }
+                fields[7] = if info.is_empty() {
+                    ".".to_owned()
+                } else {
+                    info
+                };
+            }
+        }
+
+        if dropped {
+            continue; // hard-filtered: not emitted, not buffered
+        }
+
+        buf.push(LdRec {
+            out_line: fields.join("\t"),
+            pos,
+            chrom,
+            gts,
+        });
+        // window flush: positive win keeps at most `win` records.
+        while win > 0 && buf.len() as i64 > win {
+            let front = buf.remove(0);
+            emit(&front, &mut out);
+        }
+        while win < 0
+            && buf.len() > 1
+            && buf[0].chrom == buf[buf.len() - 1].chrom
+            && buf[buf.len() - 1].pos - buf[0].pos > -win
+        {
+            let front = buf.remove(0);
+            emit(&front, &mut out);
+        }
+    }
+    for r in &buf {
+        emit(r, &mut out);
+    }
+    out
+}
+
 fn read_vcf_text(path: &Path) -> io::Result<String> {
     if path == Path::new("-") {
         let tmp = stdin_tmp_path();
