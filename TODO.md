@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-16: PR #57 (`progress/fixref`, merge commit `8b2b65a`) landed
+  `+fixref` — FASTA REF/ALT ref-alt/swap/flip/flip-all, byte-for-byte
+  against `fixref.{4,5,6,7}.out`.
 - 2026-05-16: PR #56 (`progress/contrast`, merge commit `8b2b65a`) landed
   `+contrast` — control/case PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT,
   byte-for-byte against `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out`.
@@ -292,16 +295,17 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/fixref`, single open PR per the one-branch
-  directive): the `+fixref` plugin — a port of `fixref.c`
-  (`crates/bcftools-rs/src/commands/plugins/fixref.rs`). FASTA-reference
-  REF/ALT strand fixing: `ref-alt` & `swap` (REF/ALT column only),
-  `flip` & `flip-all` (also flip + swap genotypes); `nt2int`/`revint`
-  complement, the FASTA base lookup via `FastaReference`, the
-  `FIXREF` dirty-bit annotation (`none`/`swap`/`flip`/`flip,swap`/`skip`
-  /`err`/`GT`), non-SNP/non-biallelic/non-ACGT skip, and header
-  injection. Byte-for-byte against `fixref.{4,5,6,7}.out`. This brings
-  the in-process plugin total to 19 of 41.
+- In-flight (branch `progress/trio-switch-rate`, single open PR per the
+  one-branch directive): the `+trio-switch-rate` plugin — a port of
+  `trio-switch-rate.c` (`crates/bcftools-rs/src/commands/plugins/
+  trio_switch_rate.rs`). Introduces PED-trio parsing (familyID/sampleID/
+  paternalID/maternalID/sex/pheno/[pop]) resolved against the header;
+  the phased-het-child phase-switch detection per trio (mendelian-error
+  + `test_phase` + `prev` tracking with per-chromosome reset); the
+  `TRIO` rows and per-population averaged `POP` rows. Byte-for-byte
+  against `trio.out`. This brings the in-process plugin total to 20 of
+  41 (and gives a PED parser reusable by `+trio-stats`/`+mendelian2`/
+  `indel-stats -p`).
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -332,7 +336,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 19 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref` |
+| `plugin` | registry + 20 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -343,12 +347,17 @@ branch `progress/todo-batch`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-19 of 41 plugin record-processing implementations done (see Wave F);
-22 remain.
+20 of 41 plugin record-processing implementations done (see Wave F);
+21 remain.
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+fixref`, PR #56 landed): approximately
+- 2026-05-16 (post `+trio-switch-rate`, PR #57 landed): approximately
+  38-41% complete toward the full stated goal. Movement since the prior
+  estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
+  byte-for-byte against `trio.out`, plus a reusable PED parser. 20 of 41
+  plugins done.
+- 2026-05-16 (post `+fixref`, PR #57 landed): approximately
   37-40% complete toward the full stated goal. Movement since the prior
   estimate is `+fixref` (FASTA REF/ALT strand fixing:
   ref-alt/swap/flip/flip-all) verified byte-for-byte against
@@ -603,13 +612,13 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#56 + `progress/fixref`): 19 plugins
+Implemented so far (PRs #45–#57 + `progress/trio-switch-rate`): 20 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
-`fixref`. Every one
+`fixref`, `trio-switch-rate`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -627,10 +636,11 @@ on FORMAT/AD), `prune` matches `prune.1.{1,2,3,4,6}.out` and
 `guess-ploidy` matches `guess-ploidy.{PL,GL}.out` (PL/GL/GT
 haploid/diploid log-likelihood sex inference, `f64`), and `contrast`
 matches `contrast.out`/`.1.out`/`.1.1.out`/`.1.2.out` (control/case
-PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), and `fixref` matches
-`fixref.{4,5,6,7}.out` (FASTA REF/ALT ref-alt/swap/flip/flip-all). The
-22 remaining plugins are heavier and coupled to shared infra still in
-progress: the
+PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
+`fixref.{4,5,6,7}.out` (FASTA REF/ALT ref-alt/swap/flip/flip-all), and
+`trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
+per-population averages). The 21 remaining plugins are heavier and
+coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
 -i/-e`), `hts_drand48` parity (`prune -N rand`), FASTA/reference
@@ -873,6 +883,20 @@ Current local slice:
   + 3 unit tests. Remaining: `-m top` (Illumina TOP-strand sequence
   walking), `-i`/`-m id` (dbSNP second-VCF), and `-m stats` reporting
   (stats go to stderr, not exercised by `test.pl`).
+- [x] `+trio-switch-rate` (`crates/bcftools-rs/src/commands/plugins/trio_switch_rate.rs`):
+  port of `trio-switch-rate.c`. PED parser (`familyID sampleID
+  paternalID maternalID sex phenotype [population]`, whitespace-split)
+  resolving father/mother/child to header sample indices (rows with a
+  parent absent from the VCF skipped); the phased-het-child phase-switch
+  detection per trio — child must be a phased het, not both parents het,
+  Mendelian-error when parent dosages tie, `test_phase` from the
+  homozygous parent, `prev`/`nswitch` tracking with per-chromosome
+  reset; the `TRIO` rows (`%.2f` switch rate) and the per-population
+  averaged `POP` rows (`%.0f`/`%.2f`). Byte-for-byte parity with
+  `trio.out`. 1 integration test in
+  `crates/bcftools-rs/tests/plugin_trio_switch_rate.rs` + 2 unit tests.
+  The PED parser here is the reusable basis for `+trio-stats`,
+  `+mendelian2`, and `indel-stats -p`.
 
 Grouped roughly by complexity / shared dependencies:
 

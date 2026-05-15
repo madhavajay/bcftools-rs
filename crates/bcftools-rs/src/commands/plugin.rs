@@ -292,6 +292,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut fixref_fasta: Option<String> = None;
     let mut fixref_mode: Option<String> = None;
     let mut fixref_discard = false;
+    // PED-driven plugins (trio-switch-rate, ...).
+    let mut ped_file: Option<String> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -421,6 +423,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-p" if plugin_name.as_deref() == Some("af-dist") => {
                 prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-p" | "--ped" => {
+                ped_file = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             "--gl-to-pl" => conversion = Some("gl-to-pl"),
             "--gp-to-gt" => conversion = Some("gp-to-gt"),
@@ -731,6 +736,20 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         } else {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "trio-switch-rate" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(ped) = ped_file.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "trio-switch-rate requires -p/--ped",
+            ));
+        };
+        let report =
+            crate::commands::plugins::trio_switch_rate::run(Path::new(&input), Path::new(ped))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 
