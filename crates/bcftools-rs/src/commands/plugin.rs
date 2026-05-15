@@ -373,6 +373,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "allele-length" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::allele_length::run(Path::new(&input))?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     if plugin.name == "missing2ref" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let vcf = crate::commands::plugins::missing2ref::run(Path::new(&input))?;

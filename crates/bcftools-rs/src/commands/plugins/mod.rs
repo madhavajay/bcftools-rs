@@ -5,6 +5,7 @@
 //! registry/listing surface lives in [`super::plugin`]; this module holds the
 //! actual per-plugin algorithms as they are ported.
 
+pub mod allele_length;
 pub mod counts;
 pub mod fill_an_ac;
 pub mod missing2ref;

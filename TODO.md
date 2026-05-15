@@ -538,6 +538,12 @@ Current local slice:
   stdin input, `-o`/`-O u|b|v|z` output. Byte-for-byte parity with the
   upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
   6 unit tests. Remaining: `+fill-tags` superset semantics.
+- [x] `+allele-length` (`crates/bcftools-rs/src/commands/plugins/allele_length.rs`):
+  REF / first-ALT / REF+ALT length histograms (MAXLEN=512, clamped) plus a
+  non-base (`[^ACGTacgt]`) tally; first ALT only, matching upstream's
+  `rec->d.allele[1]`. Text report. Byte-for-byte parity with the upstream
+  `query.nucleotide.vcf` -> `query.allele-length.tsv` fixture. 2 integration
+  tests + 3 unit tests.
 - [x] `+missing2ref` (`crates/bcftools-rs/src/commands/plugins/missing2ref.rs`):
   default missing-genotype-to-ref behavior — every `.` allele token inside the
   `GT` FORMAT subfield becomes `0` while phase/unphase separators and all other
