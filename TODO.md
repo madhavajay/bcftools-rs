@@ -189,8 +189,38 @@ Goal: build a pure Rust replacement for the `bcftools` C program with full subco
 
 Current goal: keep momentum inside `bcftools-rs` only. If a TODO item requires changes to underlying libraries (`htslib-rs`, `noodles`, or their submodules), move that dependency work to the end of this file under the rolling dependency-blocker list, continue with other `bcftools-rs` items that can be completed locally, and then stop once the remaining work is blocked. Do not change the underlying libraries during this goal.
 
+PR workflow (locked in 2026-05-15): land one PR at a time. Open a single
+focused branch, run the Rust gate (`cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace`) locally, push, wait for `Rust tests` and
+`bcftools Perl parity tests` to go green on GitHub, then squash-merge with
+`gh pr merge <N> --squash --delete-branch`, pull `main`, and only then start
+the next slice. Do **not** stack multiple open PRs against `main` again — the
+stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
+`commands/mod.rs` conflicts that all had to be hand-resolved.
+
 Latest landed progress:
 
+- 2026-05-15: PR #41 (`progress/merge-same-site-slice`, merge commit
+  `7543a42`) added the first local-text `bcftools merge` slice: same-position
+  record merging across VCF/VCF.gz/BCF inputs with identical fixed site fields,
+  duplicate-sample-name rejection unless `--force-samples` prefixes later
+  inputs, `-l`/`--file-list`, `-o`, `-O u|b|v|z`, `-m TYPE` accepted for
+  command-shape compat, `--no-version`, BGZF and BCF write paths, Kestrel-
+  tolerant text reads, and CLI dispatcher wiring; 7 integration tests in
+  `crates/bcftools-rs/tests/merge.rs`.
+- 2026-05-15: PRs #10-#40 (30 PRs) landed in a single batch squash-merge onto
+  `main`. Coverage spans `concat` overlap guard, `filter` mask-file/median/
+  sample-fraction functions, `isec`/`stats` class-aware collapse modes,
+  `query` allow-undef-tags/TGT/`FMT/AD[:GT]`, `reheader` `--samples-list`,
+  `head` BGZF VCF records, `convert` attached FASTA reference/unsupported-tag
+  diagnostics, `sort` attached write-index + Perl parity options (`-m 0`,
+  `-Ob`, `view` pipe), `tabix` long aliases, `index` extra-input rejection +
+  Perl parity, `view` numeric `-O0`-`-O9` + options-after-input + 64-bit
+  text-output parity, `concat --naive` Perl parity, `stats` computed TYPE
+  filters, the static plugin registry listing, first `consensus` FASTA-ALT
+  slice, `annotate --rename-chrs` slice, `norm -d`/`--rm-dup` slice, plus
+  refreshed README/test-status docs.
 - 2026-05-14: PR #9 (`progress/convert-fixture-parity-2`, merge commit
   `05f3c18`) landed another convert parity slice after PR #8: more upstream
   GEN/SAMPLE, HAP/SAMPLE, and HAP/LEGEND/SAMPLE fixture-output parity, the
@@ -201,34 +231,41 @@ Latest landed progress:
   upstream-style reverse GEN/SAMPLE `-Ou | view` fixture coverage, the
   whole-project progress estimate, and the BCF serialization blocker note for
   HAP-family reverse `-Ou` pipes.
-- Validation before merge: `cargo fmt --all --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace`, plus GitHub CI Rust tests and bcftools Perl parity
-  tests.
 - 2026-05-14: PR #8 (`progress/todo-local-bcftools-parity`, merge commit
   `8742124`) landed the first broad local-only parity batch for `concat`,
   `convert`, `filter`, `isec`, and `stats`, plus the dispatcher exports,
   command integration tests, TSV-to-VCF ALT normalization, and the snapshot
   coverage notes below.
-- Validation before merge: `cargo fmt --all --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, and
-  `cargo test --workspace`.
-- Next local-only queue: tighten `concat`, `filter`, `stats`, and `isec` edge
-  cases that do not require changes in `htslib-rs`, `noodles`, or their
-  submodules; remaining `convert` pipe gaps are currently blocked on BCF writer
-  support for haploid missing `GT=.`.
+- Validation before each merge: `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, plus GitHub CI Rust tests and bcftools Perl parity
+  tests. As of `7543a42` the workspace runs 20 test binaries green.
+- Next local-only queue: extend the `merge` slice toward synced-reader multi-
+  input alignment + `-m none|snps|indels|both|all|id` semantics; deepen the
+  `consensus`, `annotate`, and `norm` first slices; continue tightening
+  `concat`, `filter`, `stats`, `isec`, `query`, `view`, `reheader`, and
+  `convert` edge cases that do not require changes in `htslib-rs`, `noodles`,
+  or their submodules. Remaining `convert` HAP/SAMPLE and gVCF `-Ou` pipe gaps
+  are blocked on BCF writer support for haploid missing `GT=.` and the
+  out-of-range/missing typed-value blockers listed at the end of this file.
 
 Current whole-project estimate:
 
-- 2026-05-14: approximately 20% complete toward the full stated goal of a pure
-  Rust bcftools replacement with full subcommand, plugin, upstream `test.pl`,
-  Rust integration-test, and parity-polishing coverage. The raw checklist is
-  roughly half checked, but setup/foundation items are smaller than the
-  remaining implementation surface. The estimate weights the unfinished large
-  subcommands (`annotate`, `merge`, `norm`, `mpileup`, `call`, `csq`), most
-  plugins, full upstream byte-for-byte parity, exit-code parity, and performance
-  triage more heavily than scaffolding. The narrower BioScript VNtyper-useful
-  local parity slice is much further along, roughly 60-70%+.
+- 2026-05-15: approximately 22-25% complete toward the full stated goal of a
+  pure Rust bcftools replacement with full subcommand, plugin, upstream
+  `test.pl`, Rust integration-test, and parity-polishing coverage. The
+  2026-05-15 batch (PRs #10-#41) added first local slices of `merge`,
+  `consensus`, `annotate --rename-chrs`, and `norm -d`, the static plugin
+  registry listing, three more `enabled` upstream Perl parity slices
+  (`test_index`, `test_vcf_idxstats`, `test_vcf_head2`, `test_tabix`) plus
+  `test_naive_concat`, plus broad tightening of `view`/`query`/`filter`/
+  `stats`/`isec`/`concat`/`sort`/`convert`/`reheader` edge cases. The raw
+  checklist is roughly two-thirds checked, but the estimate still weights the
+  unfinished large subcommands (`mpileup`, `call`, `csq`, full `merge`/
+  `annotate`/`norm`), most plugins, full upstream byte-for-byte parity,
+  exit-code parity, and performance triage more heavily than scaffolding. The
+  narrower BioScript VNtyper-useful local parity slice is roughly 75%+.
+- 2026-05-14: approximately 20% complete (prior estimate, kept for trend).
 
 ## Current Inputs
 
