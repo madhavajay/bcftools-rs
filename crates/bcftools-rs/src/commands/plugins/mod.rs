@@ -13,6 +13,7 @@ pub mod counts;
 pub mod fill_an_ac;
 pub mod missing2ref;
 pub mod remove_overlaps;
+pub mod smpl_stats;
 pub mod tag2tag;
 pub mod variant_distance;
 pub mod variantkey;
