@@ -248,6 +248,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut version = false;
     let mut plugin_name: Option<String> = None;
     let mut input: Option<String> = None;
+    let mut extra: Option<String> = None;
     let mut output: Option<String> = None;
     let mut output_kind = OutKind::VcfText;
     // Plugin-specific options consumed for the plugins ported so far.
@@ -363,6 +364,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with('-') => {}
             _ if plugin_name.is_none() => plugin_name = Some(raw.into_owned()),
             _ if input.is_none() => input = Some(raw.into_owned()),
+            // Trailing positional, e.g. `+variantkey-hex in.vcf <dir>`.
+            _ if extra.is_none() => extra = Some(raw.into_owned()),
             _ => {}
         }
     }
@@ -490,6 +493,22 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         let tag = tag_name.as_deref().unwrap_or("DIST");
         let vcf = variant_distance::run(Path::new(&input), dir, tag)?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "add-variantkey" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let vcf = crate::commands::plugins::add_variantkey::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "variantkey-hex" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        // Upstream's optional output directory positional; defaults to "./".
+        let dir = extra.unwrap_or_else(|| "./".to_owned());
+        let summary = crate::commands::plugins::variantkey_hex::run(Path::new(&input), &dir)?;
+        io::stdout().lock().write_all(summary.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
 
