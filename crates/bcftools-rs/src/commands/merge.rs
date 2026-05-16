@@ -29,6 +29,7 @@ Options:\n\
     -m, --merge TYPE                Accepted for command-shape compatibility in this same-site slice\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
+        --force-single              Allow a single input for command-shape compatibility\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
         --no-index                  Accepted for command-shape compatibility in this text slice\n\
         --no-version                Accepted for command-shape compatibility\n\
@@ -101,6 +102,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut file_list = None;
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
+    let mut force_single = false;
     let mut force_samples = false;
 
     let mut iter = argv.iter().skip(1).peekable();
@@ -120,6 +122,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-O" | "--output-type" => {
                 output_kind = parse_output_kind(&next_string(&mut iter, raw.as_ref())?)?
             }
+            "--force-single" => force_single = true,
             "--force-samples" => force_samples = true,
             "--no-index" => {}
             "--no-version" => {}
@@ -153,10 +156,13 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     if let Some(path) = file_list {
         inputs.extend(read_file_list(&path)?);
     }
-    if inputs.len() < 2 {
+    if inputs.len() < 2 && !force_single {
         return Err(ParseOutcome::Error(
             "expected at least two input VCF/BCF paths".into(),
         ));
+    }
+    if inputs.is_empty() {
+        return Err(ParseOutcome::Error("expected an input VCF/BCF path".into()));
     }
 
     Ok(Args {
