@@ -110,7 +110,7 @@ fn merge_force_samples_prefixes_duplicates() {
 }
 
 #[test]
-fn merge_rejects_record_set_mismatch() {
+fn merge_unions_missing_sites_with_missing_sample_values() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
     let b_path = dir.path().join("b.vcf");
@@ -124,16 +124,20 @@ fn merge_rejects_record_set_mismatch() {
     )
     .unwrap();
 
-    let (_out, err, code) = run(&[
+    let (out, err, code) = run(&[
         "merge",
         "--no-version",
         a.to_str().unwrap(),
         b_path.to_str().unwrap(),
     ]);
-    assert_ne!(code, 0, "expected mismatch failure, got success");
+    assert_eq!(code, 0, "merge should union missing sites: {err}");
     assert!(
-        err.contains("record mismatch") || err.contains("compatible"),
-        "stderr should mention record mismatch: {err}"
+        out.contains("1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t./."),
+        "missing SAMPLE_B value should be synthesized at first site: {out}"
+    );
+    assert!(
+        out.contains("1\t3\t.\tG\tT\t.\tPASS\t.\tGT\t./.\t1/1"),
+        "missing SAMPLE_A value should be synthesized at second site: {out}"
     );
 }
 
@@ -174,6 +178,22 @@ fn merge_reads_file_list() {
     let (out, err, code) = run(&["merge", "--no-version", "-l", list.to_str().unwrap()]);
     assert_eq!(code, 0, "merge -l failed: {err}");
     assert!(out.contains("SAMPLE_A\tSAMPLE_B"), "{out}");
+}
+
+#[test]
+fn merge_noidx_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--no-index",
+        "../../bcftools/test/merge.noidx.a.vcf",
+        "../../bcftools/test/merge.noidx.b.vcf",
+        "../../bcftools/test/merge.noidx.c.vcf",
+    ]);
+    assert_eq!(code, 0, "merge noidx fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.noidx.abc.out").unwrap();
+    assert_eq!(out, expected);
 }
 
 #[test]

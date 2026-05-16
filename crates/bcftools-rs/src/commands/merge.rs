@@ -1,11 +1,12 @@
 //! Focused `bcftools merge` implementation (upstream `vcfmerge.c`).
 //!
-//! This first local slice merges records that are present in the same order in
-//! every input and have identical site fields. Full synced-reader merging,
-//! allele unification, INFO rules, gVCF mode, and missing-sample synthesis
-//! remain tracked in `TODO.md`.
+//! This local slice merges records that are present in every input or are
+//! absent from some inputs and have identical site fields. Full synced-reader
+//! merging, allele unification, INFO rules, and gVCF mode remain tracked in
+//! `TODO.md`.
 
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
@@ -29,6 +30,7 @@ Options:\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
+        --no-index                  Accepted for command-shape compatibility in this text slice\n\
         --no-version                Accepted for command-shape compatibility\n\
 \n";
 
@@ -59,6 +61,13 @@ struct VcfInput {
 struct RecordLine {
     fixed: Vec<String>,
     samples: Vec<String>,
+}
+
+#[derive(Debug)]
+struct MergedSite {
+    fixed: Vec<String>,
+    samples_by_input: Vec<Option<Vec<String>>>,
+    order: usize,
 }
 
 #[derive(Debug)]
@@ -112,6 +121,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 output_kind = parse_output_kind(&next_string(&mut iter, raw.as_ref())?)?
             }
             "--force-samples" => force_samples = true,
+            "--no-index" => {}
             "--no-version" => {}
             _ if raw.starts_with("--file-list=") => {
                 file_list = Some(PathBuf::from(value_after_equals(&raw)))
@@ -312,11 +322,7 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
         }
     }
 
-    let mut out = String::new();
-    for line in &first.meta {
-        out.push_str(line);
-        out.push('\n');
-    }
+    let mut out = render_meta_with_pass_filter(&first.meta);
     out.push_str(&first.fixed_header.join("\t"));
     if !sample_names.is_empty() {
         out.push('\t');
@@ -324,14 +330,7 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
     }
     out.push('\n');
 
-    let nrecords = first.records.len();
     for input in &inputs[1..] {
-        if input.records.len() != nrecords {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "all inputs must contain the same number of records in this local merge slice",
-            ));
-        }
         if input.fixed_header[..input.fixed_header.len().min(9)] != first.fixed_header {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -340,31 +339,22 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
         }
     }
 
-    for idx in 0..nrecords {
-        let base = &first.records[idx];
-        let mut samples = base.samples.clone();
-        for input in &inputs[1..] {
-            let record = &input.records[idx];
-            if record.fixed != base.fixed {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "record mismatch at input record {}: expected {}:{} {}>{}, found {}:{} {}>{}",
-                        idx + 1,
-                        base.fixed[0],
-                        base.fixed[1],
-                        base.fixed[3],
-                        base.fixed[4],
-                        record.fixed[0],
-                        record.fixed[1],
-                        record.fixed[3],
-                        record.fixed[4],
-                    ),
-                ));
+    let mut sites = collect_sites(inputs)?;
+    let contigs = contig_order(&first.meta);
+    sites.sort_by(|a, b| compare_sites(a, b, &contigs));
+
+    for site in sites {
+        let mut samples = Vec::new();
+        for (input_idx, input) in inputs.iter().enumerate() {
+            match &site.samples_by_input[input_idx] {
+                Some(values) => samples.extend(values.iter().cloned()),
+                None => {
+                    let missing = missing_sample_value(&site.fixed);
+                    samples.extend(std::iter::repeat_n(missing, input.samples.len()));
+                }
             }
-            samples.extend(record.samples.iter().cloned());
         }
-        out.push_str(&base.fixed.join("\t"));
+        out.push_str(&site.fixed.join("\t"));
         if !samples.is_empty() {
             out.push('\t');
             out.push_str(&samples.join("\t"));
@@ -373,6 +363,135 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
     }
 
     Ok(out)
+}
+
+fn render_meta_with_pass_filter(meta: &[String]) -> String {
+    let has_pass = meta
+        .iter()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
+    let mut out = String::new();
+    let mut inserted = false;
+    for line in meta {
+        out.push_str(line);
+        out.push('\n');
+        if !inserted && !has_pass && line.starts_with("##fileformat=") {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            inserted = true;
+        }
+    }
+    if !inserted && !has_pass {
+        out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+    }
+    out
+}
+
+fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
+    let mut sites: Vec<MergedSite> = Vec::new();
+    let mut by_key = HashMap::new();
+
+    for (input_idx, input) in inputs.iter().enumerate() {
+        for record in &input.records {
+            let key = site_key(record);
+            if let Some(site_idx) = by_key.get(&key).copied() {
+                let site: &mut MergedSite = &mut sites[site_idx];
+                if record.fixed != site.fixed {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "conflicting records at {}:{} require full merge semantics",
+                            record.fixed[0], record.fixed[1]
+                        ),
+                    ));
+                }
+                if site.samples_by_input[input_idx].is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "duplicate record at {}:{}",
+                            record.fixed[0], record.fixed[1]
+                        ),
+                    ));
+                }
+                site.samples_by_input[input_idx] = Some(record.samples.clone());
+            } else {
+                let mut samples_by_input = vec![None; inputs.len()];
+                samples_by_input[input_idx] = Some(record.samples.clone());
+                by_key.insert(key, sites.len());
+                sites.push(MergedSite {
+                    fixed: record.fixed.clone(),
+                    samples_by_input,
+                    order: sites.len(),
+                });
+            }
+        }
+    }
+
+    Ok(sites)
+}
+
+fn site_key(record: &RecordLine) -> String {
+    record
+        .fixed
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
+fn contig_order(meta: &[String]) -> HashMap<String, usize> {
+    let mut order = HashMap::new();
+    for line in meta {
+        if let Some(rest) = line.strip_prefix("##contig=<ID=") {
+            let id = rest.split([',', '>']).next().unwrap_or("").to_owned();
+            if !id.is_empty() && !order.contains_key(&id) {
+                order.insert(id, order.len());
+            }
+        }
+    }
+    order
+}
+
+fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize>) -> Ordering {
+    let a_chrom = a.fixed.first().map(String::as_str).unwrap_or("");
+    let b_chrom = b.fixed.first().map(String::as_str).unwrap_or("");
+    match (contigs.get(a_chrom).copied(), contigs.get(b_chrom).copied()) {
+        (Some(a_idx), Some(b_idx)) => a_idx.cmp(&b_idx),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a_chrom.cmp(b_chrom),
+    }
+    .then_with(|| {
+        let a_pos = a
+            .fixed
+            .get(1)
+            .and_then(|pos| pos.parse::<u64>().ok())
+            .unwrap_or(0);
+        let b_pos = b
+            .fixed
+            .get(1)
+            .and_then(|pos| pos.parse::<u64>().ok())
+            .unwrap_or(0);
+        a_pos.cmp(&b_pos)
+    })
+    .then_with(|| a.fixed.get(2).cmp(&b.fixed.get(2)))
+    .then_with(|| a.fixed.get(3).cmp(&b.fixed.get(3)))
+    .then_with(|| a.fixed.get(4).cmp(&b.fixed.get(4)))
+    .then_with(|| a.order.cmp(&b.order))
+}
+
+fn missing_sample_value(fixed: &[String]) -> String {
+    let Some(format) = fixed.get(8) else {
+        return ".".to_owned();
+    };
+    if format == "." || format.is_empty() {
+        return ".".to_owned();
+    }
+    format
+        .split(':')
+        .map(|key| if key == "GT" { "./." } else { "." })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn write_output(bytes: &[u8], args: &Args) -> io::Result<()> {
