@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #68 (`progress/isecgt`, merge commit `549ad56`)
+  landed `+isecGT` — local text-backed two-input genotype comparison,
+  sample-name remapping, and missing-GT rewrite, with synthetic Rust
+  integration coverage because upstream has no dedicated fixture row.
 - 2026-05-17: PR #67 (`progress/split`, merge commit `1611123`)
   landed `+split` — per-sample / per-group VCF splitting by default,
   `-S` sample files, `-G` group files, and `-k` INFO/FORMAT projection,
@@ -339,14 +343,13 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/isecgt`, single-branch directive satisfied):
-  the local text-backed `+isecGT` slice — compare two VCF/BCF inputs,
-  map samples by name, and set non-identical genotypes in the first file
-  to missing, with VCF text and BGZF VCF output. Upstream has no dedicated
-  `test.pl` fixture for this plugin, so coverage is synthetic Rust
-  integration tests plus unit tests. Full synced-reader region/target
-  and output-index behavior remains pending. This branch brings the
-  in-process plugin total to 30 of 41.
+- In-flight (branch `progress/frameshifts`, single-branch directive
+  satisfied): the local `+frameshifts` slice — required `-- -e EXONS`,
+  simple BED-like exon parsing, per-ALT `INFO/OOF` annotation for simple
+  insertion/deletion alleles, and VCF text/BGZF VCF output. Upstream has no
+  dedicated `test.pl` fixture row for this plugin, so coverage is synthetic
+  Rust integration tests plus unit tests. This branch brings the in-process
+  plugin total to 31 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -377,7 +380,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 30 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT` |
+| `plugin` | registry + 31 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -659,7 +662,7 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#67 + `progress/isecgt`): 30 plugins
+Implemented so far (PRs #45–#68 + `progress/frameshifts`): 31 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
@@ -667,7 +670,7 @@ under `crates/bcftools-rs/src/commands/plugins/` —
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
 `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`,
-`fill-from-fasta`, `scatter`, `split`, `isecGT`. Every implemented plugin
+`fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`. Every implemented plugin
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -690,7 +693,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 11 remaining unimplemented plugins and many still-open plugin
+dump). The 10 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1079,6 +1082,18 @@ Current local slice:
   Remaining: true `bcf_sr_t` synced-reader pairing/collapse behavior,
   `-r/-R/-t/-T` restriction, BCF output parity edge cases, `-W`
   indexing, and output threading.
+- [x] `+frameshifts` (`crates/bcftools-rs/src/commands/plugins/frameshifts.rs`):
+  local slice of `frameshifts.c`. Requires `-- -e EXONS`, parses simple
+  BED-like exon files, and annotates simple insertion/deletion alleles
+  with `INFO/OOF` values (out-of-frame `1`, in-frame `0`, not-applicable
+  `-1`) while preserving existing INFO fields. Supports VCF text output
+  and `-Oz` BGZF VCF output through the shared plugin writer. Upstream
+  has no dedicated `test.pl` fixture row for `+frameshifts`; covered by
+  2 synthetic integration tests in
+  `crates/bcftools-rs/tests/plugin_frameshifts.rs` + 2 unit tests.
+  Remaining: exact `bcf_sr_regions_t` parser parity for compressed/indexed
+  exon lists, complex/symbolic allele edge cases, BCF output parity edge
+  cases, `-W` indexing, and output threading.
 
 Grouped roughly by complexity / shared dependencies:
 
