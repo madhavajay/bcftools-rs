@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #73 (`progress/filter-format-indexes`, merge commit
+  `f4803d0`) landed FORMAT sample/value subscripts in shared filter
+  evaluation — `TAG[:value]`, `TAG[sample:]`, `TAG[sample:value]`, and
+  existing `TAG[*]` behavior over text-backed FORMAT vectors, with
+  byte-for-byte `filter.{20,21,22,23}.out` coverage.
 - 2026-05-17: PR #72 (`progress/filter-gt-literals`, merge commit
   `a08cf9f`) landed bcftools GT class literals in shared filter evaluation —
   `A`, `R`, `RR`, `RA`, `AR`, `AA`, `aA`, `Aa`, `HOM`, `HET`, and `HAP`,
@@ -358,14 +363,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`a08cf9f`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`f4803d0`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/filter-format-indexes`, single-branch directive
-  satisfied): a narrow shared filter-engine / `filter` command slice for
-  FORMAT sample/value subscripts. Adds `TAG[:value]`, `TAG[sample:]`,
-  `TAG[sample:value]`, and existing `TAG[*]` behavior over text-backed
-  FORMAT vectors, with upstream `filter.{20,21,22,23}.out` coverage for
-  `AD[:1]=11`, `AD[1:]=11`, `FR[0:1]=11`, and `AD[*]="."`.
+- No code slice is in flight after PR #73. The next branch should pick one
+  local-only item from the queue below, keep the one-branch rule, run the
+  full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -376,8 +378,7 @@ Latest landed progress:
   support for haploid missing `GT=.` and the out-of-range/missing typed-value
   blockers listed at the end of this file.
 
-Subcommand coverage at a glance (CLI dispatcher state; plugin rows reflect
-branch `progress/filter-format-indexes`):
+Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 | Subcommand | Status | Module / notes |
 | --- | --- | --- |
@@ -407,17 +408,17 @@ branch `progress/filter-format-indexes`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-28 of 41 plugin record-processing implementations done (see Wave F);
+32 of 41 plugin record-processing implementations done (see Wave F);
 13 remain.
 
 Current whole-project estimate:
 
-- 2026-05-17 (post `+scatter`, PR #66 landed; no open PR):
-  approximately 47-50% complete toward the full stated goal. Movement
-  since the prior estimate is `+scatter` (split a VCF into multiple
-  VCFs by `-n` chunks or `-s`/`-S` regions, `-x` extra) verified
-  byte-for-byte against `scatter.1.{1,2,3}.out`. 28 of 41 plugins
-  done.
+- 2026-05-17 (post FORMAT subscript filter slice, PR #73 landed; no open PR):
+  approximately 50-53% complete toward the full stated goal. Movement since
+  the prior estimate includes `+split`, `+isecGT`, `+frameshifts`,
+  `+check-sparsity`, and three shared filter-engine / `filter` slices covering
+  FORMAT vector predicates, GT class literals, and FORMAT sample/value
+  subscripts. 32 of 41 plugins done.
 - 2026-05-16 (post `+trio-switch-rate`, PR #58 landed): approximately
   38-41% complete toward the full stated goal. Movement since the prior
   estimate is `+trio-switch-rate` (PED-trio phase-switch rate) verified
@@ -678,7 +679,7 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#69 + `progress/check-sparsity`): 32 plugins
+Implemented so far (PRs #45–#70): 32 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
