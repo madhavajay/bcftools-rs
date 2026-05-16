@@ -19,6 +19,7 @@ pub enum Token {
     RightParen,
     LeftBracket,
     RightBracket,
+    Colon,
     Comma,
 }
 
@@ -44,6 +45,11 @@ pub enum Expr {
         expr: Box<Expr>,
         index: Box<Expr>,
     },
+    FormatIndex {
+        expr: Box<Expr>,
+        sample: Option<Box<Expr>>,
+        value: Option<Box<Expr>>,
+    },
     Wildcard,
 }
 
@@ -65,6 +71,10 @@ impl Value {
             Self::String(value) => !value.is_empty() && value != ".",
             Self::List(values) => values.iter().any(Self::truthy),
         }
+    }
+
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
     }
 
     fn as_number(&self) -> Option<f64> {
@@ -161,7 +171,7 @@ impl EvalContext {
         let key = name
             .strip_prefix("FMT/")
             .or_else(|| name.strip_prefix("FORMAT/"))
-            .or_else(|| name.eq_ignore_ascii_case("GT").then_some("GT"))?;
+            .unwrap_or(name);
         if self.sample_values.is_empty() {
             return None;
         }
@@ -275,6 +285,7 @@ pub fn lex(expression: &str) -> io::Result<Vec<Token>> {
             ')' => tokens.push(Token::RightParen),
             '[' => tokens.push(Token::LeftBracket),
             ']' => tokens.push(Token::RightBracket),
+            ':' => tokens.push(Token::Colon),
             ',' => tokens.push(Token::Comma),
             '"' | '\'' => tokens.push(Token::String(read_quoted(expression, &mut chars, ch)?)),
             ch if is_identifier_start(ch) => {
@@ -462,6 +473,27 @@ fn eval_with_trace(
                 _ => Ok(Value::Missing),
             }
         }
+        Expr::FormatIndex {
+            expr,
+            sample,
+            value,
+        } => {
+            let vector = eval_with_trace(expr, context, resolver, trace.as_deref_mut())?;
+            let sample = match sample {
+                Some(expr) => Some(eval_with_trace(
+                    expr,
+                    context,
+                    resolver,
+                    trace.as_deref_mut(),
+                )?),
+                None => None,
+            };
+            let value = match value {
+                Some(expr) => Some(eval_with_trace(expr, context, resolver, trace)?),
+                None => None,
+            };
+            Ok(format_index(vector, sample.as_ref(), value.as_ref()))
+        }
     }
 }
 
@@ -500,7 +532,35 @@ fn resolve_identifier(
         return value;
     }
 
-    if context.active_sample.is_none()
+    let prefixed_format = name.starts_with("FMT/") || name.starts_with("FORMAT/");
+    if prefixed_format
+        && context.active_sample.is_none()
+        && let Some(values) = context.sample_vector_value(name)
+    {
+        source = LookupSource::SampleContext;
+        if let Some(trace) = trace {
+            trace.lookups.push(LookupRequest {
+                name: name.to_string(),
+                sample_index: None,
+                source,
+            });
+        }
+        return values;
+    }
+
+    let mut external = None;
+    if let Some(value) = resolver(name, None) {
+        source = LookupSource::External;
+        if !value.is_missing() {
+            external = Some(value);
+        } else {
+            external = Some(Value::Missing);
+        }
+    }
+
+    if !prefixed_format
+        && context.active_sample.is_none()
+        && external.as_ref().is_none_or(Value::is_missing)
         && let Some(values) = context.sample_vector_value(name)
     {
         source = LookupSource::SampleContext;
@@ -528,8 +588,7 @@ fn resolve_identifier(
         return value;
     }
 
-    if let Some(external) = resolver(name, None) {
-        source = LookupSource::External;
+    if let Some(external) = external {
         value = Some(external);
     }
 
@@ -542,6 +601,46 @@ fn resolve_identifier(
     }
 
     value.unwrap_or(Value::Missing)
+}
+
+fn format_index(vector: Value, sample: Option<&Value>, value: Option<&Value>) -> Value {
+    let samples = match sample {
+        Some(Value::String(index)) if index == "*" => values_from_list(vector),
+        Some(index) => select_index(values_from_list(vector), index),
+        None => values_from_list(vector),
+    };
+
+    let mut out = Vec::new();
+    for sample_value in samples {
+        match value {
+            Some(Value::String(index)) if index == "*" => {
+                out.extend(values_from_list(sample_value))
+            }
+            Some(index) => out.extend(select_index(values_from_list(sample_value), index)),
+            None => out.push(sample_value),
+        }
+    }
+
+    if out.len() == 1 {
+        out.pop().unwrap_or(Value::Missing)
+    } else {
+        Value::List(out)
+    }
+}
+
+fn values_from_list(value: Value) -> Vec<Value> {
+    match value {
+        Value::List(values) => values,
+        value => vec![value],
+    }
+}
+
+fn select_index(values: Vec<Value>, index: &Value) -> Vec<Value> {
+    let Ok(index) = number(index) else {
+        return vec![Value::Missing];
+    };
+    let index = index as usize;
+    vec![values.get(index).cloned().unwrap_or(Value::Missing)]
 }
 
 fn eval_binary(
@@ -1159,12 +1258,42 @@ impl Parser {
 
         loop {
             if self.consume(&Token::LeftBracket) {
-                let index = self.parse_expr(0)?;
-                self.expect(Token::RightBracket)?;
-                lhs = Expr::Index {
-                    expr: Box::new(lhs),
-                    index: Box::new(index),
-                };
+                if self.consume(&Token::Colon) {
+                    let value = if self.consume(&Token::RightBracket) {
+                        None
+                    } else {
+                        let expr = self.parse_expr(0)?;
+                        self.expect(Token::RightBracket)?;
+                        Some(Box::new(expr))
+                    };
+                    lhs = Expr::FormatIndex {
+                        expr: Box::new(lhs),
+                        sample: None,
+                        value,
+                    };
+                } else {
+                    let first = self.parse_expr(0)?;
+                    if self.consume(&Token::Colon) {
+                        let value = if self.consume(&Token::RightBracket) {
+                            None
+                        } else {
+                            let expr = self.parse_expr(0)?;
+                            self.expect(Token::RightBracket)?;
+                            Some(Box::new(expr))
+                        };
+                        lhs = Expr::FormatIndex {
+                            expr: Box::new(lhs),
+                            sample: Some(Box::new(first)),
+                            value,
+                        };
+                    } else {
+                        self.expect(Token::RightBracket)?;
+                        lhs = Expr::Index {
+                            expr: Box::new(lhs),
+                            index: Box::new(first),
+                        };
+                    }
+                }
                 continue;
             }
 
@@ -1745,6 +1874,48 @@ mod tests {
         let diploid_context = EvalContext::new().with_sample([("GT", Value::String("0/1".into()))]);
         assert_eq!(
             eval_expression(r#"GT="HAP""#, &diploid_context).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn evaluates_format_sample_and_value_subscripts() {
+        let context = EvalContext::new()
+            .with_sample([
+                (
+                    "AD",
+                    Value::List(vec![Value::Number(1.0), Value::Number(11.0)]),
+                ),
+                (
+                    "FR",
+                    Value::List(vec![Value::Number(1.0), Value::Number(11.0)]),
+                ),
+            ])
+            .with_sample([
+                (
+                    "AD",
+                    Value::List(vec![Value::Number(2.0), Value::Number(11.0)]),
+                ),
+                (
+                    "FR",
+                    Value::List(vec![Value::Number(2.0), Value::Number(12.0)]),
+                ),
+            ]);
+
+        assert_eq!(
+            eval_expression("AD[:1]=11", &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression("AD[1:]=11", &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression("FR[0:1]=11", &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression("FR[1:1]=11", &context).unwrap(),
             Value::Bool(false)
         );
     }

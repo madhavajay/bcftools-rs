@@ -770,6 +770,31 @@ fn filter_gt_special_literals_match_upstream_fixtures() {
     }
 }
 
+#[test]
+fn filter_format_subscripts_match_upstream_fixtures() {
+    for (expr, tag, fixture) in [
+        ("AD[:1]=11", "AD", "filter.20.out"),
+        ("AD[1:]=11", "AD", "filter.21.out"),
+        ("FR[0:1]=11", "FR", "filter.22.out"),
+        ("AD[*]=\".\"", "AD", "filter.23.out"),
+    ] {
+        let expected = std::fs::read_to_string(format!("../../bcftools/test/{fixture}")).unwrap();
+        let (out, err, code) = run(&[
+            "filter",
+            "--no-version",
+            "-i",
+            expr,
+            "../../bcftools/test/filter.5.vcf",
+        ]);
+        assert_eq!(code, 0, "filter -i {expr} failed: {err}");
+        assert_eq!(
+            render_pos_and_format(&out, tag),
+            expected,
+            "expression {expr}"
+        );
+    }
+}
+
 fn render_pos_and_gts(vcf: &str) -> String {
     let mut out = String::new();
     for line in vcf.lines().filter(|line| !line.starts_with('#')) {
@@ -781,6 +806,27 @@ fn render_pos_and_gts(vcf: &str) -> String {
         for sample in &fields[9..] {
             out.push('\t');
             out.push_str(sample.split(':').next().unwrap_or(sample));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn render_pos_and_format(vcf: &str, tag: &str) -> String {
+    let mut out = String::new();
+    for line in vcf.lines().filter(|line| !line.starts_with('#')) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 10 {
+            continue;
+        }
+        let format_index = fields[8].split(':').position(|key| key == tag);
+        out.push_str(fields[1]);
+        for sample in &fields[9..] {
+            let value = format_index
+                .and_then(|index| sample.split(':').nth(index))
+                .unwrap_or(".");
+            out.push('\t');
+            out.push_str(value);
         }
         out.push('\n');
     }
