@@ -777,6 +777,8 @@ fn filter_format_subscripts_match_upstream_fixtures() {
         ("AD[1:]=11", "AD", "filter.21.out"),
         ("FR[0:1]=11", "FR", "filter.22.out"),
         ("AD[*]=\".\"", "AD", "filter.23.out"),
+        ("AD[0:0]==\".\"", "AD", "filter.24.out"),
+        ("AD[0:0]!=\".\"", "AD", "filter.25.out"),
     ] {
         let expected = std::fs::read_to_string(format!("../../bcftools/test/{fixture}")).unwrap();
         let (out, err, code) = run(&[
@@ -795,6 +797,36 @@ fn filter_format_subscripts_match_upstream_fixtures() {
     }
 }
 
+#[test]
+fn filter_missing_qual_matches_upstream_fixture() {
+    let expected = std::fs::read_to_string("../../bcftools/test/filter.26.out").unwrap();
+    let (out, err, code) = run(&[
+        "filter",
+        "--no-version",
+        "-i",
+        "QUAL==\".\"",
+        "../../bcftools/test/filter.5.vcf",
+    ]);
+    assert_eq!(code, 0, "filter -i QUAL==. failed: {err}");
+    assert_eq!(render_pos_and_qual(&out), expected);
+}
+
+#[test]
+fn filter_snp_gap_type_list_matches_upstream_filter_29_fixture() {
+    let expected = std::fs::read_to_string("../../bcftools/test/filter.29.out").unwrap();
+    let (out, err, code) = run(&[
+        "filter",
+        "--no-version",
+        "-mx",
+        "-s",
+        "+",
+        "-g2:mnp,indel,other",
+        "../../bcftools/test/filter.7.vcf",
+    ]);
+    assert_eq!(code, 0, "filter.29 fixture command failed: {err}");
+    assert_eq!(out, expected);
+}
+
 fn render_pos_and_gts(vcf: &str) -> String {
     let mut out = String::new();
     for line in vcf.lines().filter(|line| !line.starts_with('#')) {
@@ -807,6 +839,21 @@ fn render_pos_and_gts(vcf: &str) -> String {
             out.push('\t');
             out.push_str(sample.split(':').next().unwrap_or(sample));
         }
+        out.push('\n');
+    }
+    out
+}
+
+fn render_pos_and_qual(vcf: &str) -> String {
+    let mut out = String::new();
+    for line in vcf.lines().filter(|line| !line.starts_with('#')) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 6 {
+            continue;
+        }
+        out.push_str(fields[1]);
+        out.push('\t');
+        out.push_str(fields[5]);
         out.push('\n');
     }
     out
