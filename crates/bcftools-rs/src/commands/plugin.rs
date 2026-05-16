@@ -151,7 +151,7 @@ const PLUGINS: &[Plugin] = &[
     },
     Plugin {
         name: "isecGT",
-        about: "Collect genotype intersection counts.",
+        about: "Set genotypes absent from a second file to missing.",
     },
     Plugin {
         name: "mendelian2",
@@ -983,6 +983,24 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         };
         let report = gtisec::run(Path::new(&input), flag, &tail)?;
         io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "isecGT" {
+        let Some(path_a) = input.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "isecGT requires two input files",
+            ));
+        };
+        let Some(path_b) = extra.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "isecGT requires two input files",
+            ));
+        };
+        let vcf = crate::commands::plugins::isecgt::run(Path::new(path_a), Path::new(path_b))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

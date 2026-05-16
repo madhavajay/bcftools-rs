@@ -21,6 +21,7 @@ pub mod gtisec;
 pub mod gtsubset;
 pub mod guess_ploidy;
 pub mod indel_stats;
+pub mod isecgt;
 pub mod mendelian2;
 pub mod missing2ref;
 pub mod parental_origin;
