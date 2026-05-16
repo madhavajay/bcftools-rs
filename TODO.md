@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #75 (`progress/filter-missing-subscripts`, merge commit
+  `41c7b73`) tightened text-backed `filter` parity for missing subscript /
+  QUAL comparisons and SnpGap type-list matching — byte-for-byte
+  `filter.{24,25,26}.out` plus `filter.29.out` text coverage, including
+  symbolic deletion spans from `INFO/END`.
 - 2026-05-17: PR #73 (`progress/filter-format-indexes`, merge commit
   `f4803d0`) landed FORMAT sample/value subscripts in shared filter
   evaluation — `TAG[:value]`, `TAG[sample:]`, `TAG[sample:value]`, and
@@ -363,9 +368,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`f4803d0`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`41c7b73`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #73. The next branch should pick one
+- No code slice is in flight after PR #75. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
