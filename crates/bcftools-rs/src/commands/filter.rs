@@ -593,9 +593,15 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
     let text = read_vcf_text(&args.input)?;
     let original_header = extract_header(&text);
     let body = &text[original_header.len()..];
+    let soft_filter_tag =
+        if args.include_expr.is_some() || args.exclude_expr.is_some() || !args.mask.is_empty() {
+            args.soft_filter.as_deref()
+        } else {
+            None
+        };
     let header_text = ensure_filter_header(
         &original_header,
-        args.soft_filter.as_deref(),
+        soft_filter_tag,
         args.include_expr.as_deref(),
         args.exclude_expr.as_deref(),
     );
@@ -734,14 +740,23 @@ fn ensure_named_filter_header(header: &str, id: &str, description: &str) -> Stri
     }
     let mut out = String::new();
     let mut inserted = false;
+    let mut pass_inserted = header
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
     for line in header.split_inclusive('\n') {
+        out.push_str(line);
+        if !pass_inserted && line.starts_with("##fileformat=") {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            pass_inserted = true;
+        }
         if !inserted && line.starts_with("#CHROM\t") {
+            let chrom_line = out.split_off(out.len() - line.len());
             out.push_str(&format!(
                 "##FILTER=<ID={id},Description=\"{description}\">\n"
             ));
+            out.push_str(&chrom_line);
             inserted = true;
         }
-        out.push_str(line);
     }
     out
 }
@@ -982,7 +997,10 @@ impl RecordMeta {
             .split(',')
             .filter(|alt| *alt != ".")
             .collect();
-        let end = pos + reference.len().saturating_sub(1) as i64;
+        let end = fields
+            .get(7)
+            .and_then(|info| info_end(info))
+            .unwrap_or_else(|| pos + reference.len().saturating_sub(1) as i64);
         let qual = fields.get(5).and_then(|value| value.parse::<f64>().ok());
         let first_alt_ac = first_alt_allele_count(&fields);
         let kind = classify_variant(reference, &alts);
@@ -1091,8 +1109,10 @@ fn intervals_within(a_start: i64, a_end: i64, b_start: i64, b_end: i64, distance
 fn classify_variant(reference: &str, alts: &[&str]) -> VariantKind {
     let mut kind = None;
     for alt in alts {
-        let alt_kind = if alt.starts_with('<') || alt.contains('[') || alt.contains(']') {
+        let alt_kind = if alt.contains('[') || alt.contains(']') {
             VariantKind::Bnd
+        } else if let Some(symbolic_kind) = classify_symbolic_alt(alt) {
+            symbolic_kind
         } else if reference.len() == 1 && alt.len() == 1 {
             VariantKind::Snp
         } else if reference.len() == alt.len() {
@@ -1109,6 +1129,27 @@ fn classify_variant(reference: &str, alts: &[&str]) -> VariantKind {
         };
     }
     kind.unwrap_or(VariantKind::Other)
+}
+
+fn info_end(info: &str) -> Option<i64> {
+    info.split(';').find_map(|entry| {
+        let (key, value) = entry.split_once('=')?;
+        if key == "END" {
+            value.parse::<i64>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+fn classify_symbolic_alt(alt: &str) -> Option<VariantKind> {
+    let inner = alt.strip_prefix('<')?.strip_suffix('>')?;
+    let base = inner.split(':').next().unwrap_or(inner);
+    Some(match base.to_ascii_uppercase().as_str() {
+        "BND" => VariantKind::Bnd,
+        "DEL" | "INS" | "DUP" | "CNV" => VariantKind::Indel,
+        _ => VariantKind::Other,
+    })
 }
 
 fn first_alt_allele_count(fields: &[&str]) -> Option<i64> {
