@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #81 (`progress/merge-force-single`, merge commit
+  `d4491ca`) added `merge --force-single` command-shape compatibility and
+  byte-for-byte `merge.LPL.0.out` text coverage while preserving default
+  single-input rejection.
 - 2026-05-17: PR #79 (`progress/merge-missing-sites-slice`, merge commit
   `8fb3c4d`) extended the local text-backed `merge` slice to simple sorted
   exact-site unions with missing FORMAT sample synthesis, `--no-index`
@@ -378,9 +382,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`8fb3c4d`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`d4491ca`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #79. The next branch should pick one
+- No code slice is in flight after PR #81. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
