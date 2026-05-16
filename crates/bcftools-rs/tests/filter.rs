@@ -727,6 +727,23 @@ fn filter_missing_fraction_matches_upstream_filter_28_fixture() {
 }
 
 #[test]
+fn filter_single_amp_pipe_and_set_gts_match_upstream_filter_2_fixture() {
+    let expected = std::fs::read_to_string("../../bcftools/test/filter.2.out").unwrap();
+    let (out, err, code) = run(&[
+        "filter",
+        "--no-version",
+        "-e",
+        "QUAL==59.2 || (INDEL=0 & (FMT/GQ=25 | FMT/DP=10))",
+        "-sModified",
+        "-S.",
+        "../../bcftools/test/filter.2.vcf",
+    ]);
+
+    assert_eq!(code, 0, "filter.2 fixture command failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn filter_no_args_prints_usage() {
     let (_out, err, code) = run(&["filter"]);
     assert_ne!(code, 0);

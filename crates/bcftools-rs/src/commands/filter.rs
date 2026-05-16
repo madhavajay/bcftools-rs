@@ -322,6 +322,19 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--threads=") => {
                 thread_count = parse_threads(value_after_equals(&raw))?
             }
+            _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-e") && raw.len() > 2 => exclude_expr = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-g") && raw.len() > 2 => {
+                snp_gap = Some(parse_snp_gap(&raw[2..])?)
+            }
+            _ if raw.starts_with("-G") && raw.len() > 2 => {
+                indel_gap = Some(parse_indel_gap(&raw[2..])?)
+            }
+            _ if raw.starts_with("-s") && raw.len() > 2 => soft_filter = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-S") && raw.len() > 2 => {
+                set_gts = Some(parse_set_gts(&raw[2..])?)
+            }
+            _ if raw.starts_with("-m") && raw.len() > 2 => set_mode(&mut mode, &raw[2..])?,
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?
             }
@@ -580,7 +593,12 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
     let text = read_vcf_text(&args.input)?;
     let original_header = extract_header(&text);
     let body = &text[original_header.len()..];
-    let header_text = ensure_filter_header(&original_header, args.soft_filter.as_deref());
+    let header_text = ensure_filter_header(
+        &original_header,
+        args.soft_filter.as_deref(),
+        args.include_expr.as_deref(),
+        args.exclude_expr.as_deref(),
+    );
     let header_text = ensure_gap_headers(&header_text, args);
     let header_text = if args.no_version {
         header_text
@@ -610,9 +628,10 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
             } else {
                 None
             };
-            let mut pass = match &sample_passes {
-                Some(passes) => passes.iter().any(|passed| *passed),
-                None => evaluate(&fields, args)?,
+            let mut pass = match (&sample_passes, args.soft_filter.as_deref()) {
+                (Some(passes), Some(_)) => passes.iter().all(|passed| *passed),
+                (Some(passes), None) => passes.iter().any(|passed| *passed),
+                (None, _) => evaluate(&fields, args)?,
             };
             if !args.mask.is_empty() {
                 let masked = record_overlaps_mask(&fields, &args.mask, args.mask_overlap);
@@ -851,6 +870,10 @@ pub(crate) fn record_lookup(token: &str, fields: &[String]) -> Option<FilterValu
                 .or(Some(FilterValue::Missing)),
         },
         "FILTER" => Some(FilterValue::String(fields[6].clone())),
+        "INDEL" => match info_value(&upper, fields.get(7)?.as_str()) {
+            Some(FilterValue::Missing) => Some(FilterValue::Bool(false)),
+            value => value,
+        },
         _ => info_value(&upper, fields.get(7)?.as_str()),
     }
 }
@@ -1303,7 +1326,12 @@ fn extract_header(text: &str) -> String {
     out
 }
 
-fn ensure_filter_header(header: &str, tag: Option<&str>) -> String {
+fn ensure_filter_header(
+    header: &str,
+    tag: Option<&str>,
+    include_expr: Option<&str>,
+    exclude_expr: Option<&str>,
+) -> String {
     let Some(tag) = tag else {
         return header.to_owned();
     };
@@ -1311,18 +1339,38 @@ fn ensure_filter_header(header: &str, tag: Option<&str>) -> String {
     if header.lines().any(|l| l.starts_with(&needle)) {
         return header.to_owned();
     }
+    let description = if let Some(expr) = exclude_expr {
+        format!("Set if true: {}", escape_header_description(expr))
+    } else if let Some(expr) = include_expr {
+        format!("Set if not true: {}", escape_header_description(expr))
+    } else {
+        "Set if not true: filter expression".to_owned()
+    };
     let mut out = String::new();
     let mut inserted = false;
+    let mut pass_inserted = header
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
     for line in header.split_inclusive('\n') {
+        out.push_str(line);
+        if !pass_inserted && line.starts_with("##fileformat=") {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            pass_inserted = true;
+        }
         if !inserted && line.starts_with("#CHROM\t") {
+            let chrom_line = out.split_off(out.len() - line.len());
             out.push_str(&format!(
-                "##FILTER=<ID={tag},Description=\"Set if not true: filter expression\">\n"
+                "##FILTER=<ID={tag},Description=\"{description}\">\n"
             ));
+            out.push_str(&chrom_line);
             inserted = true;
         }
-        out.push_str(line);
     }
     out
+}
+
+fn escape_header_description(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn add_version_header(header: &str, argv: &[OsString]) -> String {

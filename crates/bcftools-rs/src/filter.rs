@@ -157,6 +157,21 @@ impl EvalContext {
             .cloned()
     }
 
+    fn sample_vector_value(&self, name: &str) -> Option<Value> {
+        let key = name
+            .strip_prefix("FMT/")
+            .or_else(|| name.strip_prefix("FORMAT/"))?;
+        if self.sample_values.is_empty() {
+            return None;
+        }
+        Some(Value::List(
+            self.sample_values
+                .iter()
+                .map(|values| values.get(key).cloned().unwrap_or(Value::Missing))
+                .collect(),
+        ))
+    }
+
     fn for_sample(&self, sample: usize) -> Self {
         let mut context = self.clone();
         context.active_sample = Some(sample);
@@ -311,10 +326,12 @@ pub fn lex(expression: &str) -> io::Result<Vec<Token>> {
                 chars.next();
                 tokens.push(Token::Operator(Operator::And));
             }
+            '&' => tokens.push(Token::Operator(Operator::And)),
             '|' if chars.peek().is_some_and(|&(_, next)| next == '|') => {
                 chars.next();
                 tokens.push(Token::Operator(Operator::Or));
             }
+            '|' => tokens.push(Token::Operator(Operator::Or)),
             '+' => tokens.push(Token::Operator(Operator::Plus)),
             '-' => tokens.push(Token::Operator(Operator::Minus)),
             '~' => tokens.push(Token::Operator(Operator::Regex)),
@@ -480,6 +497,20 @@ fn resolve_identifier(
             });
         }
         return value;
+    }
+
+    if context.active_sample.is_none()
+        && let Some(values) = context.sample_vector_value(name)
+    {
+        source = LookupSource::SampleContext;
+        if let Some(trace) = trace {
+            trace.lookups.push(LookupRequest {
+                name: name.to_string(),
+                sample_index: None,
+                source,
+            });
+        }
+        return values;
     }
 
     if let Some(sample) = context.active_sample
@@ -1368,6 +1399,28 @@ mod tests {
     }
 
     #[test]
+    fn lexes_single_ampersand_and_pipe_as_boolean_operators() {
+        let tokens = lex(r#"FMT/GQ=25 | FMT/DP=10 & QUAL>30"#).unwrap();
+
+        assert_eq!(
+            tokens,
+            [
+                Token::Identifier("FMT/GQ".into()),
+                Token::Operator(Operator::Eq),
+                Token::Number("25".into()),
+                Token::Operator(Operator::Or),
+                Token::Identifier("FMT/DP".into()),
+                Token::Operator(Operator::Eq),
+                Token::Number("10".into()),
+                Token::Operator(Operator::And),
+                Token::Identifier("QUAL".into()),
+                Token::Operator(Operator::Gt),
+                Token::Number("30".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn lexes_indexing_not_regex_and_missing_value() {
         let tokens = lex(r#"TAG[0]!="." && ALT[*]!~"^<""#).unwrap();
 
@@ -1564,6 +1617,35 @@ mod tests {
         assert_eq!(
             eval_expression(r#"F_PASS(GT = "mis")"#, &context).unwrap(),
             Value::Number(1.0 / 3.0)
+        );
+    }
+
+    #[test]
+    fn evaluates_top_level_format_vectors_for_site_filters() {
+        let context = EvalContext::new()
+            .with("QUAL", Value::Number(60.0))
+            .with_sample([
+                ("GT", Value::String("0/1".into())),
+                ("DP", Value::Number(12.0)),
+                ("GQ", Value::Number(99.0)),
+            ])
+            .with_sample([
+                ("GT", Value::String("0/0".into())),
+                ("DP", Value::Number(3.0)),
+                ("GQ", Value::Number(25.0)),
+            ]);
+
+        assert_eq!(
+            eval_expression(r#"FMT/GQ=25 | FMT/DP=10"#, &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression(r#"FORMAT/DP>10 & QUAL>30"#, &context).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval_expression(r#"FMT/DP=4 | FMT/GQ=12"#, &context).unwrap(),
+            Value::Bool(false)
         );
     }
 
