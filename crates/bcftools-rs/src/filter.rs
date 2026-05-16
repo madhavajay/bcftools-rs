@@ -160,7 +160,8 @@ impl EvalContext {
     fn sample_vector_value(&self, name: &str) -> Option<Value> {
         let key = name
             .strip_prefix("FMT/")
-            .or_else(|| name.strip_prefix("FORMAT/"))?;
+            .or_else(|| name.strip_prefix("FORMAT/"))
+            .or_else(|| name.eq_ignore_ascii_case("GT").then_some("GT"))?;
         if self.sample_values.is_empty() {
             return None;
         }
@@ -628,7 +629,25 @@ fn expr_is_gt_special_literal(expr: &Expr) -> bool {
     let Expr::String(value) = expr else {
         return false;
     };
-    matches!(value.as_str(), "alt" | "ref" | "mis" | "het" | "hom")
+    matches!(
+        value.as_str(),
+        "alt"
+            | "ref"
+            | "mis"
+            | "het"
+            | "hom"
+            | "A"
+            | "R"
+            | "RR"
+            | "RA"
+            | "AR"
+            | "AA"
+            | "aA"
+            | "Aa"
+            | "HOM"
+            | "HET"
+            | "HAP"
+    )
 }
 
 fn eval_call(
@@ -998,28 +1017,74 @@ fn scalar_eq_with_gt_special(lhs: &Value, rhs: &Value) -> bool {
 }
 
 fn gt_special_matches(value: &str, rhs: &str) -> Option<bool> {
+    let alleles = gt_alleles(value).collect::<Vec<_>>();
     Some(match rhs {
-        "alt" => gt_alleles(value).any(|allele| allele != "." && allele != "0"),
-        "ref" => !value.is_empty() && gt_alleles(value).all(|allele| allele == "0"),
-        "mis" => gt_alleles(value).any(|allele| allele == "."),
-        "het" => {
-            let alleles = gt_alleles(value).collect::<Vec<_>>();
-            alleles
-                .first()
-                .is_some_and(|first| *first != "." && alleles.iter().any(|allele| allele != first))
+        "alt" => alleles
+            .iter()
+            .any(|allele| *allele != "." && *allele != "0"),
+        "ref" => !alleles.is_empty() && alleles.iter().all(|allele| *allele == "0"),
+        "mis" => alleles.contains(&"."),
+        "A" => gt_is_haploid_alt(&alleles),
+        "R" => gt_is_haploid_ref(&alleles),
+        "RR" => gt_is_diploid(&alleles) && alleles.iter().all(|allele| *allele == "0"),
+        "RA" | "AR" => {
+            gt_is_diploid(&alleles)
+                && alleles.contains(&"0")
+                && alleles
+                    .iter()
+                    .any(|allele| *allele != "." && *allele != "0")
         }
-        "hom" => {
-            let alleles = gt_alleles(value).collect::<Vec<_>>();
-            alleles
-                .first()
-                .is_some_and(|first| *first != "." && alleles.iter().all(|allele| allele == first))
+        "AA" => {
+            gt_is_diploid(&alleles)
+                && alleles
+                    .first()
+                    .is_some_and(|first| *first != "." && *first != "0")
+                && alleles.iter().all(|allele| *allele == alleles[0])
         }
+        "aA" | "Aa" => {
+            gt_is_diploid(&alleles)
+                && alleles
+                    .iter()
+                    .all(|allele| *allele != "." && *allele != "0")
+                && alleles
+                    .first()
+                    .is_some_and(|first| alleles.iter().any(|allele| allele != first))
+        }
+        "het" | "HET" => {
+            gt_is_diploid(&alleles)
+                && alleles.first().is_some_and(|first| {
+                    *first != "." && alleles.iter().any(|allele| allele != first)
+                })
+        }
+        "hom" | "HOM" => {
+            gt_is_diploid(&alleles)
+                && alleles.first().is_some_and(|first| {
+                    *first != "." && alleles.iter().all(|allele| allele == first)
+                })
+        }
+        "HAP" => gt_is_haploid(&alleles),
         _ => return None,
     })
 }
 
 fn gt_alleles(value: &str) -> impl Iterator<Item = &str> {
     value.split(['/', '|'])
+}
+
+fn gt_is_diploid(alleles: &[&str]) -> bool {
+    alleles.len() == 2
+}
+
+fn gt_is_haploid(alleles: &[&str]) -> bool {
+    alleles.len() == 1 && alleles[0] != "."
+}
+
+fn gt_is_haploid_alt(alleles: &[&str]) -> bool {
+    gt_is_haploid(alleles) && alleles[0] != "0"
+}
+
+fn gt_is_haploid_ref(alleles: &[&str]) -> bool {
+    gt_is_haploid(alleles) && alleles[0] == "0"
 }
 
 fn gt_is_missing_value(value: &Value) -> bool {
@@ -1645,6 +1710,41 @@ mod tests {
         );
         assert_eq!(
             eval_expression(r#"FMT/DP=4 | FMT/GQ=12"#, &context).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn evaluates_bcftools_gt_special_literals() {
+        let context = EvalContext::new()
+            .with_sample([("GT", Value::String("0/0".into()))])
+            .with_sample([("GT", Value::String("0/1".into()))])
+            .with_sample([("GT", Value::String("1/1".into()))])
+            .with_sample([("GT", Value::String("1/2".into()))])
+            .with_sample([("GT", Value::String("2".into()))]);
+
+        for (expr, expected) in [
+            (r#"GT="R""#, false),
+            (r#"GT="A""#, true),
+            (r#"GT="RR""#, true),
+            (r#"GT="RA""#, true),
+            (r#"GT="AR""#, true),
+            (r#"GT="AA""#, true),
+            (r#"GT="aA""#, true),
+            (r#"GT="Aa""#, true),
+            (r#"GT="HOM""#, true),
+            (r#"GT="HET""#, true),
+            (r#"GT="HAP""#, true),
+        ] {
+            assert_eq!(
+                eval_expression(expr, &context).unwrap(),
+                Value::Bool(expected)
+            );
+        }
+
+        let diploid_context = EvalContext::new().with_sample([("GT", Value::String("0/1".into()))]);
+        assert_eq!(
+            eval_expression(r#"GT="HAP""#, &diploid_context).unwrap(),
             Value::Bool(false)
         );
     }

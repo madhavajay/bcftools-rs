@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #71 (`progress/filter-engine-slice`, merge commit
+  `0707e1c`) landed a shared filter-engine / `filter` slice — upstream
+  single `&`/`|` boolean operators, top-level `FMT/`/`FORMAT/` sample-vector
+  predicates, joined filter short options, and byte-for-byte `filter.2.out`
+  coverage.
 - 2026-05-17: PR #70 (`progress/check-sparsity`, merge commit `f7a5395`)
   landed `+check-sparsity` — local text-backed sparse-sample reporting by
   contig or requested region, with `-n`, `-r`, and `-R` support plus
@@ -349,16 +354,14 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`f7a5395`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`0707e1c`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/filter-engine-slice`, single-branch directive
-  satisfied): a narrow shared filter-engine / `filter` command slice —
-  accepts upstream single `&`/`|` boolean operators, evaluates top-level
-  `FMT/`/`FORMAT/` sample vectors for site filters, supports joined filter
-  short options used by upstream fixtures (`-sTAG`, `-S.`, `-m...`,
-  `-g...`, `-G...`, `-iEXPR`, `-eEXPR`), and matches upstream
-  `filter.2.out` byte-for-byte for the `QUAL==59.2 || (INDEL=0 &
-  (FMT/GQ=25 | FMT/DP=10))` + `-sModified -S.` row.
+- In-flight (branch `progress/filter-gt-literals`, single-branch directive
+  satisfied): a narrow shared filter-engine / `filter` command slice for
+  bcftools GT special literals. Preserves `FORMAT/GT` as string data in the
+  text filter context and matches upstream `filter.{12,13,14,15,16,17,18,19}.out`
+  for `GT="A"`, `GT="RR"`, `GT="RA"`, `GT="AR"`, `GT="AA"`, `GT="aA"`,
+  `GT="Aa"`, `GT="HOM"`, `GT="HET"`, and `GT="HAP"`.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -370,7 +373,7 @@ Latest landed progress:
   blockers listed at the end of this file.
 
 Subcommand coverage at a glance (CLI dispatcher state; plugin rows reflect
-branch `progress/filter-engine-slice`):
+branch `progress/filter-gt-literals`):
 
 | Subcommand | Status | Module / notes |
 | --- | --- | --- |
@@ -533,7 +536,7 @@ These are used by nearly every subcommand and must exist before subcommands can 
 - [x] **I/O & format helpers** (`bcftools-rs/src/io.rs`): port the `hts_bcf_wmode` / `hts_bcf_wmode2` / `set_wmode` family, `init_index` / `init_index2`, `init_tmp_prefix`, `write_index_parse`, `parse_overlap_option`, `apply_verbosity` (`bcftools.h:62-78`). Output-type dispatch (`-O v|z|u|b`) shared between every writer.
 - [x] **Header-version writer** (`bcftools-rs/src/header_version.rs`): port `bcf_hdr_append_version`. Reconstructs argv with HTSlib-compatible quoting and produces `##bcftools_<cmd>Version` / `##bcftools_<cmd>Command` lines. `--no-version` short-circuits this.
 - [ ] **Filter expression engine** (`bcftools-rs/src/filter/`): port `filter.c` (~4500 LOC) and `filter.h`. This is the bcftools `-i`/`-e` expression compiler/evaluator with sample-vector semantics, lazy AC/AN/genotype caching, `filter_test_ext` external-value injection, and `filter_max_unpack`/`filter_status` instrumentation. Used by `view`, `filter`, `query`, `isec`, `annotate`, `norm`, `stats`, `call`, `mpileup`, and many plugins. **This is the single largest porting task in the project.**
-  - [x] Snapshot coverage: lexer for identifiers, INFO/FORMAT paths, numeric literals, quoted strings/escapes, comparison/regex/boolean/arithmetic operators including upstream single `&`/`|` aliases, function punctuation, and vector index brackets; Pratt parser/AST for unary, binary, function-call, index, and wildcard expressions; scalar evaluator for booleans, arithmetic, comparisons, regex matching, list indexing, simple list comparisons, top-level `FMT/`/`FORMAT/` sample-vector site predicates, `COUNT`/`MIN`/`MAX`/`SUM`/`AVG`/`MEAN`/`MEDIAN`/`STDEV`/`ABS`/`PHRED`/simple `binom`/simple `fisher`, plus `s*`/`SMPL_*` aliases for simple numeric aggregations, sample-context `N_PASS`/`F_PASS` over `FMT/`/`FORMAT/`/bare sample fields, no-argument `F_MISSING` missing-genotype fraction, limited GT special-literal equality for sample-count expressions (`GT="mis"` and related forms), external value injection callbacks for record/sample lookups, and evaluation tracing for lookup source/status plus short-circuit counts.
+  - [x] Snapshot coverage: lexer for identifiers, INFO/FORMAT paths, numeric literals, quoted strings/escapes, comparison/regex/boolean/arithmetic operators including upstream single `&`/`|` aliases, function punctuation, and vector index brackets; Pratt parser/AST for unary, binary, function-call, index, and wildcard expressions; scalar evaluator for booleans, arithmetic, comparisons, regex matching, list indexing, simple list comparisons, top-level `FMT/`/`FORMAT/` sample-vector site predicates, `COUNT`/`MIN`/`MAX`/`SUM`/`AVG`/`MEAN`/`MEDIAN`/`STDEV`/`ABS`/`PHRED`/simple `binom`/simple `fisher`, plus `s*`/`SMPL_*` aliases for simple numeric aggregations, sample-context `N_PASS`/`F_PASS` over `FMT/`/`FORMAT/`/bare sample fields, no-argument `F_MISSING` missing-genotype fraction, limited GT special-literal equality for sample-count expressions (`GT="mis"` and related forms) plus bcftools GT class literals (`A`, `R`, `RR`, `RA`, `AR`, `AA`, `aA`, `Aa`, `HOM`, `HET`, `HAP`), external value injection callbacks for record/sample lookups, and evaluation tracing for lookup source/status plus short-circuit counts.
   - [ ] Remaining: full bcftools type system, exact regex/case-sensitivity parity, complete sample-vector semantics, lazy AC/AN/genotype caching, full `filter_max_unpack` parity, and integration into `view`/`query`/dependent commands.
 - [x] **Synced reader wrapper** (`bcftools-rs/src/synced.rs`): bcftools-shaped facade over `htslib-rs::variant_io_compat::SyncedVariantGroup`/`pair_synced_variant_groups`. Exposes the `bcf_sr_t`-style API surface bcftools subcommands expect (add inputs, set regions/targets, iterate paired groups, `--collapse` modes). Where htslib-rs lacks a needed mode, extend it.
 - [x] **Sample-list helpers** (`bcftools-rs/src/smpl_ilist.rs`): port `smpl_ilist.c` (sample subset, `^` exclusion, file-input form). Used by `view -s`, `call -s`, `stats -s`, many plugins.
@@ -640,7 +643,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave C — Filtering & Annotation
 
 - [ ] `filter` (`vcffilter.c`) — apply expression-based soft/hard filtering, set FILTER tags, `--mask`, `--SnpGap`, `--IndelGap`, `--set-GTs`. Heavily depends on Phase 1 filter engine. Covered by `test_vcf_filter`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/filter.rs`): VCF/VCF.gz/BCF read paths and VCF/VCF.gz/BCF write paths, `-i`/`-e` text-mode expression filtering via the shared filter engine for core fields and INFO tags plus simple FORMAT/sample contexts, upstream-backed sample-fraction functions `F_PASS(...)` and `F_MISSING` for text VCF filters, upstream single `&`/`|` FORMAT-vector site predicates with byte-for-byte `filter.2.out` coverage, `-s`/`--soft-filter` re-tagging plus auto `##FILTER` header injection, joined short options used by upstream fixtures (`-sTAG`, `-S.`, `-m...`, `-g...`, `-G...`, `-iEXPR`, `-eEXPR`), `-m +` additive and `-m x` reset-pass modes, `--mask`/`-M` soft-filter masks including mask files and `^` negation, `--mask-overlap 0|1|2` POS/span matching, `-S`/`--set-GTs .|0` site-level failed-record genotype rewriting plus simple per-sample rewrites for FORMAT-scoped expressions, with existing INFO/AC and INFO/AN recalculation, `-g`/`--SnpGap` and `-G`/`--IndelGap` local text-mode gap filters including `--IndelGap` QUAL/AC/first-record tie-breaking, `-r`/`-R`/`-t`/`-T` POS-based region/target restriction, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_filter{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads, shared `record_lookup` helper reused by `stats`. 32 integration tests in `crates/bcftools-rs/tests/filter.rs`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/filter.rs`): VCF/VCF.gz/BCF read paths and VCF/VCF.gz/BCF write paths, `-i`/`-e` text-mode expression filtering via the shared filter engine for core fields and INFO tags plus simple FORMAT/sample contexts, upstream-backed sample-fraction functions `F_PASS(...)` and `F_MISSING` for text VCF filters, upstream single `&`/`|` FORMAT-vector site predicates with byte-for-byte `filter.2.out` coverage, bcftools GT class literals with byte-for-byte `filter.{12,13,14,15,16,17,18,19}.out` coverage, `-s`/`--soft-filter` re-tagging plus auto `##FILTER` header injection, joined short options used by upstream fixtures (`-sTAG`, `-S.`, `-m...`, `-g...`, `-G...`, `-iEXPR`, `-eEXPR`), `-m +` additive and `-m x` reset-pass modes, `--mask`/`-M` soft-filter masks including mask files and `^` negation, `--mask-overlap 0|1|2` POS/span matching, `-S`/`--set-GTs .|0` site-level failed-record genotype rewriting plus simple per-sample rewrites for FORMAT-scoped expressions, with existing INFO/AC and INFO/AN recalculation, `-g`/`--SnpGap` and `-G`/`--IndelGap` local text-mode gap filters including `--IndelGap` QUAL/AC/first-record tie-breaking, `-r`/`-R`/`-t`/`-T` POS-based region/target restriction, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_filter{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads, shared `record_lookup` helper reused by `stats`. 33 integration tests in `crates/bcftools-rs/tests/filter.rs`.
   - [ ] Remaining: exact buffered gap-filter edge-case parity, full filter-expression FORMAT/sample-vector semantics, structured BCF write path that round-trips through the soft-filter rewrite without re-parsing.
 - [ ] `annotate` (`vcfannotate.c`, 180k — single largest file in bcftools) — INFO/FORMAT/FILTER/ID column transfer from VCF/BCF/TAB sources, rename chrs, `-x` removal, header injection, `-c CHROM,POS,REF,ALT,…` column mapping, `--columns-file`, `--single-overlaps`, `--regions-overlap`. Covered by `test_vcf_annotate`.
   - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/annotate.rs`): `--rename-chrs` with two-column chromosome maps (contig-header `ID=` rewriting + CHROM-column rewriting), `-x`/`--remove` tag removal for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>` (substituting `PASS` when the FILTER set empties), `INFO`, and `INFO/<ID>` (dropping the matching `##INFO`/`##FILTER` header lines), combined `--rename-chrs` + `-x`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, and `--no-version` command-shape compatibility. 9 integration tests in `crates/bcftools-rs/tests/annotate.rs`.

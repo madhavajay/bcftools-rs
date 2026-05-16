@@ -744,6 +744,50 @@ fn filter_single_amp_pipe_and_set_gts_match_upstream_filter_2_fixture() {
 }
 
 #[test]
+fn filter_gt_special_literals_match_upstream_fixtures() {
+    for (expr, fixture) in [
+        ("GT=\"A\"", "filter.12.out"),
+        ("GT=\"RR\"", "filter.13.out"),
+        ("GT=\"RA\"", "filter.14.out"),
+        ("GT=\"AR\"", "filter.14.out"),
+        ("GT=\"AA\"", "filter.15.out"),
+        ("GT=\"aA\"", "filter.16.out"),
+        ("GT=\"Aa\"", "filter.16.out"),
+        ("GT=\"HOM\"", "filter.17.out"),
+        ("GT=\"HET\"", "filter.18.out"),
+        ("GT=\"HAP\"", "filter.19.out"),
+    ] {
+        let expected = std::fs::read_to_string(format!("../../bcftools/test/{fixture}")).unwrap();
+        let (out, err, code) = run(&[
+            "filter",
+            "--no-version",
+            "-i",
+            expr,
+            "../../bcftools/test/filter.2.vcf",
+        ]);
+        assert_eq!(code, 0, "filter -i {expr} failed: {err}");
+        assert_eq!(render_pos_and_gts(&out), expected, "expression {expr}");
+    }
+}
+
+fn render_pos_and_gts(vcf: &str) -> String {
+    let mut out = String::new();
+    for line in vcf.lines().filter(|line| !line.starts_with('#')) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 10 {
+            continue;
+        }
+        out.push_str(fields[1]);
+        for sample in &fields[9..] {
+            out.push('\t');
+            out.push_str(sample.split(':').next().unwrap_or(sample));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
 fn filter_no_args_prints_usage() {
     let (_out, err, code) = run(&["filter"]);
     assert_ne!(code, 0);

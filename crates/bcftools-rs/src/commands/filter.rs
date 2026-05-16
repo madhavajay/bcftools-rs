@@ -828,7 +828,12 @@ fn sample_values(format_keys: &[&str], sample: &str) -> Vec<(String, FilterValue
         .enumerate()
         .map(|(i, key)| {
             let raw = values.get(i).copied().unwrap_or(".");
-            ((*key).to_owned(), format_value(raw))
+            let value = if key.eq_ignore_ascii_case("GT") {
+                FilterValue::String(raw.to_owned())
+            } else {
+                format_value(raw)
+            };
+            ((*key).to_owned(), value)
         })
         .collect()
 }
