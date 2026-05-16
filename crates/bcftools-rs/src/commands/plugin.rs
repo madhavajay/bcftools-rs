@@ -331,6 +331,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
     let mut gp_region: Option<String> = None;
+    // check-sparsity options.
+    let mut sparsity_min_sites = 1usize;
+    let mut sparsity_region: Option<String> = None;
+    let mut sparsity_region_file: Option<String> = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -416,6 +420,18 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-v" | "--verbose" => verbose += 1,
             "-vv" => verbose += 2,
             "-vvv" => verbose += 3,
+            "-n" | "--n-markers" if plugin_name.as_deref() == Some("check-sparsity") => {
+                sparsity_min_sites = iter
+                    .next()
+                    .and_then(|s| s.to_string_lossy().parse().ok())
+                    .unwrap_or(1);
+            }
+            "-r" | "--regions" if plugin_name.as_deref() == Some("check-sparsity") => {
+                sparsity_region = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-R" | "--regions-file" if plugin_name.as_deref() == Some("check-sparsity") => {
+                sparsity_region_file = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
             "-W" | "--write-index" => {}
             "-o" | "--output" => {
                 output = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -777,6 +793,18 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "check-ploidy" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let report = crate::commands::plugins::check_ploidy::run(Path::new(&input), use_missing)?;
+        io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "check-sparsity" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let report = crate::commands::plugins::check_sparsity::run(
+            Path::new(&input),
+            sparsity_min_sites,
+            sparsity_region.as_deref(),
+            sparsity_region_file.as_deref().map(Path::new),
+        )?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }

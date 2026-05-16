@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #69 (`progress/frameshifts`, merge commit `e7be6be`)
+  landed `+frameshifts` — local OOF annotation for simple indel alleles
+  using simple BED-like exon files, with synthetic Rust integration coverage
+  because upstream has no dedicated fixture row.
 - 2026-05-17: PR #68 (`progress/isecgt`, merge commit `549ad56`)
   landed `+isecGT` — local text-backed two-input genotype comparison,
   sample-name remapping, and missing-GT rewrite, with synthetic Rust
@@ -343,13 +347,13 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/frameshifts`, single-branch directive
-  satisfied): the local `+frameshifts` slice — required `-- -e EXONS`,
-  simple BED-like exon parsing, per-ALT `INFO/OOF` annotation for simple
-  insertion/deletion alleles, and VCF text/BGZF VCF output. Upstream has no
+- In-flight (branch `progress/check-sparsity`, single-branch directive
+  satisfied): the local text-backed `+check-sparsity` slice — reports
+  samples that do not meet the per-contig or requested-region non-missing
+  genotype threshold, with `-n`, `-r`, and `-R` support. Upstream has no
   dedicated `test.pl` fixture row for this plugin, so coverage is synthetic
   Rust integration tests plus unit tests. This branch brings the in-process
-  plugin total to 31 of 41.
+  plugin total to 32 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -380,7 +384,7 @@ branch `progress/todo-batch`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` only |
-| `plugin` | registry + 31 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts` |
+| `plugin` | registry + 32 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -662,7 +666,7 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#68 + `progress/frameshifts`): 31 plugins
+Implemented so far (PRs #45–#69 + `progress/check-sparsity`): 32 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
@@ -670,8 +674,9 @@ under `crates/bcftools-rs/src/commands/plugins/` —
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
 `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`,
-`fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`. Every implemented plugin
-with an upstream `*.out` fixture is byte-for-byte verified;
+`fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`,
+`check-sparsity`. Every implemented plugin with an upstream `*.out`
+fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
 `query.add-variantkey.vcf` / `variantkey-hex.out` fixtures (66 records, 3
@@ -693,7 +698,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 10 remaining unimplemented plugins and many still-open plugin
+dump). The 9 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1094,6 +1099,16 @@ Current local slice:
   Remaining: exact `bcf_sr_regions_t` parser parity for compressed/indexed
   exon lists, complex/symbolic allele edge cases, BCF output parity edge
   cases, `-W` indexing, and output threading.
+- [x] `+check-sparsity` (`crates/bcftools-rs/src/commands/plugins/check_sparsity.rs`):
+  local text-backed slice of `check-sparsity.c`. Reports samples with fewer
+  than `-n` non-missing genotype calls per contig by default, or per
+  requested `-r` / `-R` region. VCF/VCF.gz/BCF input is normalized through
+  the existing text-view path. Upstream has no dedicated `test.pl` fixture
+  row for `+check-sparsity`; covered by 2 synthetic integration tests in
+  `crates/bcftools-rs/tests/plugin_check_sparsity.rs` + 3 unit tests.
+  Remaining: true indexed tabix/BCF iterator behavior, exact upstream
+  region-list label/ordering parity, GT storage-type edge cases, and
+  stdin-with-region diagnostics.
 
 Grouped roughly by complexity / shared dependencies:
 
