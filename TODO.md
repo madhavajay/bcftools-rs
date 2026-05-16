@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #66 (`progress/scatter`, merge commit `42ae63d`)
+  landed `+scatter` — split a VCF into multiple VCFs by `-n` chunks or
+  `-s`/`-S` regions (`-x` extra, `-p` prefix), byte-for-byte against
+  `scatter.1.{1,2,3}.out` (sort-dir / `cat` / `grep -v ^##` harness).
 - 2026-05-16: PR #65 (`progress/fill-from-fasta`, merge commit
   `c4cc5cd`) landed `+fill-from-fasta` (`-c REF` modes) — REF fill
   from a FASTA reference, byte-for-byte against `ref.out` / `aa.2.out`
@@ -329,16 +333,14 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest commit on `progress/todo-batch` (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- In-flight (branch `progress/scatter`, single open PR per the
-  one-branch directive): the `+scatter` plugin — a port of
-  `scatter.c` (`crates/bcftools-rs/src/commands/plugins/scatter.rs`).
-  Splits a VCF into multiple VCFs by fixed-size chunks (`-n N`,
-  integer-named files) or a comma-separated region list (`-s`, with
-  `-x` for an extra file of unmatched records; `-S` file form and
-  `-p` prefix supported), each output file getting the full input
-  header. Byte-for-byte against `scatter.1.{1,2,3}.out` (via the
-  sort-dir / `cat` / `grep -v ^##` harness). This brings the
-  in-process plugin total to 28 of 41.
+- In-flight (branch `progress/split`, single-branch directive satisfied):
+  the filter-free `+split` slice — per-sample / per-group VCF splitting
+  by default sample list, `-S` samples file, `-G` groups file, and
+  `-k` INFO/FORMAT tag projection, with VCF text and BGZF VCF output.
+  Byte-for-byte against `split.1.{1,2,3,7}.out` and `split.2.1.out`
+  via the sort-dir / `query -l` / `view -H` harness. Rows 882–884
+  (`-i 'GT="alt"'`) remain deferred to the filter engine. This branch
+  brings the in-process plugin total to 29 of 41.
 - Next local-only queue:
   extend the `merge` slice toward synced-reader multi-input alignment +
   `-m none|snps|indels|both|all|id`; deepen the `consensus`, `annotate`,
@@ -385,7 +387,7 @@ branch `progress/todo-batch`):
 
 Current whole-project estimate:
 
-- 2026-05-16 (post `+scatter`, PR #65 `+fill-from-fasta` landed):
+- 2026-05-17 (post `+scatter`, PR #66 landed; no open PR):
   approximately 47-50% complete toward the full stated goal. Movement
   since the prior estimate is `+scatter` (split a VCF into multiple
   VCFs by `-n` chunks or `-s`/`-S` regions, `-x` extra) verified
@@ -651,7 +653,7 @@ All 41 plugins are in scope as in-process Rust implementations rather than
 the `plugin` command's listing/help (`-l`, `-lv`, `-h`) walks a static plugin
 registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 
-Implemented so far (PRs #45–#65 + `progress/scatter`): 28 plugins
+Implemented so far (PRs #45–#66 + `progress/split`): 29 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
 `check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
@@ -659,7 +661,7 @@ under `crates/bcftools-rs/src/commands/plugins/` —
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
 `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`,
-`fill-from-fasta`, `scatter`. Every one
+`fill-from-fasta`, `scatter`, `split`. Every one
 with an upstream `*.out` fixture is byte-for-byte verified;
 `variant-distance`/`check-ploidy` pass their entire `test_vcf_plugin`
 slices, the two VariantKey plugins match the full
@@ -1047,6 +1049,18 @@ Current local slice:
   sort-dir / `cat` / `grep -v ^##` harness. 3 integration tests in
   `crates/bcftools-rs/tests/plugin_scatter.rs` + 2 unit tests.
   Remaining: `-i`/`-e` filtering (filter engine).
+- [x] `+split` (`crates/bcftools-rs/src/commands/plugins/split.rs`):
+  filter-free slice of `split.c`. Splits VCF text into per-sample output
+  VCFs by default, `-S` samples file, or `-G` groups file, including
+  upstream filename sanitization / suffix collision behavior and sample
+  renaming. Also supports `-k`/`--keep-tags` INFO/FORMAT projection in
+  the text path and `-Oz` BGZF VCF output. Byte-for-byte parity with
+  `split.1.{1,2,3,7}.out` and `split.2.1.out` through the harness
+  shape that sorts output files, runs `query -l`, then `view -H`.
+  7 integration tests in
+  `crates/bcftools-rs/tests/plugin_split.rs` + 3 unit tests.
+  Remaining: `-i`/`-e` filtering (rows 882–884), region/target
+  restriction, BCF output, `-W` indexing, and output threading.
 
 Grouped roughly by complexity / shared dependencies:
 
