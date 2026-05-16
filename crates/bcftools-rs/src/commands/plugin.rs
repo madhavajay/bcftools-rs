@@ -313,6 +313,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut split_groups_file: Option<String> = None;
     let mut split_keep_tags: Option<String> = None;
     let mut split_has_filter = false;
+    // frameshifts options.
+    let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
     let mut ff_column: Option<String> = None;
     let mut ff_fasta: Option<String> = None;
@@ -385,6 +387,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("split") => {
                 split_has_filter = true;
                 let _ = iter.next();
+            }
+            "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
+                frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             // fill-from-fasta: -c COL, -f FASTA, -h HDR, -N, -i/-e EXPR.
             // These guarded arms must precede the global -h/-c/-f arms.
@@ -983,6 +988,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         };
         let report = gtisec::run(Path::new(&input), flag, &tail)?;
         io::stdout().lock().write_all(report.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "frameshifts" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(exons) = frameshifts_exons.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "frameshifts requires -- -e EXONS",
+            ));
+        };
+        let vcf = crate::commands::plugins::frameshifts::run(Path::new(&input), Path::new(exons))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

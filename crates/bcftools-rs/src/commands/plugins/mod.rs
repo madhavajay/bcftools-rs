@@ -17,6 +17,7 @@ pub mod fill_an_ac;
 pub mod fill_from_fasta;
 pub mod fixploidy;
 pub mod fixref;
+pub mod frameshifts;
 pub mod gtisec;
 pub mod gtsubset;
 pub mod guess_ploidy;
