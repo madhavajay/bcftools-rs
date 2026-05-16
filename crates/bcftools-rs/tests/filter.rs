@@ -827,6 +827,40 @@ fn filter_snp_gap_type_list_matches_upstream_filter_29_fixture() {
     assert_eq!(out, expected);
 }
 
+#[test]
+fn filter_format_aggregate_set_gts_match_upstream_fixtures() {
+    for (expr, fixture) in [
+        ("FORMAT/AO==4", "filter.30.out"),
+        ("MAX(FORMAT/AO[0:])==4", "filter.30.out"),
+        ("MAX(FORMAT/AO)==4", "filter.31.out"),
+        ("MIN(FORMAT/AO[0:])==3", "filter.30.out"),
+        ("MIN(FORMAT/AO)==2", "filter.30.out"),
+        ("AVG(FORMAT/AO[2:])==4", "filter.30.out"),
+        ("MEDIAN(FORMAT/AO[2:])==4", "filter.30.out"),
+        ("STDEV(FORMAT/AO[0:])=0.5", "filter.30.out"),
+        ("SUM(FORMAT/AO[0:])=7", "filter.30.out"),
+        ("SMPL_MAX(FORMAT/AO)==4", "filter.32.out"),
+        ("sMIN(FORMAT/AO)==2", "filter.33.out"),
+        ("ABS(sAVG(FORMAT/AO)-3.66666)<1e-5", "filter.33.out"),
+        ("sMEDIAN(FORMAT/AO)==4", "filter.34.out"),
+        ("ABS(sSTDEV(FORMAT/AO)-1.2472191)<1e-5", "filter.33.out"),
+        ("sSUM(FORMAT/AO)==11", "filter.33.out"),
+        ("ABS(SMPL_MAX(FORMAT/AO))=5", "filter.36.out"),
+    ] {
+        let expected = std::fs::read_to_string(format!("../../bcftools/test/{fixture}")).unwrap();
+        let (out, err, code) = run(&[
+            "filter",
+            "-S",
+            ".",
+            "-e",
+            expr,
+            "../../bcftools/test/filter.8.vcf",
+        ]);
+        assert_eq!(code, 0, "filter -S . -e {expr} failed: {err}");
+        assert_eq!(strip_bcftools_headers(&out), expected, "expression {expr}");
+    }
+}
+
 fn render_pos_and_gts(vcf: &str) -> String {
     let mut out = String::new();
     for line in vcf.lines().filter(|line| !line.starts_with('#')) {
@@ -842,6 +876,17 @@ fn render_pos_and_gts(vcf: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+fn strip_bcftools_headers(vcf: &str) -> String {
+    vcf.lines()
+        .filter(|line| !line.starts_with("##bcftools_"))
+        .map(|line| {
+            let mut line = line.to_owned();
+            line.push('\n');
+            line
+        })
+        .collect()
 }
 
 fn render_pos_and_qual(vcf: &str) -> String {

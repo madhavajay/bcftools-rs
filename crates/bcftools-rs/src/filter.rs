@@ -810,7 +810,7 @@ fn eval_call(
             require_arity(function, args, 0)?;
             f_missing(context, resolver).map(Value::Number)
         }
-        "MIN" => {
+        "MIN" | "SMIN" | "SMPL_MIN" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
             values
@@ -950,7 +950,7 @@ fn eval_call(
                 ))
             }
         }
-        "MAX" => {
+        "MAX" | "SMAX" | "SMPL_MAX" => {
             require_arity(function, args, 1)?;
             let values = numeric_values(&eval_with_trace(&args[0], context, resolver, trace)?);
             values

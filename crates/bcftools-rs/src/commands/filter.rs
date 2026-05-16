@@ -43,7 +43,7 @@ use htslib_rs::index_compat::{
 };
 
 use crate::diagnostics::fmt_etag;
-use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
+use crate::filter::{self as bcffilter, EvalContext, Expr, Value as FilterValue};
 use crate::header_version::{build_lines, command_time};
 use crate::io::{VariantOutputFormat, apply_verbosity, init_index2, write_index_parse};
 
@@ -605,6 +605,11 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
         args.include_expr.as_deref(),
         args.exclude_expr.as_deref(),
     );
+    let header_text = if args.set_gts.is_some() {
+        ensure_pass_filter_header(&header_text)
+    } else {
+        header_text
+    };
     let header_text = ensure_gap_headers(&header_text, args);
     let header_text = if args.no_version {
         header_text
@@ -653,12 +658,14 @@ fn run(args: &Args, argv: &[OsString]) -> io::Result<()> {
                     let mut rendered = if args.mode.reset_pass {
                         replace_filter(&fields, "PASS")
                     } else {
-                        trimmed_line
+                        trimmed_line.clone()
                     };
                     if let (Some(target), Some(passes)) = (args.set_gts, sample_passes.as_deref())
                         && passes.iter().any(|passed| !*passed)
                     {
                         rendered = set_genotypes(&rendered, target, Some(passes));
+                    } else if args.set_gts.is_some() && fields.get(6) == Some(&".") {
+                        rendered = replace_filter(&fields, "PASS");
                     }
                     out.write_all(rendered.as_bytes())?;
                     out.write_all(b"\n")?;
@@ -761,6 +768,26 @@ fn ensure_named_filter_header(header: &str, id: &str, description: &str) -> Stri
     out
 }
 
+fn ensure_pass_filter_header(header: &str) -> String {
+    if header
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"))
+    {
+        return header.to_owned();
+    }
+
+    let mut out = String::new();
+    let mut inserted = false;
+    for line in header.split_inclusive('\n') {
+        out.push_str(line);
+        if !inserted && line.starts_with("##fileformat=") {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            inserted = true;
+        }
+    }
+    out
+}
+
 fn evaluate(fields: &[&str], args: &Args) -> io::Result<bool> {
     if let Some(expr) = &args.include_expr {
         let value = evaluate_expression(expr, fields)?;
@@ -814,6 +841,20 @@ fn sample_passes_for_set_gts(fields: &[&str], args: &Args) -> io::Result<Option<
         return Ok(None);
     }
     let format_keys: Vec<&str> = fields[8].split(':').collect();
+    if expression_uses_site_format_aggregate(expr) {
+        let context = record_context(fields);
+        let fields_owned: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
+        let matched = bcffilter::eval_expression_with(expr, &context, |name, sample_i| {
+            if sample_i.is_some() {
+                return None;
+            }
+            record_lookup(name, &fields_owned)
+        })?
+        .truthy();
+        let pass = if is_include { matched } else { !matched };
+        return Ok(Some(vec![pass; fields.len().saturating_sub(9)]));
+    }
+
     let wrapped_expr = format!("N_PASS({expr}) > 0");
     let fields_owned: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
     let mut passes = Vec::with_capacity(fields.len().saturating_sub(9));
@@ -834,6 +875,69 @@ fn sample_passes_for_set_gts(fields: &[&str], args: &Args) -> io::Result<Option<
 
 fn expression_is_format_scoped(expr: &str) -> bool {
     expr.contains("FMT/") || expr.contains("FORMAT/")
+}
+
+fn expression_uses_site_format_aggregate(expr: &str) -> bool {
+    bcffilter::parse_expression(expr)
+        .map(|expr| expr_uses_site_format_aggregate(&expr))
+        .unwrap_or(false)
+}
+
+fn expr_uses_site_format_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { function, args } => {
+            function_is_site_format_aggregate(function) && args.iter().any(expr_references_format)
+                || args.iter().any(expr_uses_site_format_aggregate)
+        }
+        Expr::Unary { expr, .. } | Expr::Index { expr, .. } => {
+            expr_uses_site_format_aggregate(expr)
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_uses_site_format_aggregate(lhs) || expr_uses_site_format_aggregate(rhs)
+        }
+        Expr::FormatIndex {
+            expr,
+            sample,
+            value,
+        } => {
+            expr_uses_site_format_aggregate(expr)
+                || sample
+                    .as_deref()
+                    .is_some_and(expr_uses_site_format_aggregate)
+                || value
+                    .as_deref()
+                    .is_some_and(expr_uses_site_format_aggregate)
+        }
+        Expr::Identifier(_) | Expr::Number(_) | Expr::String(_) | Expr::Wildcard => false,
+    }
+}
+
+fn function_is_site_format_aggregate(function: &str) -> bool {
+    matches!(
+        function.to_ascii_uppercase().as_str(),
+        "MIN" | "MAX" | "AVG" | "MEAN" | "MEDIAN" | "STDEV" | "SUM"
+    )
+}
+
+fn expr_references_format(expr: &Expr) -> bool {
+    match expr {
+        Expr::Identifier(name) => {
+            name.starts_with("FMT/") || name.starts_with("FORMAT/") || name == "AO"
+        }
+        Expr::Unary { expr, .. } | Expr::Index { expr, .. } => expr_references_format(expr),
+        Expr::Binary { lhs, rhs, .. } => expr_references_format(lhs) || expr_references_format(rhs),
+        Expr::Call { args, .. } => args.iter().any(expr_references_format),
+        Expr::FormatIndex {
+            expr,
+            sample,
+            value,
+        } => {
+            expr_references_format(expr)
+                || sample.as_deref().is_some_and(expr_references_format)
+                || value.as_deref().is_some_and(expr_references_format)
+        }
+        Expr::Number(_) | Expr::String(_) | Expr::Wildcard => false,
+    }
 }
 
 fn sample_values(format_keys: &[&str], sample: &str) -> Vec<(String, FilterValue)> {
