@@ -308,6 +308,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sc_scatter_file: Option<String> = None;
     let mut sc_extra: Option<String> = None;
     let mut sc_prefix: Option<String> = None;
+    // split options.
+    let mut split_samples_file: Option<String> = None;
+    let mut split_groups_file: Option<String> = None;
+    let mut split_keep_tags: Option<String> = None;
+    let mut split_has_filter = false;
     // fill-from-fasta options.
     let mut ff_column: Option<String> = None;
     let mut ff_fasta: Option<String> = None;
@@ -366,6 +371,20 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-p" | "--prefix" if plugin_name.as_deref() == Some("scatter") => {
                 sc_prefix = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            // split: -S FILE, -G FILE, -k LIST, -i/-e EXPR.
+            "-S" | "--samples-file" if plugin_name.as_deref() == Some("split") => {
+                split_samples_file = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-G" | "--groups-file" if plugin_name.as_deref() == Some("split") => {
+                split_groups_file = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-k" | "--keep-tags" if plugin_name.as_deref() == Some("split") => {
+                split_keep_tags = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("split") => {
+                split_has_filter = true;
+                let _ = iter.next();
             }
             // fill-from-fasta: -c COL, -f FASTA, -h HDR, -N, -i/-e EXPR.
             // These guarded arms must precede the global -h/-c/-f arms.
@@ -897,6 +916,32 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             sc_scatter_file.as_deref().map(Path::new),
             sc_extra.as_deref(),
             sc_prefix.as_deref(),
+        )?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "split" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(dir) = output.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "split requires -o DIR",
+            ));
+        };
+        if output_kind == OutKind::Bcf {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "split in this local slice supports VCF and VCF.gz output only",
+            ));
+        }
+        crate::commands::plugins::split::run(
+            Path::new(&input),
+            Path::new(dir),
+            split_samples_file.as_deref().map(Path::new),
+            split_groups_file.as_deref().map(Path::new),
+            split_keep_tags.as_deref(),
+            output_kind == OutKind::VcfGz,
+            split_has_filter,
         )?;
         return Ok(ExitCode::SUCCESS);
     }
