@@ -197,6 +197,20 @@ fn merge_noidx_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_force_single_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--force-single",
+        "../../bcftools/test/merge.LPL.a.vcf",
+    ]);
+    assert_eq!(code, 0, "merge --force-single fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.LPL.0.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
