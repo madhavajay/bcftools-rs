@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #189 (`progress/tag2tag-gl-to-gp`, merge commit
+  `fff0eca`) added byte-for-byte `+tag2tag --gl-to-gp` parity for upstream
+  `view.GL-GP.vcf` by normalizing `10^GL` probabilities with upstream-style
+  `float` arithmetic and `%g` formatting.
 - 2026-05-17: PR #187 (`progress/merge-gvcf2-star-modes`, merge commit
   `09d3cc9`) added byte-for-byte text parity for upstream
   `merge.gvcf.2.{1,2}.out` under `merge --gvcf - -m both,*` and
@@ -625,10 +629,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`bd8a2ec`) (297 lib unit tests plus per-command
+  latest merged commit on `main` (`fff0eca`) (299 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/tag2tag-gl-to-gp` — add
-  `+tag2tag --gl-to-gp` byte-for-byte parity for upstream `view.GL-GP.vcf`.
+- Current code slice in flight: none; `main` is synced through PR #189
+  (`fff0eca`).
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
