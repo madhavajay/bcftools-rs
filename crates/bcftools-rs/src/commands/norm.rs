@@ -31,6 +31,7 @@ Options:\n\
     -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
     -i, --include EXPR             Include records matching EXPR in duplicate-removal decisions\n\
     -m, --multiallelics MODE       Split multiallelic records; this slice supports '-'\n\
+        --multi-overlaps 0|.       GT value for non-target ALT alleles while splitting [0]\n\
     -S, --sort MODE                Sort split records; this slice supports 'lex'\n\
     -o, --output FILE              Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9] u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
@@ -48,6 +49,7 @@ struct Args {
     check_ref: Option<CheckRefMode>,
     split_multiallelic: bool,
     split_sort: SplitSortMode,
+    multi_overlaps: MultiOverlapMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +78,12 @@ enum CheckRefMode {
 enum SplitSortMode {
     Input,
     Lex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MultiOverlapMode {
+    Reference,
+    Missing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,6 +136,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut check_ref = None;
     let mut split_multiallelic = false;
     let mut split_sort = SplitSortMode::Input;
+    let mut multi_overlaps = MultiOverlapMode::Reference;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -154,6 +163,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-S" | "--sort" => {
                 split_sort = parse_split_sort_mode(&next_string(&mut iter, raw.as_ref())?)?
             }
+            "--multi-overlaps" => {
+                multi_overlaps = parse_multi_overlap_mode(&next_string(&mut iter, raw.as_ref())?)?
+            }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -178,6 +190,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             _ if raw.starts_with("--sort=") => {
                 split_sort = parse_split_sort_mode(value_after_equals(&raw))?
+            }
+            _ if raw.starts_with("--multi-overlaps=") => {
+                multi_overlaps = parse_multi_overlap_mode(value_after_equals(&raw))?
             }
             _ if raw.starts_with("-f") && raw.len() > 2 => {
                 fasta_ref = Some(PathBuf::from(&raw[2..]));
@@ -229,6 +244,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         check_ref,
         split_multiallelic,
         split_sort,
+        multi_overlaps,
     })
 }
 
@@ -294,6 +310,16 @@ fn parse_split_sort_mode(raw: &str) -> Result<SplitSortMode, ParseOutcome> {
     }
 }
 
+fn parse_multi_overlap_mode(raw: &str) -> Result<MultiOverlapMode, ParseOutcome> {
+    match raw {
+        "0" => Ok(MultiOverlapMode::Reference),
+        "." => Ok(MultiOverlapMode::Missing),
+        _ => Err(ParseOutcome::Error(format!(
+            "unsupported multi-overlaps mode '{raw}' in this local norm slice"
+        ))),
+    }
+}
+
 fn run(args: &Args) -> io::Result<()> {
     let input = read_vcf_text(&args.input)?;
     let reference = args
@@ -310,7 +336,7 @@ fn run(args: &Args) -> io::Result<()> {
         })?;
         check_reference_swap(&input, reference)?
     } else if args.split_multiallelic {
-        split_multiallelic_records(&input, args.split_sort)?
+        split_multiallelic_records(&input, args.split_sort, args.multi_overlaps)?
     } else {
         let include_filter = args
             .include_expr
@@ -434,7 +460,11 @@ fn remove_duplicates(
     Ok(out)
 }
 
-fn split_multiallelic_records(input: &str, sort_mode: SplitSortMode) -> io::Result<String> {
+fn split_multiallelic_records(
+    input: &str,
+    sort_mode: SplitSortMode,
+    multi_overlaps: MultiOverlapMode,
+) -> io::Result<String> {
     let mut out = String::with_capacity(input.len());
     let filter_header_seen = input
         .lines()
@@ -481,9 +511,11 @@ fn split_multiallelic_records(input: &str, sort_mode: SplitSortMode) -> io::Resu
 
         let mut split_rows: Vec<Vec<String>> = alts
             .into_iter()
-            .map(|alt| {
+            .enumerate()
+            .map(|(alt_index, alt)| {
                 let mut row = fields.clone();
                 row[4] = alt.to_owned();
+                project_split_genotypes(&mut row, alt_index + 1, multi_overlaps);
                 row
             })
             .collect();
@@ -497,6 +529,56 @@ fn split_multiallelic_records(input: &str, sort_mode: SplitSortMode) -> io::Resu
     }
 
     Ok(out)
+}
+
+fn project_split_genotypes(
+    fields: &mut [String],
+    target_alt: usize,
+    multi_overlaps: MultiOverlapMode,
+) {
+    if fields.len() <= 9 {
+        return;
+    }
+    let Some(gt_index) = fields[8].split(':').position(|key| key == "GT") else {
+        return;
+    };
+    for sample in &mut fields[9..] {
+        let mut parts: Vec<String> = sample.split(':').map(str::to_owned).collect();
+        if let Some(gt) = parts.get_mut(gt_index) {
+            *gt = project_split_gt(gt, target_alt, multi_overlaps);
+            *sample = parts.join(":");
+        }
+    }
+}
+
+fn project_split_gt(gt: &str, target_alt: usize, multi_overlaps: MultiOverlapMode) -> String {
+    let mut out = String::with_capacity(gt.len());
+    let mut allele = String::new();
+    for ch in gt.chars() {
+        if ch == '/' || ch == '|' {
+            out.push_str(&projected_split_allele(&allele, target_alt, multi_overlaps));
+            allele.clear();
+            out.push(ch);
+        } else {
+            allele.push(ch);
+        }
+    }
+    out.push_str(&projected_split_allele(&allele, target_alt, multi_overlaps));
+    out
+}
+
+fn projected_split_allele(
+    raw: &str,
+    target_alt: usize,
+    multi_overlaps: MultiOverlapMode,
+) -> String {
+    match raw.parse::<usize>() {
+        Ok(0) => "0".to_owned(),
+        Ok(value) if value == target_alt => "1".to_owned(),
+        Ok(_) if multi_overlaps == MultiOverlapMode::Missing => ".".to_owned(),
+        Ok(_) => "0".to_owned(),
+        Err(_) => raw.to_owned(),
+    }
 }
 
 #[derive(Debug)]
