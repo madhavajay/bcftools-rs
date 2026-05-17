@@ -211,6 +211,24 @@ fn merge_force_single_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_sites_only_alt_union_matches_upstream_fixture() {
+    for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
+        let mut args = vec![
+            "merge",
+            "--no-version",
+            "../../bcftools/test/merge.8.a.vcf",
+            "../../bcftools/test/merge.8.b.vcf",
+        ];
+        args.splice(2..2, extra_args);
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "merge.8 fixture failed for {args:?}: {err}");
+
+        let expected = std::fs::read_to_string("../../bcftools/test/merge.8.out").unwrap();
+        assert_eq!(out, expected, "arguments {args:?}");
+    }
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
