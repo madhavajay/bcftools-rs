@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #165 (`progress/norm-filter-join-fixture`, merge commit
+  `37049ce`) added byte-for-byte text parity for upstream
+  `norm.filter.1.out` by supporting narrow filtered `-m +both`
+  multiallelic joining in the local `norm` slice.
 - 2026-05-17: PR #164 (`progress/todo-sync-after-norm-split-multi-overlaps`,
   merge commit `fdd7e1e`) synced the TODO/test-status docs after PR #163.
 - 2026-05-17: PR #163 (`progress/norm-split-multi-overlaps`, merge commit
@@ -548,12 +552,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`fdd7e1e`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`37049ce`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/norm-filter-join-fixture`, extending
-  the local `norm` slice with narrow filtered `-m +both` multiallelic joining
-  for upstream `norm.filter.1.out`. Keep the one-branch rule, run the full
-  local gate, and wait for both required GitHub checks before merge.
+- Current code slice in flight: none after PR #165; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
