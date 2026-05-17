@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #215 (`progress/parental-origin-common-filter`, merge commit
+  `bc5eb24`) added common `+parental-origin -i` / `-e` record filtering
+  through the shared text filter engine before CNV parental-origin likelihood
+  accumulation.
 - 2026-05-18: PR #214
   (`progress/todo-sync-after-contrast-common-filter`, merge commit
   `89a0f97`) synced the TODO docs after PR #213.
@@ -706,11 +710,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`89a0f97`) (319 lib unit tests plus
+  latest merged commit on `main` (`bc5eb24`) (320 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/parental-origin-common-filter`,
-  adding common `+parental-origin -i/-e` record filtering through the shared
-  text filter engine before CNV parental-origin likelihood accumulation.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
