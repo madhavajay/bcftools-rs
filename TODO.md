@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #219 (`progress/split-common-filter`, merge commit
+  `2a374ef`) added common `+split -i` / `-e` record filtering through
+  the shared text filter engine after per-output sample/tag projection,
+  matching upstream's per-output filter placement. The slice also recorded
+  that pinned upstream `+scatter` accepts but does not apply its stored
+  `-i` / `-e` filter in the plugin `run()` path, which the Rust port
+  already matches.
 - 2026-05-18: PR #217 (`progress/mendelian2-common-filter`, merge commit
   `521a362`) added common `+mendelian2 -i` / `-e` record filtering through
   the shared text filter engine before Mendelian consistency collection, with
@@ -717,12 +724,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`521a362`) (321 lib unit tests plus
+  latest merged commit on `main` (`2a374ef`) (322 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/split-common-filter` — add
-  `+split -i` / `-e` common filtering through the shared text filter engine
-  after per-output sample/tag projection, matching upstream's per-output
-  filter placement.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
