@@ -2,9 +2,9 @@
 //!
 //! Local slice supports chromosome renaming via `--rename-chrs` and tag
 //! removal via `-x`/`--remove` for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>`,
-//! `INFO`, `INFO/<ID>`, `FORMAT`, and `FORMAT/<ID>` targets, including the
-//! upstream `^` keep-only form for FILTER/INFO/FORMAT IDs. Full annotation
-//! transfer and header injection remain tracked in `TODO.md`.
+//! `INFO`, `INFO/<ID>`, `FORMAT`, and `FORMAT/<ID>` targets, plus simple
+//! annotation ID renaming via `--rename-annots`. Full annotation transfer and
+//! header injection remain tracked in `TODO.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -26,6 +26,7 @@ Usage:   bcftools annotate [OPTIONS] <in.vcf.gz>\n\
 \n\
 Options:\n\
         --rename-chrs FILE           Rename chromosomes according to a two-column map\n\
+        --rename-annots FILE         Rename INFO/FILTER/FORMAT IDs according to a two-column map\n\
     -x, --remove LIST                Remove annotations (LIST = comma-separated ID, QUAL, FILTER[/<ID>], INFO[/<ID>], FORMAT[/<ID>])\n\
     -o, --output FILE                Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]   u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
@@ -68,10 +69,24 @@ impl RemoveSet {
 struct Args {
     input: PathBuf,
     rename_chrs: Option<PathBuf>,
+    rename_annots: Option<PathBuf>,
     remove: RemoveSet,
     output: Option<PathBuf>,
     output_kind: OutputKind,
     no_version: bool,
+}
+
+#[derive(Debug, Default)]
+struct RenameAnnots {
+    info: HashMap<String, String>,
+    filter: HashMap<String, String>,
+    format: HashMap<String, String>,
+}
+
+impl RenameAnnots {
+    fn is_empty(&self) -> bool {
+        self.info.is_empty() && self.filter.is_empty() && self.format.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +125,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
 fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut input = None;
     let mut rename_chrs = None;
+    let mut rename_annots = None;
     let mut remove = RemoveSet::default();
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
@@ -122,6 +138,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-h" | "--help" | "-?" => return Err(ParseOutcome::Usage),
             "--rename-chrs" => {
                 rename_chrs = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
+            }
+            "--rename-annots" => {
+                rename_annots = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
             "-x" | "--remove" => {
                 parse_remove_list(&next_string(&mut iter, raw.as_ref())?, &mut remove)?
@@ -136,6 +155,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "--no-version" => no_version = true,
             _ if raw.starts_with("--rename-chrs=") => {
                 rename_chrs = Some(PathBuf::from(value_after_equals(&raw)))
+            }
+            _ if raw.starts_with("--rename-annots=") => {
+                rename_annots = Some(PathBuf::from(value_after_equals(&raw)))
             }
             _ if raw.starts_with("--remove=") => {
                 parse_remove_list(value_after_equals(&raw), &mut remove)?
@@ -169,14 +191,15 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
 
     let input =
         input.ok_or_else(|| ParseOutcome::Error("expected one input VCF/BCF path".into()))?;
-    if rename_chrs.is_none() && remove.is_empty() {
+    if rename_chrs.is_none() && rename_annots.is_none() && remove.is_empty() {
         return Err(ParseOutcome::Error(
-            "expected --rename-chrs FILE and/or -x LIST".into(),
+            "expected --rename-chrs FILE, --rename-annots FILE, and/or -x LIST".into(),
         ));
     }
     Ok(Args {
         input,
         rename_chrs,
+        rename_annots,
         remove,
         output,
         output_kind,
@@ -279,8 +302,18 @@ fn run(args: &Args) -> io::Result<()> {
         Some(path) => Some(read_rename_map(path)?),
         None => None,
     };
+    let rename_annots = match &args.rename_annots {
+        Some(path) => Some(read_rename_annots_map(path)?),
+        None => None,
+    };
     let mut text = read_vcf_text(&args.input)?;
-    transform_vcf_text(&mut text, rename.as_ref(), &args.remove, args.no_version);
+    transform_vcf_text(
+        &mut text,
+        rename.as_ref(),
+        rename_annots.as_ref(),
+        &args.remove,
+        args.no_version,
+    );
     write_output(text.as_bytes(), args)
 }
 
@@ -299,6 +332,45 @@ fn read_rename_map(path: &Path) -> io::Result<HashMap<String, String>> {
             ));
         }
         map.insert(fields[0].to_owned(), fields[1].to_owned());
+    }
+    Ok(map)
+}
+
+fn read_rename_annots_map(path: &Path) -> io::Result<RenameAnnots> {
+    let mut map = RenameAnnots::default();
+    for (i, line) in fs::read_to_string(path)?.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 2 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid rename-annots line {}: {line}", i + 1),
+            ));
+        }
+        let (namespace, old) = fields[0].split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid rename-annots target on line {}: {line}", i + 1),
+            )
+        })?;
+        let target = match namespace {
+            "INFO" => &mut map.info,
+            "FILTER" => &mut map.filter,
+            "FORMAT" | "FMT" => &mut map.format,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "unsupported rename-annots namespace on line {}: {line}",
+                        i + 1
+                    ),
+                ));
+            }
+        };
+        target.insert(old.to_owned(), fields[1].to_owned());
     }
     Ok(map)
 }
@@ -345,11 +417,14 @@ fn stdin_tmp_path() -> PathBuf {
 fn transform_vcf_text(
     text: &mut String,
     rename: Option<&HashMap<String, String>>,
+    rename_annots: Option<&RenameAnnots>,
     remove: &RemoveSet,
     no_version: bool,
 ) {
     let empty = HashMap::new();
     let rename = rename.unwrap_or(&empty);
+    let empty_annots = RenameAnnots::default();
+    let rename_annots = rename_annots.unwrap_or(&empty_annots);
     let inject_pass_header = remove.all_filter
         && !text
             .lines()
@@ -379,7 +454,7 @@ fn transform_vcf_text(
             {
                 continue;
             }
-            out.push_str(line);
+            out.push_str(&rename_header_id(line, &rename_annots.info));
         } else if let Some(id) = header_id_for_kind(line, "##FILTER=<") {
             if id != "PASS"
                 && (remove.all_filter
@@ -391,7 +466,7 @@ fn transform_vcf_text(
             {
                 continue;
             }
-            out.push_str(line);
+            out.push_str(&rename_header_id(line, &rename_annots.filter));
         } else if let Some(id) = header_id_for_kind(line, "##FORMAT=<") {
             if remove.format_ids.contains(id)
                 || remove
@@ -402,25 +477,48 @@ fn transform_vcf_text(
             {
                 continue;
             }
-            out.push_str(line);
+            out.push_str(&rename_header_id(line, &rename_annots.format));
         } else if line.starts_with('#') {
             out.push_str(line);
         } else {
-            let renamed;
-            let mut record: &str = line;
+            let mut record = line.to_owned();
             if !rename.is_empty() {
-                renamed = rename_record_chrom(line, rename);
-                record = &renamed;
+                record = rename_record_chrom(line, rename);
             }
-            if remove.is_empty() {
-                out.push_str(record);
-            } else {
-                out.push_str(&apply_record_removals(record, remove));
+            if !remove.is_empty() {
+                record = apply_record_removals(&record, remove);
             }
+            if !rename_annots.is_empty() {
+                record = apply_record_annot_renames(&record, rename_annots);
+            }
+            out.push_str(&record);
         }
         out.push('\n');
     }
     *text = out;
+}
+
+fn rename_header_id(line: &str, map: &HashMap<String, String>) -> String {
+    if map.is_empty() {
+        return line.to_owned();
+    }
+    let Some(id_start) = line.find("ID=") else {
+        return line.to_owned();
+    };
+    let value_start = id_start + 3;
+    let value_end = line[value_start..]
+        .find([',', '>'])
+        .map(|idx| value_start + idx)
+        .unwrap_or(line.len());
+    let old = &line[value_start..value_end];
+    let Some(new) = map.get(old) else {
+        return line.to_owned();
+    };
+    let mut renamed = String::with_capacity(line.len() - old.len() + new.len());
+    renamed.push_str(&line[..value_start]);
+    renamed.push_str(new);
+    renamed.push_str(&line[value_end..]);
+    renamed
 }
 
 fn rename_contig_header(line: &str, map: &HashMap<String, String>) -> String {
@@ -463,6 +561,64 @@ fn header_id_for_kind<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
     let id_rest = &rest[id_start..];
     let id_end = id_rest.find([',', '>']).unwrap_or(id_rest.len());
     Some(&id_rest[..id_end])
+}
+
+fn apply_record_annot_renames(line: &str, rename: &RenameAnnots) -> String {
+    let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+    if fields.len() < 8 {
+        return line.to_owned();
+    }
+    if !rename.filter.is_empty() {
+        fields[6] = filter_after_rename(&fields[6], &rename.filter);
+    }
+    if !rename.info.is_empty() {
+        fields[7] = info_after_rename(&fields[7], &rename.info);
+    }
+    if fields.len() > 8 && !rename.format.is_empty() {
+        fields[8] = format_after_rename(&fields[8], &rename.format);
+    }
+    fields.join("\t")
+}
+
+fn filter_after_rename(current: &str, map: &HashMap<String, String>) -> String {
+    if current == "." || current == "PASS" {
+        return current.to_owned();
+    }
+    current
+        .split(';')
+        .map(|tag| map.get(tag).map(String::as_str).unwrap_or(tag))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn info_after_rename(current: &str, map: &HashMap<String, String>) -> String {
+    if current == "." {
+        return current.to_owned();
+    }
+    current
+        .split(';')
+        .map(|entry| {
+            let (key, value) = entry.split_once('=').unwrap_or((entry, ""));
+            let new_key = map.get(key).map(String::as_str).unwrap_or(key);
+            if value.is_empty() {
+                new_key.to_owned()
+            } else {
+                format!("{new_key}={value}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn format_after_rename(current: &str, map: &HashMap<String, String>) -> String {
+    if current == "." {
+        return current.to_owned();
+    }
+    current
+        .split(':')
+        .map(|key| map.get(key).map(String::as_str).unwrap_or(key))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn apply_record_removals(line: &str, remove: &RemoveSet) -> String {
@@ -676,7 +832,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("1".to_owned(), "chr1".to_owned());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, Some(&map), &RemoveSet::default(), false);
+        transform_vcf_text(&mut text, Some(&map), None, &RemoveSet::default(), false);
         assert!(text.contains("##contig=<ID=chr1,length=10>"));
         assert!(text.contains("chr1\t2\trs1\tA\tC\t99\tLowQual;q10\tAC=1;AN=2;DP=12"));
     }
@@ -689,7 +845,7 @@ mod tests {
             ..Default::default()
         };
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove, false);
+        transform_vcf_text(&mut text, None, None, &remove, false);
         assert!(text.contains("1\t2\t.\tA\tC\t.\tLowQual;q10\tAC=1;AN=2;DP=12"));
     }
 
@@ -699,7 +855,7 @@ mod tests {
         remove.info_ids.insert("AC".into());
         remove.info_ids.insert("DP".into());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove, false);
+        transform_vcf_text(&mut text, None, None, &remove, false);
         assert!(!text.contains("##INFO=<ID=AC,"));
         assert!(!text.contains("##INFO=<ID=DP,"));
         assert!(text.contains("##INFO=<ID=AN,"));
@@ -714,7 +870,7 @@ mod tests {
         remove.filter_ids.insert("LowQual".into());
         remove.filter_ids.insert("q10".into());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove, false);
+        transform_vcf_text(&mut text, None, None, &remove, false);
         assert!(!text.contains("##FILTER=<ID=LowQual,"));
         assert!(!text.contains("##FILTER=<ID=q10,"));
         assert!(text.contains("PASS\tAC=1;AN=2;DP=12"));
@@ -727,7 +883,7 @@ mod tests {
             ..Default::default()
         };
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove, false);
+        transform_vcf_text(&mut text, None, None, &remove, false);
         assert!(!text.contains("##INFO="));
         assert!(text.contains("LowQual;q10\t.\n"));
     }

@@ -307,6 +307,21 @@ fn annotate_remove_filter_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn annotate_rename_annots_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "--rename-annots",
+        "../../bcftools/test/annotate21.txt",
+        "../../bcftools/test/annotate21.vcf",
+    ]);
+    assert_eq!(code, 0, "annotate29 rename-annots fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/annotate29.out").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
 fn annotate_keep_only_form_on_local_fixture() {
     let dir = TempDir::new().unwrap();
     let vcf = write_annotated_fixture(&dir);
