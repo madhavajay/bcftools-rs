@@ -110,6 +110,21 @@ fn merge_force_samples_prefixes_duplicates() {
 }
 
 #[test]
+fn merge_force_samples_repeats_prefix_until_unique_like_upstream_fixture() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--force-samples",
+        "../../bcftools/test/merge.7.a.vcf",
+        "../../bcftools/test/merge.7.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.7 --force-samples fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.9.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_unions_missing_sites_with_missing_sample_values() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
