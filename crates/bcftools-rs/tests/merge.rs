@@ -423,6 +423,21 @@ fn merge_format_vector_remap_matches_upstream_fixture() {
 }
 
 #[test]
+fn merge_info_number_vectors_match_upstream_fixture() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--force-samples",
+        "../../bcftools/test/merge.3.a.vcf",
+        "../../bcftools/test/merge.3.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.3 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.3.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
