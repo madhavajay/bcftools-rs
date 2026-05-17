@@ -201,9 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/merge-gvcf7-end-cleanup` adds
-  byte-for-byte text parity for upstream `merge.gvcf.7.out` by suppressing
-  single-base gVCF reference-block `INFO/END=POS` tags.
+- 2026-05-17: PR #137 (`progress/merge-gvcf7-end-cleanup`, merge commit
+  `a1a30e3`) added byte-for-byte text parity for upstream `merge.gvcf.7.out`
+  by suppressing single-base gVCF reference-block `INFO/END=POS` tags.
 - 2026-05-17: PR #135 (`progress/merge-abc-filter-x`, merge commit
   `290e2e9`) added byte-for-byte text parity for upstream `merge.abc.2.out`
   (`merge --force-samples -Fx`
@@ -483,9 +483,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`290e2e9`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`a1a30e3`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf7-end-cleanup`; keep the
+- Current code slice in flight: none after PR #137; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
