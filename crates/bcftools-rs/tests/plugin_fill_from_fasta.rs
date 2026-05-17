@@ -1,7 +1,5 @@
 //! End-to-end parity tests for `+fill-from-fasta` against the upstream
-//! `ref.out` / `aa.2.out` fixtures (test.pl rows 739-740). The `aa.out`
-//! row (row 738) needs the `-i 'TYPE="snp"'` filter engine and is
-//! deferred.
+//! `aa.out` / `ref.out` / `aa.2.out` fixtures (test.pl rows 738-740).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -84,5 +82,25 @@ fn fill_from_fasta_ref_replace_n() {
         "aa",
         &["-f", fa.to_str().unwrap(), "-c", "REF", "-N"],
         "aa.2.out",
+    );
+}
+
+#[test]
+fn fill_from_fasta_info_filter_matches_upstream_fixture() {
+    let fa = fixture_path("aa.fa");
+    let hdr = fixture_path("aa.hdr");
+    check(
+        "aa",
+        &[
+            "-f",
+            fa.to_str().unwrap(),
+            "-c",
+            "AA",
+            "-h",
+            hdr.to_str().unwrap(),
+            "-i",
+            "TYPE=\"snp\"",
+        ],
+        "aa.out",
     );
 }

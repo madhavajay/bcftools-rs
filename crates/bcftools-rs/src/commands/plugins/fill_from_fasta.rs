@@ -1,9 +1,8 @@
 //! `bcftools +fill-from-fasta` (upstream `bcftools/plugins/fill-from-fasta.c`).
 //!
-//! Fills the REF allele or an INFO tag from a FASTA reference. The
-//! `-i`/`-e` filter expressions need the not-yet-ported filter engine
-//! (tracked in `TODO.md`); the `-c REF` fixtures (`ref.out`,
-//! `aa.2.out`) do not use them.
+//! Fills the REF allele or an INFO tag from a FASTA reference. Plugin
+//! `-i`/`-e` filters route through the shared text filter engine and leave
+//! non-matching records unchanged.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -14,12 +13,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::vcf_compat::normalize_vcf_text;
 
 /// What `-c` selects.
 enum Column {
     Ref,
     Info(String),
+}
+
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
 }
 
 /// Parses a FASTA into name→sequence (name = first token after `>`).
@@ -51,14 +63,8 @@ pub fn run(
     column: &str,
     header_lines: Option<&Path>,
     replace_non_acgtn: bool,
-    has_filter: bool,
+    filter: Option<FilterSpec<'_>>,
 ) -> io::Result<String> {
-    if has_filter {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "fill-from-fasta -i/-e filtering requires the filter engine (not yet ported)",
-        ));
-    }
     let text = read_vcf_text(input)?;
     let fa_text = fs::read_to_string(fasta)?;
     let hdr_lines = match header_lines {
@@ -71,6 +77,7 @@ pub fn run(
         column,
         hdr_lines.as_deref(),
         replace_non_acgtn,
+        filter,
     )
     .map_err(io::Error::other)
 }
@@ -81,6 +88,7 @@ fn compute(
     column: &str,
     header_lines: Option<&str>,
     replace_non_acgtn: bool,
+    filter: Option<FilterSpec<'_>>,
 ) -> Result<String, String> {
     let col = if column.eq_ignore_ascii_case("REF") {
         Column::Ref
@@ -115,6 +123,13 @@ fn compute(
         }
         let mut f: Vec<String> = line.split('\t').map(|s| s.to_string()).collect();
         if f.len() < 8 {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if let Some(filter) = filter
+            && !record_should_annotate(&f, filter)?
+        {
             out.push_str(line);
             out.push('\n');
             continue;
@@ -169,6 +184,53 @@ fn compute(
     Ok(out)
 }
 
+fn record_should_annotate(fields: &[String], filter: FilterSpec<'_>) -> Result<bool, String> {
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            fill_from_fasta_lookup(name, fields)
+        })
+        .map_err(|e| e.to_string())?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
+fn fill_from_fasta_lookup(token: &str, fields: &[String]) -> Option<FilterValue> {
+    if token.eq_ignore_ascii_case("TYPE") {
+        return Some(variant_type_value(fields));
+    }
+    crate::commands::filter::record_lookup(token, fields)
+}
+
+fn variant_type_value(fields: &[String]) -> FilterValue {
+    let reference = fields.get(3).map(String::as_str).unwrap_or("");
+    let values: Vec<FilterValue> = fields
+        .get(4)
+        .map(String::as_str)
+        .unwrap_or(".")
+        .split(',')
+        .filter(|alt| *alt != ".")
+        .map(|alt| {
+            let kind = if reference.len() == alt.len() {
+                if reference.len() == 1 { "snp" } else { "mnp" }
+            } else {
+                "indel"
+            };
+            FilterValue::String(kind.to_owned())
+        })
+        .collect();
+    match values.as_slice() {
+        [] => FilterValue::String("ref".to_owned()),
+        [single] => single.clone(),
+        _ => FilterValue::List(values),
+    }
+}
+
 fn read_vcf_text(path: &Path) -> io::Result<String> {
     if path == Path::new("-") {
         let tmp = stdin_tmp_path();
@@ -217,5 +279,47 @@ mod tests {
         let m = parse_fasta(">2 2:1-9\nACGT\nacgt\n>3 x\nTTTT\n");
         assert_eq!(m.get("2").unwrap(), b"ACGTacgt");
         assert_eq!(m.get("3").unwrap(), b"TTTT");
+    }
+
+    #[test]
+    fn filter_controls_annotation_not_record_output() {
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
+chr1\t1\t.\tA\tC\t.\tPASS\t.
+chr1\t2\t.\tA\tAT\t.\tPASS\t.
+";
+        let fasta = ">chr1\nACGT\n";
+        let header = "##INFO=<ID=AA,Number=1,Type=String,Description=\"Ancestral allele\">\n";
+
+        let include = compute(
+            vcf,
+            fasta,
+            "AA",
+            Some(header),
+            false,
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: "TYPE=\"snp\"",
+            }),
+        )
+        .unwrap();
+        assert!(include.contains("chr1\t1\t.\tA\tC\t.\tPASS\tAA=A\n"));
+        assert!(include.contains("chr1\t2\t.\tA\tAT\t.\tPASS\t.\n"));
+
+        let exclude = compute(
+            vcf,
+            fasta,
+            "AA",
+            Some(header),
+            false,
+            Some(FilterSpec {
+                mode: FilterMode::Exclude,
+                expr: "TYPE=\"snp\"",
+            }),
+        )
+        .unwrap();
+        assert!(exclude.contains("chr1\t1\t.\tA\tC\t.\tPASS\t.\n"));
+        assert!(exclude.contains("chr1\t2\t.\tA\tAT\t.\tPASS\tAA=C\n"));
     }
 }
