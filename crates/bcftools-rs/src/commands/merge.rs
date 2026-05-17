@@ -634,7 +634,7 @@ fn position_key(record: &RecordLine) -> String {
     record
         .fixed
         .iter()
-        .take(3)
+        .take(2)
         .cloned()
         .collect::<Vec<_>>()
         .join("\t")
@@ -661,7 +661,7 @@ fn can_merge_sampled_same_position(
 ) -> bool {
     if site.fixed.len() < 9
         || record.fixed.len() < 9
-        || site.fixed[..3] != record.fixed[..3]
+        || site.fixed[..2] != record.fixed[..2]
         || site.fixed[8] != record.fixed[8]
         || merged_ref(&site.fixed[3], &record.fixed[3]).is_none()
     {
@@ -670,6 +670,12 @@ fn can_merge_sampled_same_position(
 
     let site_has_non_ref = alt_contains_non_ref(&site.fixed[4]);
     let record_has_non_ref = alt_contains_non_ref(&record.fixed[4]);
+    let subset_compatible = same_ref_alt_subset_compatible(
+        &site.fixed[3],
+        &site.fixed[4],
+        &record.fixed[3],
+        &record.fixed[4],
+    );
     match merge_mode {
         MergeMode::Default => {
             let site_alts = split_alt(&site.fixed[4]);
@@ -680,8 +686,11 @@ fn can_merge_sampled_same_position(
                     && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
             }
         }
-        MergeMode::None => site_has_non_ref && record_has_non_ref,
+        MergeMode::None => subset_compatible || site_has_non_ref && record_has_non_ref,
         MergeMode::Both => {
+            if subset_compatible {
+                return true;
+            }
             if site_has_non_ref && record_has_non_ref {
                 return true;
             }
@@ -699,6 +708,15 @@ fn can_merge_sampled_same_position(
 
 fn alt_contains_non_ref(alt: &str) -> bool {
     split_alt(alt).iter().any(|alt| alt == "<NON_REF>")
+}
+
+fn same_ref_alt_subset_compatible(a_ref: &str, a_alt: &str, b_ref: &str, b_alt: &str) -> bool {
+    let a_alts = split_alt(a_alt);
+    let b_alts = split_alt(b_alt);
+    if a_ref != b_ref || a_ref.is_empty() || a_alts.is_empty() || b_alts.is_empty() {
+        return false;
+    }
+    a_alts.iter().all(|alt| b_alts.contains(alt)) || b_alts.iter().all(|alt| a_alts.contains(alt))
 }
 
 fn merge_exact_site(
@@ -737,6 +755,13 @@ fn merge_exact_site(
 }
 
 fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String]) {
+    if let (Some(site_id), Some(record_id)) = (site_fixed.get_mut(2), record_fixed.get(2))
+        && (*site_id == "." || site_id.is_empty())
+        && record_id != "."
+        && !record_id.is_empty()
+    {
+        *site_id = record_id.clone();
+    }
     if let (Some(site_qual), Some(record_qual)) = (site_fixed.get_mut(5), record_fixed.get(5)) {
         *site_qual = merge_qual(site_qual, record_qual);
     }
