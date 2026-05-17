@@ -482,25 +482,7 @@ fn collect_sites(
             let key = site_key(record);
             if let Some(site_idx) = by_key.get(&key).copied() {
                 let site: &mut MergedSite = &mut sites[site_idx];
-                if record.fixed != site.fixed {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "conflicting records at {}:{} require full merge semantics",
-                            record.fixed[0], record.fixed[1]
-                        ),
-                    ));
-                }
-                if site.samples_by_input[input_idx].is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "duplicate record at {}:{}",
-                            record.fixed[0], record.fixed[1]
-                        ),
-                    ));
-                }
-                site.samples_by_input[input_idx] = Some(record.samples.clone());
+                merge_exact_site(site, record, input_idx)?;
             } else {
                 let mut merged = false;
                 let mut same_locus_conflict = None;
@@ -608,7 +590,10 @@ fn can_merge_same_locus_alt_union(site: &MergedSite, record: &RecordLine) -> boo
 }
 
 fn supports_sampled_same_position_union(merge_mode: MergeMode) -> bool {
-    matches!(merge_mode, MergeMode::Both | MergeMode::SnpInsDel)
+    matches!(
+        merge_mode,
+        MergeMode::Default | MergeMode::Both | MergeMode::SnpInsDel
+    )
 }
 
 fn can_merge_sampled_same_position(
@@ -626,6 +611,15 @@ fn can_merge_sampled_same_position(
     }
 
     match merge_mode {
+        MergeMode::Default => {
+            let site_alts = split_alt(&site.fixed[4]);
+            let record_alts = split_alt(&record.fixed[4]);
+            site_alts.is_empty() || record_alts.is_empty() || {
+                let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
+                site_class != CoarseVariantClass::Other
+                    && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
+            }
+        }
         MergeMode::Both => {
             let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
             site_class != CoarseVariantClass::Other
@@ -637,6 +631,52 @@ fn can_merge_sampled_same_position(
                 && site_class == precise_variant_class(&record.fixed[3], &record.fixed[4])
         }
         _ => false,
+    }
+}
+
+fn merge_exact_site(
+    site: &mut MergedSite,
+    record: &RecordLine,
+    input_idx: usize,
+) -> io::Result<()> {
+    if site.fixed.len() != record.fixed.len()
+        || site.fixed[..5] != record.fixed[..5]
+        || site.fixed.get(8) != record.fixed.get(8)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "conflicting records at {}:{} require full merge semantics",
+                record.fixed[0], record.fixed[1]
+            ),
+        ));
+    }
+    if site.samples_by_input[input_idx].is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "duplicate record at {}:{}",
+                record.fixed[0], record.fixed[1]
+            ),
+        ));
+    }
+    merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
+    site.samples_by_input[input_idx] = Some(record.samples.clone());
+    Ok(())
+}
+
+fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String]) {
+    if let (Some(site_qual), Some(record_qual)) = (site_fixed.get_mut(5), record_fixed.get(5)) {
+        *site_qual = merge_qual(site_qual, record_qual);
+    }
+}
+
+fn merge_qual(current: &str, next: &str) -> String {
+    match (current.parse::<f64>(), next.parse::<f64>()) {
+        (Ok(a), Ok(b)) if b > a => next.to_owned(),
+        (Ok(_), Ok(_)) => current.to_owned(),
+        (Err(_), Ok(_)) if current == "." || current.is_empty() => next.to_owned(),
+        _ => current.to_owned(),
     }
 }
 
@@ -758,6 +798,7 @@ fn merge_sampled_same_position(
     } else {
         merged_alts.join(",")
     };
+    merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
     site.samples_by_input[input_idx] = Some(remap_sample_values(
         &record.fixed[8],
         &record.samples,
