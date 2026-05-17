@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #129 (`progress/merge-missing-to-ref-slice`, merge commit
+  `4fe7577`) added a narrow text-backed `merge -0` / `--missing-to-ref`
+  slice for absent-input hom-ref sample filling with `AN` adjustment.
 - 2026-05-17: PR #127 (`progress/merge-gvcf10-reference-split`, merge commit
   `2f24bf2`) extended the narrow gVCF10 merge slice with reference-backed
   `-g REF.fa` block splitting, with byte-for-byte
@@ -467,12 +470,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`6b8cf47`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`4fe7577`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-missing-to-ref-slice` is
-  adding a narrow text-backed `merge -0` / `--missing-to-ref` slice for
-  absent-input sample values. Keep the one-branch rule, run the full local
-  gate, and wait for both required GitHub checks before merge.
+- Current code slice in flight: none after PR #129; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
