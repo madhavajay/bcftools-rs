@@ -201,9 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/annotate-rename-annots` adds byte-for-byte
-  text parity for upstream `annotate29.out` by supporting simple
-  `--rename-annots` INFO/FILTER/FORMAT ID renaming in headers and records.
+- 2026-05-17: PR #151 (`progress/annotate-rename-annots`, merge commit
+  `3c1a01a`) added byte-for-byte text parity for upstream `annotate29.out` by
+  supporting simple `--rename-annots` INFO/FILTER/FORMAT ID renaming in
+  headers and records.
 - 2026-05-17: PR #149 (`progress/annotate-force-pass-header`, merge commit
   `ed81235`) added byte-for-byte text parity for upstream `annotate25.out` and
   `annotate28.out` by accepting `--force` in the local `-x` removal slice,
@@ -510,9 +511,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`ed81235`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`3c1a01a`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/annotate-rename-annots`; keep the
+- Current code slice in flight: none after PR #151; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
