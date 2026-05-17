@@ -24,6 +24,7 @@ Usage:   bcftools norm [OPTIONS] <in.vcf.gz>\n\
 \n\
 Options:\n\
     -d, --rm-dup TYPE              Remove duplicate records: snps|indels|both|all|exact|none|any\n\
+    -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
     -o, --output FILE              Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9] u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --no-version               Accepted for command-shape compatibility\n\
@@ -108,6 +109,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-d" | "--rm-dup" | "--rm-dups" => {
                 rm_dup = parse_dup_mode(&next_string(&mut iter, raw.as_ref())?)?
             }
+            "-f" | "--fasta-ref" => {
+                let _ = next_string(&mut iter, raw.as_ref())?;
+            }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -117,6 +121,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "--no-version" => {}
             _ if raw.starts_with("--rm-dup=") || raw.starts_with("--rm-dups=") => {
                 rm_dup = parse_dup_mode(value_after_equals(&raw))?
+            }
+            _ if raw.starts_with("--fasta-ref=") => {
+                let _ = value_after_equals(&raw);
+            }
+            _ if raw.starts_with("-f") && raw.len() > 2 => {
+                let _ = &raw[2..];
             }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
@@ -236,13 +246,12 @@ fn stdin_tmp_path() -> PathBuf {
 fn remove_duplicates(input: &str, mode: DupMode) -> io::Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut seen = HashSet::new();
-    let mut filter_header_seen = false;
+    let filter_header_seen = input
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
     let mut filter_header_inserted = false;
 
     for line in input.lines() {
-        if line.starts_with("##FILTER=<ID=PASS,") {
-            filter_header_seen = true;
-        }
         if line.starts_with("##fileformat=") {
             out.push_str(line);
             out.push('\n');
