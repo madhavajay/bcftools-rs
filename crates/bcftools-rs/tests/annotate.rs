@@ -246,17 +246,51 @@ fn annotate_rename_and_remove_combined() {
 }
 
 #[test]
-fn annotate_rejects_keep_only_form() {
-    let dir = TempDir::new().unwrap();
-    let vcf = write_annotated_fixture(&dir);
-
-    let (_out, err, code) = run(&[
+fn annotate_keep_only_remove_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
         "annotate",
         "--no-version",
         "-x",
-        "^INFO/AC",
+        "ID,QUAL,^FILTER/fltA,FILTER/fltB,^INFO/AA,INFO/BB,^FMT/GT,FMT/PL",
+        "../../bcftools/test/annotate3.vcf",
+    ]);
+    assert_eq!(code, 0, "annotate6 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/annotate6.out").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
+fn annotate_format_remove_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "FORMAT",
+        "../../bcftools/test/annotate3.vcf",
+    ]);
+    assert_eq!(code, 0, "annotate7 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/annotate7.out").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
+fn annotate_keep_only_form_on_local_fixture() {
+    let dir = TempDir::new().unwrap();
+    let vcf = write_annotated_fixture(&dir);
+
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "^INFO/AC,INFO/DP",
         vcf.to_str().unwrap(),
     ]);
-    assert_ne!(code, 0, "expected rejection of ^ keep-only form");
-    assert!(err.contains("keep-only"), "stderr: {err}");
+    assert_eq!(code, 0, "annotate keep-only failed: {err}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("##INFO=<ID=AC,"), "{out}");
+    assert!(out.contains("##INFO=<ID=DP,"), "{out}");
+    assert!(!out.contains("##INFO=<ID=AN,"), "{out}");
+    assert!(out.contains("\tAC=1;DP=12\n"), "{out}");
 }

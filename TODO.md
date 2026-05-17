@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: in-flight `progress/annotate-format-remove-keep` adds
+  byte-for-byte text parity for upstream `annotate6.out` and `annotate7.out`
+  by supporting `FORMAT`/`FORMAT/<ID>` removal plus the `^` keep-only `-x`
+  form for FILTER/INFO/FORMAT IDs.
 - 2026-05-17: PR #145 (`progress/merge-gvcf3-src-join`, merge commit
   `e0365fe`) added byte-for-byte text parity for upstream `merge.gvcf.3.out`
   by honoring `-i SRC:join` in sampled no-reference gVCF reference-block
@@ -500,8 +504,7 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest merged commit on `main` (`e0365fe`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none after PR #145; start one focused
-  local-only branch from fresh `main` for the next TODO item, keep the
+- Current code slice in flight: `progress/annotate-format-remove-keep`; keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
@@ -518,7 +521,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 | Subcommand | Status | Module / notes |
 | --- | --- | --- |
-| `annotate` | first slice | `commands/annotate.rs` — `--rename-chrs` only |
+| `annotate` | first slice | `commands/annotate.rs` — rename/remove text slice |
 | `call` | not started | dispatched to `unsupported` |
 | `cnv` | not started | dispatched to `unsupported` |
 | `concat` | broad slice | `commands/concat.rs` — `-a`/`-l` ligate remain |
@@ -787,8 +790,8 @@ The waves are ordered to land foundational machinery first (read/write/index, th
   - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/filter.rs`): VCF/VCF.gz/BCF read paths and VCF/VCF.gz/BCF write paths, `-i`/`-e` text-mode expression filtering via the shared filter engine for core fields and INFO tags plus simple FORMAT/sample contexts, upstream-backed sample-fraction functions `F_PASS(...)` and `F_MISSING` for text VCF filters, upstream single `&`/`|` FORMAT-vector site predicates with byte-for-byte `filter.2.out` coverage, bcftools GT class literals with byte-for-byte `filter.{12,13,14,15,16,17,18,19}.out` coverage, FORMAT sample/value subscripts with byte-for-byte `filter.{20,21,22,23,24,25}.out` coverage, missing QUAL comparison with byte-for-byte `filter.26.out` coverage, FORMAT/AO aggregate `-S .` behavior (`MIN`/`MAX`/`SUM`/`AVG`/`MEDIAN`/`STDEV` site-level functions vs `SMPL_*`/`s*` sample-level functions) with byte-for-byte `filter.{30,31,32,33,34,36}.out` text coverage, `-s`/`--soft-filter` re-tagging plus auto `##FILTER` header injection, joined short options used by upstream fixtures (`-sTAG`, `-S.`, `-m...`, `-g...`, `-G...`, `-iEXPR`, `-eEXPR`), `-m +` additive and `-m x` reset-pass modes, `--mask`/`-M` soft-filter masks including mask files and `^` negation, `--mask-overlap 0|1|2` POS/span matching, `-S`/`--set-GTs .|0` site-level failed-record genotype rewriting plus simple per-sample rewrites for FORMAT-scoped expressions, with existing INFO/AC and INFO/AN recalculation, `-g`/`--SnpGap` and `-G`/`--IndelGap` local text-mode gap filters including `--SnpGap` type-list matching for symbolic deletion spans with byte-for-byte `filter.29.out` text coverage and `--IndelGap` QUAL/AC/first-record tie-breaking, `-r`/`-R`/`-t`/`-T` POS-based region/target restriction, `-W`/`--write-index[=csi|tbi]` for VCF.gz/BCF outputs, `--threads` for VCF.gz/BCF file outputs, full `##bcftools_filter{Version,Command}` header line emission with `--no-version` suppression, Kestrel-tolerant text reads, shared `record_lookup` helper reused by `stats`. 37 integration tests in `crates/bcftools-rs/tests/filter.rs`.
   - [ ] Remaining: exact buffered gap-filter edge-case parity, full filter-expression FORMAT/sample-vector semantics, structured BCF write path that round-trips through the soft-filter rewrite without re-parsing.
 - [ ] `annotate` (`vcfannotate.c`, 180k — single largest file in bcftools) — INFO/FORMAT/FILTER/ID column transfer from VCF/BCF/TAB sources, rename chrs, `-x` removal, header injection, `-c CHROM,POS,REF,ALT,…` column mapping, `--columns-file`, `--single-overlaps`, `--regions-overlap`. Covered by `test_vcf_annotate`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/annotate.rs`): `--rename-chrs` with two-column chromosome maps (contig-header `ID=` rewriting + CHROM-column rewriting), `-x`/`--remove` tag removal for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>` (substituting `PASS` when the FILTER set empties), `INFO`, and `INFO/<ID>` (dropping the matching `##INFO`/`##FILTER` header lines), combined `--rename-chrs` + `-x`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, and `--no-version` command-shape compatibility. 9 integration tests in `crates/bcftools-rs/tests/annotate.rs`.
-  - [ ] Remaining: INFO/FORMAT/FILTER/ID transfer from VCF/BCF/TAB sources, `FORMAT/<ID>` removal, the `^`-keep-only `-x` form, header injection, `-c`/`--columns-file` mapping, sample-aware FORMAT annotation, overlap modes, merge logic, mark/missing modifiers, and full upstream `test_vcf_annotate` / `test_rename_chrs` parity.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/annotate.rs`): `--rename-chrs` with two-column chromosome maps (contig-header `ID=` rewriting + CHROM-column rewriting), `-x`/`--remove` tag removal for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>` (substituting `PASS` when the FILTER set empties), `INFO`, `INFO/<ID>`, `FORMAT`, and `FORMAT/<ID>` (dropping the matching `##INFO`/`##FILTER`/`##FORMAT` header lines and projecting sample FORMAT fields), the `^` keep-only `-x` form for FILTER/INFO/FORMAT IDs, byte-for-byte upstream `annotate6.out` and `annotate7.out` coverage, combined `--rename-chrs` + `-x`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, and `--no-version` command-shape compatibility. 11 integration tests in `crates/bcftools-rs/tests/annotate.rs`.
+  - [ ] Remaining: INFO/FORMAT/FILTER/ID transfer from VCF/BCF/TAB sources, header injection, `-c`/`--columns-file` mapping, sample-aware FORMAT annotation, overlap modes, merge logic, mark/missing modifiers, and full upstream `test_vcf_annotate` / `test_rename_chrs` parity.
 
 ### Wave D — Calling & Consequence
 
