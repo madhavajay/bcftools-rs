@@ -50,6 +50,44 @@ struct Counts {
     ncount: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RegionSpec<'a> {
+    chrom: &'a str,
+    start: Option<u64>,
+    end: Option<u64>,
+}
+
+impl<'a> RegionSpec<'a> {
+    fn parse(raw: &'a str) -> RegionSpec<'a> {
+        let Some((chrom, interval)) = raw.split_once(':') else {
+            return RegionSpec {
+                chrom: raw,
+                start: None,
+                end: None,
+            };
+        };
+        let (start, end) = interval.split_once('-').unwrap_or((interval, interval));
+        RegionSpec {
+            chrom,
+            start: start.parse::<u64>().ok(),
+            end: end.parse::<u64>().ok(),
+        }
+    }
+
+    fn matches(&self, chrom: &str, pos: &str) -> bool {
+        if chrom != self.chrom {
+            return false;
+        }
+        if self.start.is_none() && self.end.is_none() {
+            return true;
+        }
+        let Ok(pos) = pos.parse::<u64>() else {
+            return false;
+        };
+        self.start.is_none_or(|start| pos >= start) && self.end.is_none_or(|end| pos <= end)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Options<'a> {
     pub tag: Tag,
@@ -72,6 +110,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
 fn compute(text: &str, opts: Options<'_>) -> Result<String, String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut tag = opts.tag;
+    let region = opts.region.map(RegionSpec::parse);
 
     let mut has_pl = false;
     let mut has_gl = false;
@@ -128,8 +167,8 @@ fn compute(text: &str, opts: Options<'_>) -> Result<String, String> {
         if f.len() < 10 {
             continue;
         }
-        if let Some(r) = opts.region
-            && f[0] != r
+        if let Some(r) = &region
+            && !r.matches(f[0], f[1])
         {
             continue;
         }
@@ -452,6 +491,16 @@ mod tests {
     }
 
     #[test]
+    fn region_spec_matches_chrom_and_interval() {
+        assert!(RegionSpec::parse("X").matches("X", "1"));
+        assert!(RegionSpec::parse("X:10-20").matches("X", "10"));
+        assert!(RegionSpec::parse("X:10-20").matches("X", "20"));
+        assert!(!RegionSpec::parse("X:10-20").matches("X", "9"));
+        assert!(!RegionSpec::parse("X:10-20").matches("X", "21"));
+        assert!(!RegionSpec::parse("X:10-20").matches("Y", "15"));
+    }
+
+    #[test]
     fn header_and_region_filter() {
         let vcf = "##fileformat=VCFv4.2\n\
 ##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
@@ -463,6 +512,19 @@ X\t200\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n";
         let sex_line = out.lines().find(|l| l.starts_with("SEX\tS1")).unwrap();
         assert_eq!(sex_line.split('\t').nth(5).unwrap(), "1");
         assert!(out.contains("# [1]SEX\t[2]Sample"));
+    }
+
+    #[test]
+    fn header_and_interval_region_filter() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+X\t9\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n\
+X\t10\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n\
+X\t21\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n";
+        let out = compute(vcf, opts(Some("X:10-20"), None)).unwrap();
+        let sex_line = out.lines().find(|l| l.starts_with("SEX\tS1")).unwrap();
+        assert_eq!(sex_line.split('\t').nth(5).unwrap(), "1");
     }
 
     #[test]

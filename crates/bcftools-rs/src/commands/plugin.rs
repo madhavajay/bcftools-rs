@@ -482,6 +482,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             {
                 gp_region = Some(raw[2..].to_owned());
             }
+            "-g" | "--genome" if plugin_name.as_deref() == Some("guess-ploidy") => {
+                if let Some(v) = iter.next() {
+                    gp_region = Some(guess_ploidy_genome_region(&v.to_string_lossy())?);
+                }
+            }
+            _ if raw.starts_with("--genome=") && plugin_name.as_deref() == Some("guess-ploidy") => {
+                gp_region = Some(guess_ploidy_genome_region(&raw["--genome=".len()..])?);
+            }
             // parental-origin: -r REGION, -t del|dup, -g, -b, -d.
             "-r" | "--region" if plugin_name.as_deref() == Some("parental-origin") => {
                 po_region = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1449,6 +1457,26 @@ fn write_kind<W: Write>(bytes: &[u8], kind: OutKind, out: W) -> io::Result<()> {
             writer.try_finish()
         }
     }
+}
+
+fn guess_ploidy_genome_region(genome: &str) -> io::Result<String> {
+    let region = if genome.eq_ignore_ascii_case("b37") {
+        "X:2699521-154931043"
+    } else if genome.eq_ignore_ascii_case("b38") {
+        "X:2781480-155701381"
+    } else if genome.eq_ignore_ascii_case("hg19") {
+        "chrX:2699521-154931043"
+    } else if genome.eq_ignore_ascii_case("hg38") {
+        "chrX:2781480-155701381"
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "The argument not recognised, expected --genome b37, b38, hg19 or hg38: {genome}"
+            ),
+        ));
+    };
+    Ok(region.to_owned())
 }
 
 fn list_plugins<W: Write>(out: &mut W, verbose: bool) -> io::Result<()> {
