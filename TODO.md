@@ -698,8 +698,9 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest merged commit on `main` (`d3f490c`) (318 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/contrast-common-filter`, adding
+  common `+contrast -i/-e` record filtering through the shared text filter
+  engine before annotation and stderr statistic accumulation.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1279,15 +1280,17 @@ Current local slice:
   allele absent from controls), `NOVELGT` (novel genotype bitmask vs the
   control genotype set; `else if` after NOVELAL exactly as upstream);
   `-f`/`--max-allele-freq` rare-allele enrichment (`max_AC`) summary and
+  common `-i`/`-e` record filtering through the shared text filter engine;
   upstream-style processing totals on stderr; the requested `##INFO` defs
   + htslib `##FILTER=<ID=PASS>` header injection; every record written
   (skipped ones verbatim); floats via the shared `kputd`.
   Byte-for-byte parity with `contrast.out` (PASSOC,FASSOC,
   NOVELAL,NOVELGT; list **and** file `-0`/`-1`), `contrast.1.out`
   (NASSOC, `--force-samples` with an absent case sample), `contrast.1.1.out`
-  (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 6 integration tests
-  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 6 unit tests.
-  Remaining: `-i`/`-e` filtering (filter engine).
+  (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 7 integration tests
+  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 7 unit tests.
+  Remaining: full bcftools filter-expression parity is limited by the shared
+  filter engine.
 - [x] `+fixref` (`crates/bcftools-rs/src/commands/plugins/fixref.rs`):
   port of `fixref.c` FASTA-reference strand fixing — `ref-alt` & `swap`
   (REF/ALT column changes only), `flip` & `flip-all` (also flip + swap

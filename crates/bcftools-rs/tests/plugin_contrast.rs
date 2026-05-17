@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn fixture_path(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("..");
@@ -149,4 +151,54 @@ fn contrast_rare_allele_summary_to_stderr() {
             "max_AC/PASSOC/FASSOC/NASSOC:\t1\t9.803922e-02\t0.000000,0.333333\t12,0,4,2\n"
         )
     );
+}
+
+#[test]
+fn contrast_include_filter_limits_output_records() {
+    ensure_binary_built();
+    let tmp = TempDir::new().expect("tempdir");
+    let input = tmp.path().join("contrast-filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ta\tb\tc\n\
+1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/0\t0/0\n\
+1\t101\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/0\t0/1\n",
+    )
+    .unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+contrast",
+            input.to_str().unwrap(),
+            "-a",
+            "NASSOC",
+            "-0",
+            "a,b",
+            "-1",
+            "c",
+            "-i",
+            "POS=101",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let records: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0],
+        "1\t101\t.\tA\tG\t.\t.\tNASSOC=4,0,1,1\tGT\t0/0\t0/0\t0/1"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("Total/processed/skipped/case_allele/case_gt:\t1\t1\t0\t0\t0\n"));
 }

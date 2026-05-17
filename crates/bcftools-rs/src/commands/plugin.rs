@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::commands::plugins::contrast::FilterMode as ContrastFilterMode;
 use crate::commands::plugins::fill_from_fasta::FilterMode as FillFromFastaFilterMode;
 use crate::commands::plugins::guess_ploidy::FilterMode as GuessPloidyFilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
@@ -93,6 +94,20 @@ fn set_guess_ploidy_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one guess-ploidy -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_contrast_filter(
+    target: &mut Option<(ContrastFilterMode, String)>,
+    mode: ContrastFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one contrast -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -340,6 +355,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut contrast_control: Option<String> = None;
     let mut contrast_case: Option<String> = None;
     let mut contrast_max_ac: Option<String> = None;
+    let mut contrast_filter: Option<(ContrastFilterMode, String)> = None;
     let mut force_samples = false;
     // fixref options.
     let mut fixref_fasta: Option<String> = None;
@@ -677,7 +693,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 let _ = iter.next();
             }
             "-i" | "--include" | "-e" | "--exclude"
-                if plugin_name.as_deref() != Some("missing2ref") =>
+                if !matches!(plugin_name.as_deref(), Some("missing2ref" | "contrast")) =>
             {
                 let _ = iter.next();
             }
@@ -882,6 +898,55 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-a" | "--annots" if plugin_name.as_deref() == Some("contrast") => {
                 contrast_annots = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() == Some("contrast") =>
+            {
+                let mode = if raw == "-i" || raw == "--include" {
+                    ContrastFilterMode::Include
+                } else {
+                    ContrastFilterMode::Exclude
+                };
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("contrast requires an expression after -i/-e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                set_contrast_filter(&mut contrast_filter, mode, expr)?;
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("contrast") => {
+                set_contrast_filter(
+                    &mut contrast_filter,
+                    ContrastFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("contrast") => {
+                set_contrast_filter(
+                    &mut contrast_filter,
+                    ContrastFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("contrast") =>
+            {
+                set_contrast_filter(
+                    &mut contrast_filter,
+                    ContrastFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("contrast") =>
+            {
+                set_contrast_filter(
+                    &mut contrast_filter,
+                    ContrastFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             "-0" | "--control-samples" | "--bg-samples" => {
                 contrast_control = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1490,6 +1555,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             case,
             force_samples,
             contrast_max_ac.as_deref(),
+            contrast_filter
+                .as_ref()
+                .map(|(mode, expr)| contrast::FilterSpec { mode: *mode, expr }),
         )?;
         eprint!("{}", report.stderr);
         write_plugin_output(report.vcf.as_bytes(), output.as_deref(), output_kind)?;
