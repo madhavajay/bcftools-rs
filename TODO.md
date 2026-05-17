@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #85 (`progress/merge-sampled-sites-only-alt`, merge commit
+  `a10673b`) added sampled plus sites-only same-locus ALT union in `merge`,
+  preserving sampled columns and upstream default AC/AN behavior with
+  byte-for-byte `merge.9.1.out` text coverage.
 - 2026-05-17: PR #83 (`progress/merge-sites-only-alt-union`, merge commit
   `1290900`) added sites-only same-locus ALT union in `merge`, including
   AC/AN summing, `-i AN:sum,AC:sum` command-shape compatibility for the
@@ -386,9 +390,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`1290900`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`a10673b`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #83. The next branch should pick one
+- No code slice is in flight after PR #85. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
