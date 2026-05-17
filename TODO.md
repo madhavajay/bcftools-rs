@@ -625,10 +625,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`09d3cc9`) (297 lib unit tests plus per-command
+  latest merged commit on `main` (`bd8a2ec`) (297 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; `main` is synced through PR #187
-  (`09d3cc9`).
+- Current code slice in flight: `progress/tag2tag-gl-to-gp` — add
+  `+tag2tag --gl-to-gp` byte-for-byte parity for upstream `view.GL-GP.vcf`.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -943,7 +943,7 @@ registry rather than scanning `BCFTOOLS_PLUGINS` for `.so` files.
 Implemented so far (PRs #45–#70): 32 plugins
 under `crates/bcftools-rs/src/commands/plugins/` —
 `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`,
-`check-ploidy`, `tag2tag` (gl-to-pl/gp-to-gt), `add-variantkey`,
+`check-ploidy`, `tag2tag` (gl-to-pl/gl-to-gp/gp-to-gt), `add-variantkey`,
 `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`,
 `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`,
 `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`,
@@ -1009,15 +1009,17 @@ Current local slice:
   upstream `plugin1.vcf` -> `fill-AN-AC.out` fixture. 4 integration tests +
   6 unit tests. Remaining: `+fill-tags` superset semantics.
 - [x] `+tag2tag` (`crates/bcftools-rs/src/commands/plugins/tag2tag.rs`):
-  exact integer conversions `--gl-to-pl` (`PL = lround(-10*GL)`, missing
-  preserved) and `--gp-to-gt` (hard-call from normalized `GP`,
-  `-t`/`--threshold`, call iff max posterior >= 1 - threshold, alleles via
-  the HTSlib `bcf_gt2alleles` layout); `-r`/`--replace` drops the source
-  FORMAT tag and its `##FORMAT` header and appends the dst header as the
-  last `##` line. Byte-for-byte parity with upstream `view.GL.vcf`->`view.PL.vcf`
-  and `view.GP.vcf`->`view.GT.vcf` (`test.pl` lines 676, 678). 4 integration
-  tests + 4 unit tests. Remaining: float `--gl-to-gp` (`%g`) and the
-  localized `--LXX-to-XX` family (`test.pl` 677, 679-681).
+  exact integer conversion `--gl-to-pl` (`PL = lround(-10*GL)`, missing
+  preserved), float `--gl-to-gp` (`GP = 10^GL / sum(10^GL)`, missing
+  preserved, upstream `float` arithmetic and `%g`-style formatting), and
+  `--gp-to-gt` (hard-call from normalized `GP`, `-t`/`--threshold`, call iff
+  max posterior >= 1 - threshold, alleles via the HTSlib `bcf_gt2alleles`
+  layout); `-r`/`--replace` drops the source FORMAT tag and its `##FORMAT`
+  header and appends the dst header as the last `##` line. Byte-for-byte
+  parity with upstream `view.GL.vcf`->`view.PL.vcf`,
+  `view.GL.vcf`->`view.GL-GP.vcf`, and `view.GP.vcf`->`view.GT.vcf`
+  (`test.pl` lines 676-678). 4 integration tests + 5 unit tests. Remaining:
+  the localized `--LXX-to-XX` family (`test.pl` 679-681).
 - [x] `+check-ploidy` (`crates/bcftools-rs/src/commands/plugins/check_ploidy.rs`):
   per-sample contiguous constant-ploidy regions
   (`Sample Chrom Start End Ploidy`); default ignores genotypes with any
@@ -1153,7 +1155,7 @@ Current local slice:
   with `prune.1.1.out` (`-a r2,LD,HD`), `prune.1.2.out` (`-m 0.5 -f
   MaxR2`), `prune.1.3.out` (`-m 0.5`), `prune.1.4.out` (maxAF
   `--AF-tag`), `prune.1.6.out` (1st), and `prune.2.1.out` (20-sample).
-  6 integration tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 3
+  6 integration tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 4
   unit tests. Remaining: `-a count`/`-m count=` cluster mode, `-N rand`
   (`hts_drand48` parity), and `-i`/`-e` filtering (filter engine).
 - [x] `+dosage` (`crates/bcftools-rs/src/commands/plugins/dosage.rs`):

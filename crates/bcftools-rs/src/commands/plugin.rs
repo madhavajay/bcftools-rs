@@ -815,16 +815,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         let conv = match conversion {
             Some("gl-to-pl") => Conversion::GlToPl,
             Some("gp-to-gt") => Conversion::GpToGt,
-            Some("gl-to-gp") => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "tag2tag --gl-to-gp is not supported in this local slice",
-                ));
-            }
+            Some("gl-to-gp") => Conversion::GlToGp,
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "tag2tag requires one of --gl-to-pl or --gp-to-gt in this local slice",
+                    "tag2tag requires one of --gl-to-pl, --gl-to-gp, or --gp-to-gt in this local slice",
                 ));
             }
         };

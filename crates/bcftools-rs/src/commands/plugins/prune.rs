@@ -439,7 +439,12 @@ fn format_g(d: f64) -> String {
             s
         }
     } else {
-        let m = d / 10f64.powi(exp);
+        let mut exp = exp;
+        let mut m = d / 10f64.powi(exp);
+        if format!("{m:.5}").parse::<f64>().unwrap_or(m) >= 10.0 {
+            exp += 1;
+            m /= 10.0;
+        }
         let ms = format!("{m:.5}");
         let ms = ms.trim_end_matches('0').trim_end_matches('.').to_owned();
         format!("{ms}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs())
@@ -872,6 +877,11 @@ mod tests {
         assert_eq!(parse_window("1Mb").unwrap(), -1_000_000);
         assert_eq!(parse_window("100").unwrap(), 100);
         assert!(parse_window("2xy").is_err());
+    }
+
+    #[test]
+    fn kputd_exponent_rounding_carries_mantissa() {
+        assert_eq!(kputd(9.999_999_824_516_7e-15), "1e-14");
     }
 
     #[test]
