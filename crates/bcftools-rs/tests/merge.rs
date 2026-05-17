@@ -484,6 +484,36 @@ fn merge_gvcf2_default_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf2_ref_symbolic_trim_fixtures_match_upstream_text_output() {
+    for (merge_mode, expected_path) in [
+        ("both,*", "../../bcftools/test/merge.gvcf.2.1.out"),
+        ("both,**", "../../bcftools/test/merge.gvcf.2.2.out"),
+    ] {
+        let (out, err, code) = run(&[
+            "merge",
+            "--no-version",
+            "--gvcf",
+            "-",
+            "-m",
+            merge_mode,
+            "../../bcftools/test/merge.gvcf.2.a.vcf",
+            "../../bcftools/test/merge.gvcf.2.b.vcf",
+            "../../bcftools/test/merge.gvcf.2.c.vcf",
+        ]);
+        assert_eq!(
+            code, 0,
+            "merge.gvcf.2 fixture failed for -m {merge_mode}: {err}"
+        );
+
+        let expected = std::fs::read_to_string(expected_path).unwrap();
+        assert_eq!(
+            out, expected,
+            "merge.gvcf.2 fixture differed for -m {merge_mode}"
+        );
+    }
+}
+
+#[test]
 fn gvcf_merge_reference_block_fixture_matches_upstream_text_output() {
     let (out, err, code) = run(&[
         "merge",

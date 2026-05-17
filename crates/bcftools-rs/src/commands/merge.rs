@@ -72,9 +72,27 @@ enum MergeMode {
     Default,
     None,
     Both,
+    BothTrimVariantRefSymbolic,
+    BothTrimAllRefSymbolic,
     SnpInsDel,
     All,
     Id,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefSymbolicTrim {
+    Variant,
+    All,
+}
+
+impl MergeMode {
+    fn ref_symbolic_trim(self) -> Option<RefSymbolicTrim> {
+        match self {
+            MergeMode::BothTrimVariantRefSymbolic => Some(RefSymbolicTrim::Variant),
+            MergeMode::BothTrimAllRefSymbolic => Some(RefSymbolicTrim::All),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -455,6 +473,8 @@ fn parse_merge_mode(raw: &str) -> MergeMode {
     match raw {
         "none" => MergeMode::None,
         "both" => MergeMode::Both,
+        "both,*" => MergeMode::BothTrimVariantRefSymbolic,
+        "both,**" => MergeMode::BothTrimAllRefSymbolic,
         "snp-ins-del" => MergeMode::SnpInsDel,
         "all" => MergeMode::All,
         "id" => MergeMode::Id,
@@ -1051,6 +1071,16 @@ fn merge_inputs(
                 }
             }
         }
+        if let Some(trim) = merge_mode.ref_symbolic_trim() {
+            trim_ref_symbolic_alleles(
+                &mut fixed,
+                &mut samples,
+                trim,
+                &format_numbers,
+                &info_numbers,
+                &missing_rules,
+            );
+        }
         cleanup_single_base_reference_block_end(&mut fixed);
         if gvcf_mode {
             add_gvcf_reference_block_an_if_absent(
@@ -1099,6 +1129,92 @@ fn order_gvcf_info(fixed: &mut [String]) {
         }
     }
     *info = ordered.join(";");
+}
+
+fn trim_ref_symbolic_alleles(
+    fixed: &mut [String],
+    samples: &mut [String],
+    trim: RefSymbolicTrim,
+    format_numbers: &HashMap<String, VcfNumber>,
+    info_numbers: &HashMap<String, VcfNumber>,
+    missing_rules: &MissingRules,
+) {
+    if fixed.len() < 5 {
+        return;
+    }
+    let old_alts = split_alt(&fixed[4]);
+    if !contains_ref_symbolic_alt(&old_alts) {
+        return;
+    }
+    if trim == RefSymbolicTrim::Variant && !old_alts.iter().any(|alt| !is_ref_symbolic_alt(alt)) {
+        return;
+    }
+    let new_alts = old_alts
+        .iter()
+        .filter(|alt| !is_ref_symbolic_alt(alt))
+        .cloned()
+        .collect::<Vec<_>>();
+    if new_alts == old_alts {
+        return;
+    }
+
+    let allele_map = allele_map(&old_alts, &new_alts);
+    let alt_count = new_alts.len();
+    fixed[4] = if new_alts.is_empty() {
+        ".".to_owned()
+    } else {
+        new_alts.join(",")
+    };
+    if fixed.len() > 7 {
+        fixed[7] = remap_info_for_alt_projection(&fixed[7], &allele_map, alt_count, info_numbers);
+    }
+    if fixed.len() > 8 && !samples.is_empty() {
+        let format = fixed[8].clone();
+        let transform = FormatTransform {
+            allele_map: &allele_map,
+            alt_count,
+            format_numbers,
+            missing_rules,
+            input_alts: &old_alts,
+        };
+        let transformed = transform_sample_values(&format, &format, samples, &transform);
+        for (sample, transformed) in samples.iter_mut().zip(transformed) {
+            *sample = transformed;
+        }
+    }
+}
+
+fn remap_info_for_alt_projection(
+    info: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+    info_numbers: &HashMap<String, VcfNumber>,
+) -> String {
+    let mut fields = Vec::new();
+    for field in parse_info_fields(info) {
+        let Some(value) = field.value.as_deref() else {
+            fields.push(field.key);
+            continue;
+        };
+        let Some(number) = info_numbers.get(&field.key).copied() else {
+            fields.push(format!("{}={value}", field.key));
+            continue;
+        };
+        let projected = match number {
+            VcfNumber::A => remap_number_a(value, allele_map, alt_count, "."),
+            VcfNumber::R => remap_number_r(value, allele_map, alt_count, "."),
+            VcfNumber::G => remap_number_g(value, allele_map, alt_count, "."),
+            VcfNumber::Other => value.to_owned(),
+        };
+        if !(number == VcfNumber::A && projected.is_empty()) {
+            fields.push(format!("{}={projected}", field.key));
+        }
+    }
+    if fields.is_empty() {
+        ".".to_owned()
+    } else {
+        fields.join(";")
+    }
 }
 
 fn info_field_tag(field: &str) -> &str {
@@ -1582,6 +1698,8 @@ fn supports_sampled_same_position_union(merge_mode: MergeMode) -> bool {
         MergeMode::Default
             | MergeMode::None
             | MergeMode::Both
+            | MergeMode::BothTrimVariantRefSymbolic
+            | MergeMode::BothTrimAllRefSymbolic
             | MergeMode::SnpInsDel
             | MergeMode::All
             | MergeMode::Id
@@ -1626,7 +1744,9 @@ fn can_merge_sampled_same_position(
     let both_missing_id = site.fixed.get(2).is_some_and(|id| id == ".")
         && record.fixed.get(2).is_some_and(|id| id == ".");
     match merge_mode {
-        MergeMode::Default => {
+        MergeMode::Default
+        | MergeMode::BothTrimVariantRefSymbolic
+        | MergeMode::BothTrimAllRefSymbolic => {
             let site_alts = split_alt(&site.fixed[4]);
             let record_alts = split_alt(&record.fixed[4]);
             same_id
