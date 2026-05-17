@@ -201,6 +201,8 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #176 (`progress/todo-sync-after-view-trim-alt`, merge commit
+  `858f7da`) synced the TODO docs after PR #175.
 - 2026-05-17: PR #175 (`progress/view-trim-alt-gvcf`, merge commit
   `72f1123`) added narrow text-output `view -A` / repeated `-A` parity for
   upstream `merge.gvcf.2.a.{1,2}.out` by trimming symbolic reference ALT
@@ -584,12 +586,14 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`72f1123`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`858f7da`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none after PR #175; start one focused
-  local-only branch from fresh `main` for the next TODO item, keep the
-  one-branch rule, run the full local gate, and wait for both required GitHub
-  checks before merge.
+- Current code slice in flight: `progress/view-trim-unused-alts` adds narrow
+  text-output `view -a` parity for upstream `many.alleles.trim.out` by
+  trimming GT-unused alternate alleles, remapping GT, and synthesizing
+  INFO/AC and INFO/AN plus the PASS header when absent. Keep the one-branch
+  rule, run the full local gate, and wait for both required GitHub checks
+  before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -809,7 +813,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave A — Read/Write/Index Foundation
 
 - [ ] `view` (`vcfview.c`, 41k) — VCF↔BCF conversion, filtering (`-i`/`-e`/`-f`/`-G`/`-m`/`-M`/`-q`/`-Q`/`-v`/`-V`), sample/region restriction, `--no-version`. Anchor subcommand for parity testing. Covered by `test_vcf_view`. Depends on Phase 1 filter engine + synced reader wrapper.
-  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths including numeric `-O0`-`-O9` BGZF shorthand, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, upstream-style option parsing when options appear after the input path, simple text VCF passthrough with textual version-header injection, HTSlib-style text normalization for Integer/Float INFO/FORMAT values outside BCF output, repeated `-A` symbolic reference ALT trimming with matching INFO/FORMAT Number=A/R/G projection and byte-for-byte `merge.gvcf.2.a.{1,2}.out` coverage, simple positional region filtering including `-r`/`-R` and braced contig names, text VCF region overlap modes via `--regions-overlap 0|1|2`, simple target filtering including `-t`/`-T` and `^` exclusion, text VCF target overlap modes via `--targets-overlap 0|1|2`, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, BCF-output sample subsetting via the VCF projection path, text VCF `-G` genotype-column dropping, simple text VCF FILTER-list filtering via `-f`, limited text VCF expression filtering via `-i`/`-e` for core fields plus scalar and indexed INFO fields, simple text VCF type filtering via `-v`/`-V`, simple text VCF allele-count filtering via `-m`/`-M`, simple text VCF allele count/frequency filtering via `-c`/`-C`/`-q`/`-Q`, simple text VCF known/novel filtering via `-k`/`-n`, simple text VCF uncalled-site filtering via `-u`/`-U`, simple text VCF genotype-class filtering via `-g`, simple text VCF phased-site filtering via `-p`/`-P`, and threaded BGZF VCF/BCF writes. 53 integration tests in `crates/bcftools-rs/tests/view.rs`.
+  - [x] Snapshot coverage: VCF/VCF.gz/BCF read paths, VCF text/BGZF/BCF write paths including numeric `-O0`-`-O9` BGZF shorthand, stdin spooling, raw `--no-version` VCF passthrough, raw-header BCF VCF-text output, header-only/no-header modes, upstream-style option parsing when options appear after the input path, simple text VCF passthrough with textual version-header injection, HTSlib-style text normalization for Integer/Float INFO/FORMAT values outside BCF output, repeated `-A` symbolic reference ALT trimming with matching INFO/FORMAT Number=A/R/G projection and byte-for-byte `merge.gvcf.2.a.{1,2}.out` coverage, genotype-driven `-a` ALT trimming with GT remapping, INFO/AC/AN synthesis, PASS header insertion, and byte-for-byte `many.alleles.trim.out` coverage, simple positional region filtering including `-r`/`-R` and braced contig names, text VCF region overlap modes via `--regions-overlap 0|1|2`, simple target filtering including `-t`/`-T` and `^` exclusion, text VCF target overlap modes via `--targets-overlap 0|1|2`, text VCF sample subsetting via `-s`/`-S` including BCF input to VCF output, BCF-output sample subsetting via the VCF projection path, text VCF `-G` genotype-column dropping, simple text VCF FILTER-list filtering via `-f`, limited text VCF expression filtering via `-i`/`-e` for core fields plus scalar and indexed INFO fields, simple text VCF type filtering via `-v`/`-V`, simple text VCF allele-count filtering via `-m`/`-M`, simple text VCF allele count/frequency filtering via `-c`/`-C`/`-q`/`-Q`, simple text VCF known/novel filtering via `-k`/`-n`, simple text VCF uncalled-site filtering via `-u`/`-U`, simple text VCF genotype-class filtering via `-g`, simple text VCF phased-site filtering via `-p`/`-P`, and threaded BGZF VCF/BCF writes. 54 integration tests in `crates/bcftools-rs/tests/view.rs`.
   - [ ] Remaining: full filter expression handling including FORMAT/sample expressions and advanced vector/sample slicing, complete FILTER/frequency/count/allele/type/genotype/phasing/known-novel/uncalled filter semantics across structured VCF/BCF writer paths, overlap-aware indexed region semantics, structured BCF/VCF writer overlap filtering, BCF output parity for 64-bit/out-of-range integer and missing INFO/FORMAT values, and full upstream `test_vcf_view` parity.
 - [x] `head` (`vcfhead.c`) — header-only output, `-n N` line cap, `-s N` records-after-header cap. Covered by `test_vcf_head`, `test_vcf_head2`. Snapshot coverage: VCF/VCF.gz/BCF input paths, stdin handling for VCF/BCF, Kestrel-tolerant non-canonical VCF headers, BGZF VCF record-tail coverage, and dispatcher version/help/plugin shortcut behavior. 16 integration tests in `crates/bcftools-rs/tests/head.rs`.
 - [x] `index` (`vcfindex.c`) — TBI/CSI build, `-s/--stats`, `-n/--nrecords`, `-c/--csi`, `--threads`. Covered by `test_index`, `test_vcf_idxstats`.

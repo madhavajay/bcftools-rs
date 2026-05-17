@@ -1074,6 +1074,15 @@ fn view_trim_alt_symbolic_gvcf_fixtures_match_upstream() {
 }
 
 #[test]
+fn view_trim_unused_alts_matches_upstream_fixture() {
+    let path = fixture_path("many.alleles.vcf");
+    let expected = std::fs::read_to_string(fixture_path("many.alleles.trim.out")).unwrap();
+    let (out, err, code) = run(&["view", "--no-version", "-a", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "view -a failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn view_threads_writes_bgzf_vcf_output() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
