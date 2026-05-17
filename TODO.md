@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #201 (`progress/guess-ploidy-af-tag`, merge commit
+  `69f2712`) added `+guess-ploidy --AF-tag TAG` INFO allele-frequency
+  override support, including missing-tag validation and focused Rust
+  coverage.
 - 2026-05-17: PR #200
   (`progress/todo-sync-after-fixploidy-default-line`, merge commit
   `cb863d3`) synced the TODO docs after PR #199.
@@ -658,11 +662,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`cb863d3`) (306 lib unit tests plus per-command
+  latest merged commit on `main` (`69f2712`) (309 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/guess-ploidy-af-tag` adds
-  `+guess-ploidy --AF-tag TAG` INFO allele-frequency support in
-  `bcftools-rs` only.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
