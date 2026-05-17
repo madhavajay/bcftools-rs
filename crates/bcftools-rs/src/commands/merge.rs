@@ -504,17 +504,23 @@ fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -
                     let Some(other_start) = record_pos(other) else {
                         continue;
                     };
-                    if other_start > start && other_start <= end {
-                        breaks.push(other_start);
-                    } else if other_start == start {
-                        if let Some((_, other_end)) = reference_block_span(other) {
-                            if other_end < end {
-                                breaks.push(other_end + 1);
-                            }
-                        } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
-                            let other_ref_len = other.fixed[3].len().max(1) as u64;
-                            breaks.push((start + other_ref_len).min(end + 1));
+                    if let Some((other_start, other_end)) = reference_block_span(other) {
+                        if other_end < start || other_start > end {
+                            continue;
                         }
+                        if other_start > start {
+                            breaks.push(other_start);
+                        }
+                        if other_end < end {
+                            breaks.push(other_end + 1);
+                        }
+                    } else if other_start > start && other_start <= end {
+                        breaks.push(other_start);
+                    } else if other_start == start
+                        && !is_reference_block_alt(&split_alt(&other.fixed[4]))
+                    {
+                        let other_ref_len = other.fixed[3].len().max(1) as u64;
+                        breaks.push((start + other_ref_len).min(end + 1));
                     }
                 }
             }
@@ -563,28 +569,33 @@ fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
                     let Some(other_start) = record_pos(other) else {
                         continue;
                     };
-                    if other_start < start || other_start > end {
-                        continue;
-                    }
                     if let Some((_, other_end)) = reference_block_span(other) {
+                        if other_end < start || other_start > end {
+                            continue;
+                        }
                         if other_start > start {
                             breaks.push(other_start);
                         }
                         if other_end < end {
                             breaks.push(other_end + 1);
                         }
-                    } else if is_reference_block_alt(&split_alt(&other.fixed[4])) {
-                        breaks.push(other_start);
-                        breaks.push((other_start + 1).min(end + 1));
-                    } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
-                        breaks.push(other_start);
-                        breaks.push((other_start + 1).min(end + 1));
-                        if record.samples.is_empty() && other.samples.is_empty() {
-                            skip_positions.insert(other_start);
+                    } else {
+                        if other_start < start || other_start > end {
+                            continue;
                         }
-                        let other_ref_len = other.fixed[3].len().max(1) as u64;
-                        if other_ref_len > 1 {
-                            breaks.push((other_start + other_ref_len).min(end + 1));
+                        if is_reference_block_alt(&split_alt(&other.fixed[4])) {
+                            breaks.push(other_start);
+                            breaks.push((other_start + 1).min(end + 1));
+                        } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
+                            breaks.push(other_start);
+                            breaks.push((other_start + 1).min(end + 1));
+                            if record.samples.is_empty() && other.samples.is_empty() {
+                                skip_positions.insert(other_start);
+                            }
+                            let other_ref_len = other.fixed[3].len().max(1) as u64;
+                            if other_ref_len > 1 {
+                                breaks.push((other_start + other_ref_len).min(end + 1));
+                            }
                         }
                     }
                 }
@@ -763,7 +774,8 @@ fn merge_inputs(
         append_localized_format_meta(&mut merged_meta);
     }
 
-    let mut out = render_meta_with_pass_filter(&merged_meta, info_rules, fileformat.as_deref());
+    let mut out =
+        render_meta_with_pass_filter(&merged_meta, info_rules, fileformat.as_deref(), gvcf_mode);
     out.push_str(&first.fixed_header.join("\t"));
     if !sample_names.is_empty() {
         out.push('\t');
@@ -792,10 +804,6 @@ fn merge_inputs(
         if absent_alleles > 0 {
             add_missing_reference_alleles_to_an(&mut fixed, absent_alleles);
         }
-        cleanup_single_base_reference_block_end(&mut fixed);
-        if gvcf_mode {
-            order_gvcf_info(&mut fixed);
-        }
         let mut samples = Vec::new();
         for (input_idx, input) in inputs.iter().enumerate() {
             match &site.samples_by_input[input_idx] {
@@ -805,6 +813,16 @@ fn merge_inputs(
                     samples.extend(std::iter::repeat_n(missing, input.samples.len()));
                 }
             }
+        }
+        cleanup_single_base_reference_block_end(&mut fixed);
+        if gvcf_mode {
+            add_gvcf_reference_block_an_if_absent(
+                &mut fixed,
+                &samples,
+                info_numbers.contains_key("AN"),
+            );
+            normalize_gvcf_reference_block_qual(&mut fixed);
+            order_gvcf_info(&mut fixed);
         }
         out.push_str(&fixed.join("\t"));
         if !samples.is_empty() {
@@ -861,13 +879,22 @@ fn render_meta_with_pass_filter(
     meta: &[String],
     info_rules: InfoRules,
     fileformat: Option<&str>,
+    pass_after_fileformat: bool,
 ) -> String {
     let has_pass = meta
         .iter()
         .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
+    let pass_line = meta
+        .iter()
+        .find(|line| line.starts_with("##FILTER=<ID=PASS,"))
+        .map(String::as_str)
+        .unwrap_or("##FILTER=<ID=PASS,Description=\"All filters passed\">");
     let mut out = String::new();
     let mut inserted = false;
     for line in meta {
+        if pass_after_fileformat && line.starts_with("##FILTER=<ID=PASS,") {
+            continue;
+        }
         if let Some(fileformat) = fileformat
             && line.starts_with("##fileformat=")
         {
@@ -878,13 +905,15 @@ fn render_meta_with_pass_filter(
             out.push_str(line);
         }
         out.push('\n');
-        if !inserted && !has_pass && line.starts_with("##fileformat=") {
-            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+        if !inserted && line.starts_with("##fileformat=") && (pass_after_fileformat || !has_pass) {
+            out.push_str(pass_line);
+            out.push('\n');
             inserted = true;
         }
     }
-    if !inserted && !has_pass {
-        out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+    if !inserted && (pass_after_fileformat || !has_pass) {
+        out.push_str(pass_line);
+        out.push('\n');
     }
     out
 }
@@ -3050,6 +3079,48 @@ fn cleanup_single_base_reference_block_end(fixed: &mut [String]) {
     if fixed.get(7).and_then(|info| info_u64(info, "END")) == Some(pos) {
         fixed[7] = remove_info_value(&fixed[7], "END");
     }
+}
+
+fn add_gvcf_reference_block_an_if_absent(
+    fixed: &mut [String],
+    samples: &[String],
+    has_an_definition: bool,
+) {
+    if !has_an_definition
+        || fixed.get(4).is_none_or(|alt| alt != ".")
+        || fixed
+            .get(7)
+            .is_none_or(|info| info_value(info, "AN").is_some())
+    {
+        return;
+    }
+    let Some(format) = fixed.get(8) else {
+        return;
+    };
+    let Some(gt_idx) = format.split(':').position(|key| key == "GT") else {
+        return;
+    };
+    let an = samples
+        .iter()
+        .filter_map(|sample| sample.split(':').nth(gt_idx))
+        .map(count_called_gt_alleles)
+        .sum::<usize>();
+    if let Some(info) = fixed.get_mut(7) {
+        *info = set_info_value(info, "AN", &an.to_string());
+    }
+}
+
+fn normalize_gvcf_reference_block_qual(fixed: &mut [String]) {
+    if fixed.get(4).is_some_and(|alt| alt == ".") && fixed.get(5).is_some_and(|qual| qual == "0.00")
+    {
+        fixed[5] = "0".to_owned();
+    }
+}
+
+fn count_called_gt_alleles(gt: &str) -> usize {
+    gt.split(['/', '|'])
+        .filter(|allele| !allele.is_empty() && *allele != ".")
+        .count()
 }
 
 fn add_missing_reference_alleles_to_an(fixed: &mut [String], missing_alleles: usize) {
