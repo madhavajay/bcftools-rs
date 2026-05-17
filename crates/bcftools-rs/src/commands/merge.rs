@@ -32,6 +32,7 @@ Options:\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
     -g, --gvcf -|REF.FA             Narrow reference-backed gVCF block splitting for local fixtures\n\
+    -0, --missing-to-ref            Fill absent-input samples as 0/0 in the current text slice\n\
         --force-single              Allow a single input for command-shape compatibility\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
         --no-index                  Accepted for command-shape compatibility in this text slice\n\
@@ -48,6 +49,7 @@ struct Args {
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
     gvcf_ref: Option<PathBuf>,
+    missing_to_ref: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -139,6 +141,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut merge_mode = MergeMode::Default;
     let mut local_alleles = None;
     let mut gvcf_ref = None;
+    let mut missing_to_ref = false;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -163,6 +166,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                     gvcf_ref = Some(PathBuf::from(path));
                 }
             }
+            "-0" | "--missing-to-ref" => missing_to_ref = true,
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -245,6 +249,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         merge_mode,
         local_alleles,
         gvcf_ref,
+        missing_to_ref,
     })
 }
 
@@ -333,6 +338,7 @@ fn run(args: &Args) -> io::Result<()> {
         args.info_rules,
         args.merge_mode,
         args.local_alleles,
+        args.missing_to_ref,
     )?;
     write_output(merged.as_bytes(), args)
 }
@@ -533,6 +539,7 @@ fn merge_inputs(
     info_rules: InfoRules,
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
+    missing_to_ref: bool,
 ) -> io::Result<String> {
     let first = inputs
         .first()
@@ -601,17 +608,31 @@ fn merge_inputs(
     out.push('\n');
 
     for site in sites {
+        let absent_alleles = if missing_to_ref {
+            inputs
+                .iter()
+                .enumerate()
+                .filter(|(input_idx, _)| site.samples_by_input[*input_idx].is_none())
+                .map(|(_, input)| input.samples.len() * 2)
+                .sum()
+        } else {
+            0
+        };
+        let mut fixed = site.fixed;
+        if absent_alleles > 0 {
+            add_missing_reference_alleles_to_an(&mut fixed, absent_alleles);
+        }
         let mut samples = Vec::new();
         for (input_idx, input) in inputs.iter().enumerate() {
             match &site.samples_by_input[input_idx] {
                 Some(values) => samples.extend(values.iter().cloned()),
                 None => {
-                    let missing = missing_sample_value(&site.fixed);
+                    let missing = missing_sample_value(&fixed, missing_to_ref);
                     samples.extend(std::iter::repeat_n(missing, input.samples.len()));
                 }
             }
         }
-        out.push_str(&site.fixed.join("\t"));
+        out.push_str(&fixed.join("\t"));
         if !samples.is_empty() {
             out.push('\t');
             out.push_str(&samples.join("\t"));
@@ -2549,6 +2570,16 @@ fn info_value<'a>(info: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
+fn add_missing_reference_alleles_to_an(fixed: &mut [String], missing_alleles: usize) {
+    let Some(info) = fixed.get_mut(7) else {
+        return;
+    };
+    let Some(an) = info_i64(info, "AN") else {
+        return;
+    };
+    *info = set_info_value(info, "AN", &(an + missing_alleles as i64).to_string());
+}
+
 fn contig_order(meta: &[String]) -> HashMap<String, usize> {
     let mut order = HashMap::new();
     for line in meta {
@@ -2591,7 +2622,7 @@ fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize
     .then_with(|| a.order.cmp(&b.order))
 }
 
-fn missing_sample_value(fixed: &[String]) -> String {
+fn missing_sample_value(fixed: &[String], missing_to_ref: bool) -> String {
     let Some(format) = fixed.get(8) else {
         return ".".to_owned();
     };
@@ -2600,7 +2631,13 @@ fn missing_sample_value(fixed: &[String]) -> String {
     }
     format
         .split(':')
-        .map(|key| if key == "GT" { "./." } else { "." })
+        .map(|key| {
+            if key == "GT" {
+                if missing_to_ref { "0/0" } else { "./." }
+            } else {
+                "."
+            }
+        })
         .collect::<Vec<_>>()
         .join(":")
 }
@@ -2667,6 +2704,7 @@ mod tests {
             InfoRules::default(),
             MergeMode::Default,
             None,
+            false,
         )
         .unwrap();
         assert!(merged.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB"));
