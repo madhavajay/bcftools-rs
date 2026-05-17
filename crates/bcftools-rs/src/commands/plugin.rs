@@ -261,6 +261,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut conversion: Option<&'static str> = None;
     let mut tag2tag_defaults: Option<String> = None;
     let mut tag2tag_skip_nalt = 0usize;
+    // missing2ref options.
+    let mut missing2ref_phased = false;
+    let mut missing2ref_major = false;
     // af-dist options.
     let mut af_tag: Option<String> = None;
     let mut dev_bins: Option<String> = None;
@@ -590,6 +593,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-p" if plugin_name.as_deref() == Some("af-dist") => {
                 prob_bins = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
+            "-p" | "--phased" if plugin_name.as_deref() == Some("missing2ref") => {
+                missing2ref_phased = true;
+            }
             "-p" | "--ped" => {
                 ped_file = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -692,9 +698,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
                 } else if plugin_name.as_deref() == Some("fixref") {
                     fixref_mode = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else if plugin_name.as_deref() == Some("missing2ref") {
+                    missing2ref_major = true;
                 } else {
                     use_missing = true;
                 }
+            }
+            "--major" if plugin_name.as_deref() == Some("missing2ref") => {
+                missing2ref_major = true;
             }
             "--mark" => {
                 mark_expr = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -857,7 +868,11 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
 
     if plugin.name == "missing2ref" {
         let input = input.unwrap_or_else(|| "-".to_owned());
-        let vcf = crate::commands::plugins::missing2ref::run(Path::new(&input))?;
+        let vcf = crate::commands::plugins::missing2ref::run(
+            Path::new(&input),
+            missing2ref_phased,
+            missing2ref_major,
+        )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }

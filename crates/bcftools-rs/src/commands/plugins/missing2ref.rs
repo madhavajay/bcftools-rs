@@ -1,11 +1,9 @@
 //! `bcftools +missing2ref` (upstream `bcftools/plugins/missing2ref.c`).
 //!
-//! Sets missing genotypes to the reference allele. This local slice
-//! implements the default behavior (missing allele -> `0`) over the text
-//! VCF path: every `.` allele token inside the `GT` FORMAT subfield is
-//! rewritten to `0` while phase/unphase separators and all other FORMAT
-//! subfields are preserved byte-for-byte. The `-e`/major-allele modes
-//! remain tracked in `TODO.md`.
+//! Sets missing genotypes to the reference or major allele. This local slice
+//! rewrites missing `.` allele tokens inside the `GT` FORMAT subfield while
+//! preserving all other FORMAT subfields byte-for-byte. The `-e` expression
+//! mode remains tracked in `TODO.md`.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -18,12 +16,12 @@ use htslib_rs::format::{self, Compression, Exact};
 use crate::vcf_compat::normalize_vcf_text;
 
 /// Reads the input VCF/BCF and returns the missing-to-ref rewritten VCF text.
-pub fn run(input: &Path) -> io::Result<String> {
+pub fn run(input: &Path, phased: bool, major: bool) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    Ok(rewrite(&text))
+    Ok(rewrite(&text, phased, major))
 }
 
-fn rewrite(text: &str) -> String {
+fn rewrite(text: &str, phased: bool, major: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -31,13 +29,13 @@ fn rewrite(text: &str) -> String {
             out.push('\n');
             continue;
         }
-        out.push_str(&rewrite_record(line));
+        out.push_str(&rewrite_record(line, phased, major));
         out.push('\n');
     }
     out
 }
 
-fn rewrite_record(line: &str) -> String {
+fn rewrite_record(line: &str, phased: bool, major: bool) -> String {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() <= 9 {
         // No samples (or malformed) — nothing to do.
@@ -48,34 +46,94 @@ fn rewrite_record(line: &str) -> String {
         return line.to_owned();
     };
 
+    let replacement = if major {
+        major_allele(&fields, gt_idx)
+    } else {
+        0
+    };
     let mut rewritten: Vec<String> = fields.iter().take(9).map(|s| s.to_string()).collect();
     for sample in &fields[9..] {
-        rewritten.push(rewrite_sample(sample, gt_idx));
+        rewritten.push(rewrite_sample(sample, gt_idx, replacement, phased));
     }
     rewritten.join("\t")
 }
 
-fn rewrite_sample(sample: &str, gt_idx: usize) -> String {
+fn rewrite_sample(sample: &str, gt_idx: usize, replacement: usize, phased: bool) -> String {
     let mut parts: Vec<String> = sample.split(':').map(str::to_owned).collect();
     if gt_idx >= parts.len() {
         return sample.to_owned();
     }
-    parts[gt_idx] = fix_gt(&parts[gt_idx]);
+    parts[gt_idx] = fix_gt(&parts[gt_idx], replacement, phased);
     parts.join(":")
 }
 
-/// Replaces every missing allele (`.`) in a GT string with `0`, leaving
-/// `/` and `|` separators untouched. `./.`→`0/0`, `.|1`→`0|1`, `.`→`0`.
-fn fix_gt(gt: &str) -> String {
-    let mut out = String::with_capacity(gt.len());
+/// Replaces every missing allele (`.`) in a GT string. Phased mode mirrors
+/// HTSlib's text writer by using `|` before alleles that were replaced.
+fn fix_gt(gt: &str, replacement: usize, phased: bool) -> String {
+    let mut alleles = Vec::new();
+    let mut separators = Vec::new();
+    let mut current = String::new();
     for ch in gt.chars() {
-        if ch == '.' {
-            out.push('0');
+        if ch == '/' || ch == '|' {
+            alleles.push(std::mem::take(&mut current));
+            separators.push(ch);
         } else {
-            out.push(ch);
+            current.push(ch);
+        }
+    }
+    alleles.push(current);
+
+    let mut out = String::with_capacity(gt.len());
+    for (i, allele) in alleles.iter().enumerate() {
+        if i > 0 {
+            let sep = if phased && allele == "." {
+                '|'
+            } else {
+                separators.get(i - 1).copied().unwrap_or('/')
+            };
+            out.push(sep);
+        }
+        if allele == "." {
+            out.push_str(&replacement.to_string());
+        } else {
+            out.push_str(allele);
         }
     }
     out
+}
+
+fn major_allele(fields: &[&str], gt_idx: usize) -> usize {
+    let allele_count = if fields.get(4).is_none_or(|alt| *alt == ".") {
+        1
+    } else {
+        fields[4].split(',').count() + 1
+    };
+    let mut counts = vec![0usize; allele_count];
+    for sample in fields.iter().skip(9) {
+        let Some(gt) = sample.split(':').nth(gt_idx) else {
+            continue;
+        };
+        for allele in gt.split(['/', '|']) {
+            if allele == "." || allele.is_empty() {
+                continue;
+            }
+            if let Ok(idx) = allele.parse::<usize>()
+                && let Some(count) = counts.get_mut(idx)
+            {
+                *count += 1;
+            }
+        }
+    }
+    counts
+        .iter()
+        .enumerate()
+        .max_by(|(left_idx, left_count), (right_idx, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| right_idx.cmp(left_idx))
+        })
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
@@ -123,19 +181,28 @@ mod tests {
 
     #[test]
     fn fixes_diploid_and_haploid_missing() {
-        assert_eq!(fix_gt("./."), "0/0");
-        assert_eq!(fix_gt(".|."), "0|0");
-        assert_eq!(fix_gt("./1"), "0/1");
-        assert_eq!(fix_gt("1/."), "1/0");
-        assert_eq!(fix_gt("."), "0");
-        assert_eq!(fix_gt("0/1"), "0/1");
-        assert_eq!(fix_gt("1|2"), "1|2");
+        assert_eq!(fix_gt("./.", 0, false), "0/0");
+        assert_eq!(fix_gt(".|.", 0, false), "0|0");
+        assert_eq!(fix_gt("./1", 0, false), "0/1");
+        assert_eq!(fix_gt("1/.", 0, false), "1/0");
+        assert_eq!(fix_gt(".", 0, false), "0");
+        assert_eq!(fix_gt("0/1", 0, false), "0/1");
+        assert_eq!(fix_gt("1|2", 0, false), "1|2");
+    }
+
+    #[test]
+    fn phased_replacement_sets_separator_before_replaced_alleles() {
+        assert_eq!(fix_gt("./.", 0, true), "0|0");
+        assert_eq!(fix_gt("./1", 0, true), "0/1");
+        assert_eq!(fix_gt("1/.", 0, true), "1|0");
+        assert_eq!(fix_gt(".|1", 0, true), "0|1");
+        assert_eq!(fix_gt("1/2", 0, true), "1/2");
     }
 
     #[test]
     fn rewrites_only_gt_subfield() {
         let line = "1\t10\t.\tC\tT\t.\tPASS\t.\tGT:GQ:GL\t./.:245:-2.5,-5,-2.5";
-        let got = rewrite_record(line);
+        let got = rewrite_record(line, false, false);
         assert_eq!(
             got,
             "1\t10\t.\tC\tT\t.\tPASS\t.\tGT:GQ:GL\t0/0:245:-2.5,-5,-2.5"
@@ -145,7 +212,7 @@ mod tests {
     #[test]
     fn handles_gt_not_first_subfield() {
         let line = "1\t10\t.\tC\tT\t.\tPASS\t.\tGQ:GT\t245:./.";
-        let got = rewrite_record(line);
+        let got = rewrite_record(line, false, false);
         assert_eq!(got, "1\t10\t.\tC\tT\t.\tPASS\t.\tGQ:GT\t245:0/0");
     }
 
@@ -154,7 +221,7 @@ mod tests {
         let vcf = "##fileformat=VCFv4.2\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
 1\t1\t.\tC\tT\t.\tPASS\t.\tGT\t./.\t0/1\n";
-        let out = rewrite(vcf);
+        let out = rewrite(vcf, false, false);
         assert!(out.contains("##fileformat=VCFv4.2\n"));
         assert!(out.contains("\tGT\t0/0\t0/1\n"), "{out}");
     }
@@ -162,6 +229,20 @@ mod tests {
     #[test]
     fn record_without_samples_is_untouched() {
         let line = "1\t10\t.\tC\tT\t.\tPASS\t.";
-        assert_eq!(rewrite_record(line), line);
+        assert_eq!(rewrite_record(line, false, false), line);
+    }
+
+    #[test]
+    fn major_mode_uses_most_common_called_allele_with_lowest_index_tie() {
+        let line = "1\t10\t.\tC\tT,G\t.\tPASS\t.\tGT\t1/1\t0/1\t./.\t2/.";
+        assert_eq!(
+            rewrite_record(line, false, true),
+            "1\t10\t.\tC\tT,G\t.\tPASS\t.\tGT\t1/1\t0/1\t1/1\t2/1"
+        );
+        let tie = "1\t10\t.\tC\tT\t.\tPASS\t.\tGT\t0/1\t./.";
+        assert_eq!(
+            rewrite_record(tie, false, true),
+            "1\t10\t.\tC\tT\t.\tPASS\t.\tGT\t0/1\t0/0"
+        );
     }
 }
