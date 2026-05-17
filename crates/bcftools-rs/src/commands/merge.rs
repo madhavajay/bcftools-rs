@@ -66,6 +66,7 @@ enum MergeMode {
     Both,
     SnpInsDel,
     All,
+    Id,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,6 +272,7 @@ fn parse_merge_mode(raw: &str) -> MergeMode {
         "both" => MergeMode::Both,
         "snp-ins-del" => MergeMode::SnpInsDel,
         "all" => MergeMode::All,
+        "id" => MergeMode::Id,
         _ => MergeMode::Default,
     }
 }
@@ -687,18 +689,27 @@ fn merged_meta(inputs: &[VcfInput]) -> Vec<String> {
         return Vec::new();
     };
     let mut meta = first.meta.clone();
-    let mut seen_format_ids = first
-        .meta
-        .iter()
-        .filter_map(|line| meta_id(line, "FORMAT"))
-        .collect::<HashSet<_>>();
+    let mut seen_ids = ["INFO", "FORMAT", "FILTER", "SAMPLE"]
+        .into_iter()
+        .map(|kind| {
+            let ids = first
+                .meta
+                .iter()
+                .filter_map(|line| meta_id(line, kind))
+                .collect::<HashSet<_>>();
+            (kind, ids)
+        })
+        .collect::<HashMap<_, _>>();
 
     for input in &inputs[1..] {
         for line in &input.meta {
-            if let Some(id) = meta_id(line, "FORMAT")
-                && seen_format_ids.insert(id)
-            {
-                meta.push(line.clone());
+            for kind in ["INFO", "FORMAT", "FILTER", "SAMPLE"] {
+                if let Some(id) = meta_id(line, kind)
+                    && seen_ids.get_mut(kind).is_some_and(|ids| ids.insert(id))
+                {
+                    meta.push(line.clone());
+                    break;
+                }
             }
         }
     }
@@ -904,12 +915,46 @@ fn collect_sites(
     for (input_idx, input) in inputs.iter().enumerate() {
         for record in &input.records {
             let key = site_key(record);
-            if let Some(site_idx) = by_key.get(&key).copied() {
+            let key_site_idx = by_key.get(&key).copied().filter(|site_idx: &usize| {
+                !(record.fixed.get(4).is_some_and(|alt| alt == ".")
+                    && sites[*site_idx].fixed[..5] != record.fixed[..5])
+            });
+            if let Some(site_idx) = key_site_idx {
                 let site: &mut MergedSite = &mut sites[site_idx];
-                merge_exact_site(site, record, input_idx, info_rules, format_numbers)?;
+                if site.fixed.len() == record.fixed.len() && site.fixed[..5] == record.fixed[..5] {
+                    merge_exact_site(
+                        site,
+                        record,
+                        input_idx,
+                        info_rules,
+                        format_numbers,
+                        info_numbers,
+                        ordered_info_numbers,
+                    )?;
+                } else if supports_sampled_same_position_union(merge_mode)
+                    && can_merge_sampled_same_position(site, record, merge_mode)
+                {
+                    merge_sampled_same_position(
+                        site,
+                        record,
+                        input_idx,
+                        format_numbers,
+                        info_numbers,
+                        ordered_info_numbers,
+                    )?;
+                } else {
+                    merge_exact_site(
+                        site,
+                        record,
+                        input_idx,
+                        info_rules,
+                        format_numbers,
+                        info_numbers,
+                        ordered_info_numbers,
+                    )?;
+                }
             } else {
                 let mut merged = false;
-                let mut same_locus_conflict = None;
                 if merge_mode != MergeMode::None
                     && let Some(site_indices) = by_locus.get(&locus_key(record)).cloned()
                 {
@@ -921,7 +966,6 @@ fn collect_sites(
                             merged = true;
                             break;
                         }
-                        same_locus_conflict = Some(site_idx);
                     }
                 }
                 if !merged
@@ -946,19 +990,6 @@ fn collect_sites(
                             break;
                         }
                     }
-                }
-                if !merged
-                    && merge_mode == MergeMode::Default
-                    && let Some(site_idx) = same_locus_conflict
-                {
-                    let existing = &sites[site_idx].fixed;
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "conflicting records at {}:{} require full merge semantics",
-                            existing[0], existing[1]
-                        ),
-                    ));
                 }
                 if !merged {
                     let site_idx = sites.len();
@@ -1031,6 +1062,7 @@ fn supports_sampled_same_position_union(merge_mode: MergeMode) -> bool {
             | MergeMode::Both
             | MergeMode::SnpInsDel
             | MergeMode::All
+            | MergeMode::Id
     )
 }
 
@@ -1062,18 +1094,27 @@ fn can_merge_sampled_same_position(
         &record.fixed[4],
     );
     let subset_compatible = same_ref_subset_compatible || ref_extended_subset_compatible;
-    let same_id = site.fixed.get(2) == record.fixed.get(2);
+    let same_id =
+        site.fixed.get(2) == record.fixed.get(2) && site.fixed.get(2).is_some_and(|id| id != ".");
+    let same_ref = site.fixed[3].eq_ignore_ascii_case(&record.fixed[3]);
+    let both_missing_id = site.fixed.get(2).is_some_and(|id| id == ".")
+        && record.fixed.get(2).is_some_and(|id| id == ".");
     match merge_mode {
         MergeMode::Default => {
             let site_alts = split_alt(&site.fixed[4]);
             let record_alts = split_alt(&record.fixed[4]);
             same_id
                 || ref_extended_subset_compatible
+                || single_ref_symbolic_alt_compatible(&site.fixed[4], &record.fixed[4])
+                || same_ref
+                    && contains_ref_symbolic_alt(&site_alts)
+                    && contains_ref_symbolic_alt(&record_alts)
                 || site_alts.is_empty()
                 || record_alts.is_empty()
                 || {
                     let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
-                    site_class != CoarseVariantClass::Other
+                    (same_ref || both_missing_id)
+                        && site_class != CoarseVariantClass::Other
                         && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
                 }
         }
@@ -1099,6 +1140,7 @@ fn can_merge_sampled_same_position(
                 && site_class == precise_variant_class(&record.fixed[3], &record.fixed[4])
         }
         MergeMode::All => true,
+        MergeMode::Id => same_id || both_missing_id && same_ref,
     }
 }
 
@@ -1159,6 +1201,8 @@ fn merge_exact_site(
     input_idx: usize,
     info_rules: InfoRules,
     format_numbers: &HashMap<String, VcfNumber>,
+    info_numbers: &HashMap<String, VcfNumber>,
+    ordered_info_numbers: &[(String, VcfNumber)],
 ) -> io::Result<()> {
     if site.fixed.len() != record.fixed.len() || site.fixed[..5] != record.fixed[..5] {
         return Err(io::Error::new(
@@ -1217,7 +1261,20 @@ fn merge_exact_site(
     if clear_ref_block_end {
         site.fixed[7] = ".".to_owned();
     } else {
-        merge_exact_ac_an(&mut site.fixed, &record.fixed);
+        let alts = split_alt(&site.fixed[4]);
+        let map = allele_map(&alts, &alts);
+        site.fixed[7] = merge_sampled_info(
+            &site.fixed[7],
+            &record.fixed[7],
+            SampledInfoMerge {
+                current_map: &map,
+                next_map: &map,
+                alt_count: alts.len(),
+                info_numbers,
+                ordered_info_numbers,
+                preserve_info_order: true,
+            },
+        );
     }
     if info_rules.join_af {
         site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "AF");
@@ -1247,51 +1304,50 @@ fn info_has_only_end(info: &str) -> bool {
 }
 
 fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String]) {
-    if let (Some(site_id), Some(record_id)) = (site_fixed.get_mut(2), record_fixed.get(2))
-        && (*site_id == "." || site_id.is_empty())
-        && record_id != "."
-        && !record_id.is_empty()
-    {
-        *site_id = record_id.clone();
+    if let (Some(site_id), Some(record_id)) = (site_fixed.get_mut(2), record_fixed.get(2)) {
+        *site_id = merge_id(site_id, record_id);
     }
     if let (Some(site_qual), Some(record_qual)) = (site_fixed.get_mut(5), record_fixed.get(5)) {
         *site_qual = merge_qual(site_qual, record_qual);
     }
+    if let (Some(site_filter), Some(record_filter)) = (site_fixed.get_mut(6), record_fixed.get(6)) {
+        *site_filter = merge_filter(site_filter, record_filter);
+    }
 }
 
-fn merge_exact_ac_an(site_fixed: &mut [String], record_fixed: &[String]) {
-    let (Some(site_info), Some(record_info), Some(site_alt), Some(record_alt)) = (
-        site_fixed.get(7),
-        record_fixed.get(7),
-        site_fixed.get(4),
-        record_fixed.get(4),
-    ) else {
-        return;
-    };
-    if site_alt != record_alt
-        || info_value(site_info, "AN").is_none()
-        || info_value(record_info, "AN").is_none()
-        || info_value(site_info, "AC").is_none()
-        || info_value(record_info, "AC").is_none()
-    {
-        return;
+fn merge_id(current: &str, next: &str) -> String {
+    match (
+        current == "." || current.is_empty(),
+        next == "." || next.is_empty(),
+    ) {
+        (true, true) => ".".to_owned(),
+        (true, false) => next.to_owned(),
+        (false, true) => current.to_owned(),
+        (false, false) if current == next => current.to_owned(),
+        (false, false) => {
+            let mut ids = current.split(';').collect::<Vec<_>>();
+            if !ids.contains(&next) {
+                ids.push(next);
+            }
+            ids.join(";")
+        }
     }
+}
 
-    let map = allele_map(&split_alt(site_alt), &split_alt(site_alt));
-    let merged = format!(
-        "AN={};AC={}",
-        info_i64(site_info, "AN").unwrap_or(0) + info_i64(record_info, "AN").unwrap_or(0),
-        merge_info_number_a(
-            info_value(site_info, "AC"),
-            info_value(record_info, "AC"),
-            &map,
-            &map,
-            split_alt(site_alt).len(),
-        )
-    );
-    if let Some(site_info) = site_fixed.get_mut(7) {
-        *site_info = merged;
+fn merge_filter(current: &str, next: &str) -> String {
+    if current == "." || current == "PASS" || current.is_empty() {
+        return next.to_owned();
     }
+    if next == "." || next == "PASS" || next.is_empty() || next == current {
+        return current.to_owned();
+    }
+    let mut filters = current.split(';').collect::<Vec<_>>();
+    for filter in next.split(';') {
+        if !filters.contains(&filter) {
+            filters.push(filter);
+        }
+    }
+    filters.join(";")
 }
 
 fn merge_qual(current: &str, next: &str) -> String {
@@ -2171,11 +2227,11 @@ struct SampledInfoMerge<'a> {
 fn merge_sampled_info(current: &str, next: &str, info_merge: SampledInfoMerge<'_>) -> String {
     let current_has_mergeable = has_mergeable_sampled_info(current, info_merge.info_numbers);
     let next_has_mergeable = has_mergeable_sampled_info(next, info_merge.info_numbers);
-    if !current_has_mergeable && !next_has_mergeable {
+    let mut fields = merge_unstructured_info_fields(current, next, info_merge.info_numbers);
+    if fields.is_empty() && !current_has_mergeable && !next_has_mergeable {
         return current.to_owned();
     }
 
-    let mut fields = Vec::new();
     if info_merge.preserve_info_order {
         for (key, number) in info_merge.ordered_info_numbers {
             if key == "AC" || key == "AN" || *number == VcfNumber::Other {
@@ -2194,7 +2250,12 @@ fn merge_sampled_info(current: &str, next: &str, info_merge: SampledInfoMerge<'_
             }
         }
     } else {
-        for target_number in [VcfNumber::A, VcfNumber::G, VcfNumber::R] {
+        let target_order = if has_x_numbered_info(current) || has_x_numbered_info(next) {
+            [VcfNumber::R, VcfNumber::A, VcfNumber::G]
+        } else {
+            [VcfNumber::A, VcfNumber::G, VcfNumber::R]
+        };
+        for target_number in target_order {
             for (key, number) in info_merge.ordered_info_numbers {
                 if *number != target_number || key == "AC" || key == "AN" {
                     continue;
@@ -2238,6 +2299,154 @@ fn merge_sampled_info(current: &str, next: &str, info_merge: SampledInfoMerge<'_
     }
 }
 
+fn has_x_numbered_info(info: &str) -> bool {
+    info.split(';').any(|field| field.starts_with('X'))
+}
+
+#[derive(Clone)]
+struct InfoField {
+    key: String,
+    value: Option<String>,
+}
+
+fn merge_unstructured_info_fields(
+    current: &str,
+    next: &str,
+    info_numbers: &HashMap<String, VcfNumber>,
+) -> Vec<String> {
+    let current_fields = parse_info_fields(current);
+    let next_fields = parse_info_fields(next);
+    let mut keys = Vec::<String>::new();
+    for field in current_fields.iter().chain(next_fields.iter()) {
+        if field.key == "AC"
+            || field.key == "AN"
+            || matches!(
+                info_numbers.get(&field.key),
+                Some(VcfNumber::A | VcfNumber::R | VcfNumber::G)
+            )
+        {
+            continue;
+        }
+        if !keys.contains(&field.key) {
+            keys.push(field.key.clone());
+        }
+    }
+
+    keys.sort_by_key(|key| {
+        unstructured_info_sort_key(
+            key,
+            current_fields.iter().find(|field| field.key == *key),
+            next_fields.iter().find(|field| field.key == *key),
+        )
+    });
+
+    keys.into_iter()
+        .map(|key| {
+            let current_value = current_fields
+                .iter()
+                .find(|field| field.key == key)
+                .and_then(|field| field.value.as_deref());
+            let next_value = next_fields
+                .iter()
+                .find(|field| field.key == key)
+                .and_then(|field| field.value.as_deref());
+            match (current_value, next_value) {
+                (None, None) => key,
+                (Some(a), Some(b))
+                    if matches!(key.as_str(), "DP" | "DP4")
+                        && numeric_list(a).is_some()
+                        && numeric_list(b).is_some() =>
+                {
+                    format!("{key}={}", sum_numeric_lists(a, b))
+                }
+                (Some(a), Some(_)) => format!("{key}={a}"),
+                (Some(a), None) => format!("{key}={a}"),
+                (None, Some(b)) => format!("{key}={b}"),
+            }
+        })
+        .collect()
+}
+
+fn parse_info_fields(info: &str) -> Vec<InfoField> {
+    if info == "." || info.is_empty() {
+        return Vec::new();
+    }
+    info.split(';')
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            if let Some((key, value)) = field.split_once('=') {
+                InfoField {
+                    key: key.to_owned(),
+                    value: Some(value.to_owned()),
+                }
+            } else {
+                InfoField {
+                    key: field.to_owned(),
+                    value: None,
+                }
+            }
+        })
+        .collect()
+}
+
+fn unstructured_info_sort_key(
+    key: &str,
+    current: Option<&InfoField>,
+    next: Option<&InfoField>,
+) -> (usize, usize) {
+    let current_non_vector = current
+        .and_then(|field| field.value.as_deref())
+        .is_none_or(|value| !value.contains(','));
+    if current.is_some() && current_non_vector {
+        return (0, 0);
+    }
+    let value = current
+        .or(next)
+        .and_then(|field| field.value.as_deref())
+        .unwrap_or("");
+    let category = if value.contains(',') {
+        3
+    } else if numeric_list(value).is_some() {
+        2
+    } else {
+        1
+    };
+    let key_rank = match key {
+        "STR" | "TXT" => 0,
+        "DP" => 1,
+        "DP4" => 2,
+        _ => 3,
+    };
+    (category, key_rank)
+}
+
+fn sum_numeric_lists(a: &str, b: &str) -> String {
+    let Some(a_values) = numeric_list(a) else {
+        return a.to_owned();
+    };
+    let Some(b_values) = numeric_list(b) else {
+        return a.to_owned();
+    };
+    let len = a_values.len().max(b_values.len());
+    (0..len)
+        .map(|idx| {
+            let a = a_values.get(idx).copied().unwrap_or(0.0);
+            let b = b_values.get(idx).copied().unwrap_or(0.0);
+            format_float(a + b)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn numeric_list(raw: &str) -> Option<Vec<f64>> {
+    if raw.is_empty() || raw == "." {
+        return None;
+    }
+    raw.split(',')
+        .map(|value| value.parse::<f64>().ok())
+        .collect()
+}
+
 fn merge_sampled_info_field(
     current: &str,
     next: &str,
@@ -2253,17 +2462,26 @@ fn merge_sampled_info_field(
         return None;
     }
     let value = match target_number {
+        VcfNumber::A if key.starts_with('X') => {
+            overlay_info_number_a(current_value, next_value, current_map, next_map, alt_count)
+        }
         VcfNumber::A if current_value == next_value => {
             overlay_info_number_a(current_value, next_value, current_map, next_map, alt_count)
         }
         VcfNumber::A => {
             merge_info_number_a(current_value, next_value, current_map, next_map, alt_count)
         }
+        VcfNumber::R if key.starts_with('X') => {
+            overlay_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+        }
         VcfNumber::R if current_value == next_value => {
             overlay_info_number_r(current_value, next_value, current_map, next_map, alt_count)
         }
         VcfNumber::R => {
             merge_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::G if key.starts_with('X') => {
+            overlay_info_number_g(current_value, next_value, current_map, next_map, alt_count)
         }
         VcfNumber::G if current_value == next_value => {
             overlay_info_number_g(current_value, next_value, current_map, next_map, alt_count)
@@ -2389,7 +2607,9 @@ fn overlay_slots(current: &[Option<String>], next: &[Option<String>], missing: &
     current
         .iter()
         .zip(next)
-        .map(|(a, b)| a.as_deref().or(b.as_deref()).unwrap_or(missing).to_owned())
+        .map(|(a, b)| {
+            normalize_scientific_literal(a.as_deref().or(b.as_deref()).unwrap_or(missing))
+        })
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -2423,11 +2643,27 @@ fn sum_numeric_values(a: &str, b: &str) -> String {
 }
 
 fn format_float(value: f64) -> String {
+    if value.abs() >= 1_000_000.0 && value.fract() == 0.0 {
+        let raw = format!("{value:.0e}");
+        if let Some((mantissa, exponent)) = raw.split_once('e') {
+            let exponent = exponent.parse::<i32>().unwrap_or(0);
+            return format!("{mantissa}e{exponent:+03}");
+        }
+    }
     if value.fract() == 0.0 {
         format!("{value:.0}")
     } else {
         value.to_string()
     }
+}
+
+fn normalize_scientific_literal(raw: &str) -> String {
+    if !raw.contains('e') && !raw.contains('E') {
+        return raw.to_owned();
+    }
+    raw.parse::<f64>()
+        .map(format_float)
+        .unwrap_or_else(|_| raw.to_owned())
 }
 
 fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_rules: InfoRules) {
