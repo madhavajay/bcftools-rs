@@ -59,6 +59,7 @@ struct InfoRules {
     sum_ac: bool,
     sum_an: bool,
     join_af: bool,
+    join_src: bool,
     filter_logic: FilterLogic,
 }
 
@@ -325,6 +326,7 @@ fn parse_info_rules(raw: &str) -> InfoRules {
             "AC" if method == "sum" => rules.sum_ac = true,
             "AN" if method == "sum" => rules.sum_an = true,
             "AF" if method == "join" => rules.join_af = true,
+            "SRC" if method == "join" => rules.join_src = true,
             _ => {}
         }
     }
@@ -742,7 +744,11 @@ fn merge_inputs(
         &ordered_info_numbers,
     )?;
     let contigs = contig_order(&first.meta);
-    sites.sort_by(|a, b| compare_sites(a, b, &contigs));
+    if info_rules.join_src {
+        sites.sort_by_key(|site| site.order);
+    } else {
+        sites.sort_by(|a, b| compare_sites(a, b, &contigs));
+    }
     if let Some(limit) = local_alleles {
         let input_sample_counts = inputs
             .iter()
@@ -1096,7 +1102,7 @@ fn collect_sites(
                         site,
                         record,
                         input_idx,
-                        info_rules.filter_logic,
+                        info_rules,
                         format_numbers,
                         info_numbers,
                         ordered_info_numbers,
@@ -1141,7 +1147,7 @@ fn collect_sites(
                                 site,
                                 record,
                                 input_idx,
-                                info_rules.filter_logic,
+                                info_rules,
                                 format_numbers,
                                 info_numbers,
                                 ordered_info_numbers,
@@ -1439,6 +1445,9 @@ fn merge_exact_site(
     if info_rules.join_af {
         site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "AF");
     }
+    if info_rules.join_src {
+        site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "SRC");
+    }
     site.samples_by_input[input_idx] = Some(transformed_samples);
     Ok(())
 }
@@ -1607,7 +1616,7 @@ fn merge_sampled_same_position(
     site: &mut MergedSite,
     record: &RecordLine,
     input_idx: usize,
-    filter_logic: FilterLogic,
+    info_rules: InfoRules,
     format_numbers: &HashMap<String, VcfNumber>,
     info_numbers: &HashMap<String, VcfNumber>,
     ordered_info_numbers: &[(String, VcfNumber)],
@@ -1650,7 +1659,7 @@ fn merge_sampled_same_position(
     let record_map = allele_map(&normalized_record_alts, &merged_alts);
     let same_non_dot_id =
         site.fixed.get(2) == record.fixed.get(2) && site.fixed.get(2).is_some_and(|id| id != ".");
-    let merged_info = merge_sampled_info(
+    let mut merged_info = merge_sampled_info(
         &site.fixed[7],
         &record.fixed[7],
         SampledInfoMerge {
@@ -1662,6 +1671,12 @@ fn merge_sampled_same_position(
             preserve_info_order: same_non_dot_id,
         },
     );
+    if info_rules.join_af {
+        merged_info = join_info_tag(&merged_info, &record.fixed[7], "AF");
+    }
+    if info_rules.join_src {
+        merged_info = join_info_tag(&merged_info, &record.fixed[7], "SRC");
+    }
     if new_ref != old_ref || merged_alts != old_alts || merged_format != old_format {
         for values in site.samples_by_input.iter_mut().flatten() {
             *values = transform_sample_values(
@@ -1683,7 +1698,7 @@ fn merge_sampled_same_position(
     };
     site.fixed[7] = merged_info;
     site.fixed[8] = merged_format.clone();
-    merge_fixed_shared_fields(&mut site.fixed, &record.fixed, filter_logic);
+    merge_fixed_shared_fields(&mut site.fixed, &record.fixed, info_rules.filter_logic);
     site.samples_by_input[input_idx] = Some(transform_sample_values(
         &record_format,
         &merged_format,
