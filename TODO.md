@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #217 (`progress/mendelian2-common-filter`, merge commit
+  `521a362`) added common `+mendelian2 -i` / `-e` record filtering through
+  the shared text filter engine before Mendelian consistency collection, with
+  upstream-style `sites_fail` accounting.
 - 2026-05-18: PR #216
   (`progress/todo-sync-after-parental-origin-common-filter`, merge commit
   `b0738f0`) synced the TODO docs after PR #215.
@@ -713,11 +717,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`b0738f0`) (320 lib unit tests plus
+  latest merged commit on `main` (`521a362`) (321 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/mendelian2-common-filter`, adding
-  common `+mendelian2 -i/-e` record filtering through the shared text filter
-  engine before Mendelian consistency collection.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
