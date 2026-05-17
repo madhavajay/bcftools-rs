@@ -2,10 +2,9 @@
 //!
 //! Determines the parental origin of a CNV (deletion or duplication)
 //! region in a trio from FORMAT/PL, FORMAT/AD and FORMAT/GT, accumulating
-//! a log-likelihood of paternal vs maternal origin over the informative
-//! SNP sites inside `-r REGION`. The `-i`/`-e` filter expressions need
-//! the not-yet-ported filter engine (tracked in `TODO.md`); the
-//! `del`/`dup` test fixtures do not use them.
+//! a log-likelihood of paternal vs maternal origin over the filtered
+//! informative SNP sites inside `-r REGION`. Common `-i`/`-e` filters route
+//! through the shared text filter engine before likelihood accumulation.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -17,6 +16,7 @@ use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::math::kf_lgamma;
 use htslib_rs::variant::{VariantType, classify_variant};
 
+use crate::filter::{self as bcffilter, EvalContext};
 use crate::vcf_compat::normalize_vcf_text;
 
 const KF_GAMMA_EPS: f64 = 1e-14;
@@ -45,6 +45,18 @@ impl CnvType {
             CnvType::Dup => "dup",
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
 }
 
 /// Port of HTSlib `kfunc.c` `kf_betai_aux` (modified Lentz continued
@@ -159,6 +171,7 @@ fn parse_region(spec: &str) -> Region {
 }
 
 /// Reads the input and returns the parental-origin report.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     input: &Path,
     region: &str,
@@ -167,9 +180,13 @@ pub fn run(
     greedy: bool,
     min_pbinom: f64,
     argv_tail: &str,
+    filter: Option<FilterSpec<'_>>,
 ) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    compute(&text, region, pfm, cnv_type, greedy, min_pbinom, argv_tail).map_err(io::Error::other)
+    compute(
+        &text, region, pfm, cnv_type, greedy, min_pbinom, argv_tail, filter,
+    )
+    .map_err(io::Error::other)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -181,6 +198,7 @@ fn compute(
     greedy: bool,
     min_pbinom: f64,
     argv_tail: &str,
+    filter: Option<FilterSpec<'_>>,
 ) -> Result<String, String> {
     let reg = parse_region(region);
     let parts: Vec<&str> = pfm.split(',').collect();
@@ -213,6 +231,11 @@ fn compute(
         }
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() < 10 {
+            continue;
+        }
+        if let Some(filter) = filter
+            && !record_passes_filter(&f, filter)?
+        {
             continue;
         }
         if f[0] != reg.chrom {
@@ -454,6 +477,23 @@ fn compute(
     Ok(out)
 }
 
+fn record_passes_filter(fields: &[&str], filter: FilterSpec<'_>) -> Result<bool, String> {
+    let fields: Vec<String> = fields.iter().map(|field| (*field).to_owned()).collect();
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, &fields)
+        })
+        .map_err(|e| e.to_string())?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
 fn read_vcf_text(path: &Path) -> io::Result<String> {
     if path == Path::new("-") {
         let tmp = stdin_tmp_path();
@@ -518,5 +558,60 @@ mod tests {
     fn binom_edges() {
         assert_eq!(calc_binom_two_sided(0, 0, 0.5), -1.0);
         assert_eq!(calc_binom_two_sided(5, 5, 0.5), 1.0);
+    }
+
+    #[test]
+    fn include_exclude_filters_records_before_likelihoods() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##FILTER=<ID=PASS,Description=\"All filters passed\">\n\
+##contig=<ID=20,length=81195210>\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"Genotype Likelihoods\">\n\
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depth\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tproband\tfather\tmother\n\
+20\t100\t.\tA\tC\t.\t.\t.\tGT:PL:AD\t0/0:0,30,50:10,0\t0/0:0,30,50:10,0\t1/1:50,30,0:0,10\n\
+20\t101\t.\tA\tC\t.\t.\t.\tGT:PL:AD\t0/0:0,30,50:10,0\t0/1:30,0,50:10,0\t1/1:50,30,0:0,10\n\
+20\t102\t.\tA\tC\t.\t.\t.\tGT:PL:AD\t1/1:50,30,0:10,0\t0/1:30,0,50:10,0\t0/0:0,30,50:0,10\n";
+        let pfm = "proband,father,mother";
+        let nmarkers = |report: &str| {
+            report
+                .lines()
+                .find(|l| !l.starts_with('#'))
+                .and_then(|l| l.split('\t').nth(3))
+                .unwrap()
+                .to_owned()
+        };
+
+        let include = compute(
+            vcf,
+            "20:100-102",
+            pfm,
+            CnvType::Del,
+            false,
+            1e-2,
+            "",
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: "POS=100",
+            }),
+        )
+        .unwrap();
+        assert_eq!(nmarkers(&include), "1");
+
+        let exclude = compute(
+            vcf,
+            "20:100-102",
+            pfm,
+            CnvType::Del,
+            false,
+            1e-2,
+            "",
+            Some(FilterSpec {
+                mode: FilterMode::Exclude,
+                expr: "POS=100",
+            }),
+        )
+        .unwrap();
+        assert_eq!(nmarkers(&exclude), "2");
     }
 }
