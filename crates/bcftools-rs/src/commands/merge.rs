@@ -437,7 +437,7 @@ fn merge_inputs(
         &ordered_info_numbers,
     )?;
     let contigs = contig_order(&first.meta);
-    sites.sort_by(|a, b| compare_sites(a, b, &contigs, merge_mode));
+    sites.sort_by(|a, b| compare_sites(a, b, &contigs));
 
     for site in sites {
         let mut samples = Vec::new();
@@ -801,15 +801,20 @@ fn can_merge_sampled_same_position(
         &record.fixed[4],
     );
     let subset_compatible = same_ref_subset_compatible || ref_extended_subset_compatible;
+    let same_id = site.fixed.get(2) == record.fixed.get(2);
     match merge_mode {
         MergeMode::Default => {
             let site_alts = split_alt(&site.fixed[4]);
             let record_alts = split_alt(&record.fixed[4]);
-            ref_extended_subset_compatible || site_alts.is_empty() || record_alts.is_empty() || {
-                let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
-                site_class != CoarseVariantClass::Other
-                    && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
-            }
+            same_id
+                || ref_extended_subset_compatible
+                || site_alts.is_empty()
+                || record_alts.is_empty()
+                || {
+                    let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
+                    site_class != CoarseVariantClass::Other
+                        && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
+                }
         }
         MergeMode::None => subset_compatible || site_has_non_ref && record_has_non_ref,
         MergeMode::Both => {
@@ -1100,14 +1105,19 @@ fn merge_sampled_same_position(
 
     let old_site_map = allele_map(&normalized_site_alts, &merged_alts);
     let record_map = allele_map(&normalized_record_alts, &merged_alts);
+    let same_non_dot_id =
+        site.fixed.get(2) == record.fixed.get(2) && site.fixed.get(2).is_some_and(|id| id != ".");
     let merged_info = merge_sampled_info(
         &site.fixed[7],
         &record.fixed[7],
-        &old_site_map,
-        &record_map,
-        merged_alts.len(),
-        info_numbers,
-        ordered_info_numbers,
+        SampledInfoMerge {
+            current_map: &old_site_map,
+            next_map: &record_map,
+            alt_count: merged_alts.len(),
+            info_numbers,
+            ordered_info_numbers,
+            preserve_info_order: same_non_dot_id,
+        },
     );
     if new_ref != old_ref || merged_alts != old_alts || merged_format != old_format {
         for values in site.samples_by_input.iter_mut().flatten() {
@@ -1319,18 +1329,30 @@ fn remap_gt(raw: &str, allele_map: &[Option<usize>]) -> String {
 }
 
 fn remap_number_a(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    if raw == "." {
+        return raw.to_owned();
+    }
     slots_to_string(remap_number_a_slots(raw, allele_map, alt_count), ".")
 }
 
 fn remap_number_r(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    if raw == "." {
+        return raw.to_owned();
+    }
     slots_to_string(remap_number_r_slots(raw, allele_map, alt_count), ".")
 }
 
 fn remap_number_g(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    if raw == "." {
+        return raw.to_owned();
+    }
     slots_to_string(remap_number_g_slots(raw, allele_map, alt_count), ".")
 }
 
 fn remap_number_g_haploid(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    if raw == "." {
+        return raw.to_owned();
+    }
     slots_to_string(
         remap_number_g_haploid_slots(raw, allele_map, alt_count),
         ".",
@@ -1455,45 +1477,58 @@ fn slots_to_string(values: Vec<Option<String>>, missing: &str) -> String {
         .join(",")
 }
 
-fn merge_sampled_info(
-    current: &str,
-    next: &str,
-    current_map: &[Option<usize>],
-    next_map: &[Option<usize>],
+struct SampledInfoMerge<'a> {
+    current_map: &'a [Option<usize>],
+    next_map: &'a [Option<usize>],
     alt_count: usize,
-    info_numbers: &HashMap<String, VcfNumber>,
-    ordered_info_numbers: &[(String, VcfNumber)],
-) -> String {
-    let current_has_mergeable = has_mergeable_sampled_info(current, info_numbers);
-    let next_has_mergeable = has_mergeable_sampled_info(next, info_numbers);
+    info_numbers: &'a HashMap<String, VcfNumber>,
+    ordered_info_numbers: &'a [(String, VcfNumber)],
+    preserve_info_order: bool,
+}
+
+fn merge_sampled_info(current: &str, next: &str, info_merge: SampledInfoMerge<'_>) -> String {
+    let current_has_mergeable = has_mergeable_sampled_info(current, info_merge.info_numbers);
+    let next_has_mergeable = has_mergeable_sampled_info(next, info_merge.info_numbers);
     if !current_has_mergeable && !next_has_mergeable {
         return current.to_owned();
     }
 
     let mut fields = Vec::new();
-    for target_number in [VcfNumber::A, VcfNumber::G, VcfNumber::R] {
-        for (key, number) in ordered_info_numbers {
-            if *number != target_number || key == "AC" || key == "AN" {
+    if info_merge.preserve_info_order {
+        for (key, number) in info_merge.ordered_info_numbers {
+            if key == "AC" || key == "AN" || *number == VcfNumber::Other {
                 continue;
             }
-            let current_value = info_value(current, key);
-            let next_value = info_value(next, key);
-            if current_value.is_none() && next_value.is_none() {
-                continue;
+            if let Some(field) = merge_sampled_info_field(
+                current,
+                next,
+                key,
+                *number,
+                info_merge.current_map,
+                info_merge.next_map,
+                info_merge.alt_count,
+            ) {
+                fields.push(field);
             }
-            let value = match target_number {
-                VcfNumber::A => {
-                    merge_info_number_a(current_value, next_value, current_map, next_map, alt_count)
+        }
+    } else {
+        for target_number in [VcfNumber::A, VcfNumber::G, VcfNumber::R] {
+            for (key, number) in info_merge.ordered_info_numbers {
+                if *number != target_number || key == "AC" || key == "AN" {
+                    continue;
                 }
-                VcfNumber::R => {
-                    merge_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+                if let Some(field) = merge_sampled_info_field(
+                    current,
+                    next,
+                    key,
+                    target_number,
+                    info_merge.current_map,
+                    info_merge.next_map,
+                    info_merge.alt_count,
+                ) {
+                    fields.push(field);
                 }
-                VcfNumber::G => {
-                    merge_info_number_g(current_value, next_value, current_map, next_map, alt_count)
-                }
-                VcfNumber::Other => unreachable!(),
-            };
-            fields.push(format!("{key}={value}"));
+            }
         }
     }
 
@@ -1507,9 +1542,9 @@ fn merge_sampled_info(
             merge_info_number_a(
                 info_value(current, "AC"),
                 info_value(next, "AC"),
-                current_map,
-                next_map,
-                alt_count,
+                info_merge.current_map,
+                info_merge.next_map,
+                info_merge.alt_count,
             )
         ));
     }
@@ -1519,6 +1554,44 @@ fn merge_sampled_info(
     } else {
         fields.join(";")
     }
+}
+
+fn merge_sampled_info_field(
+    current: &str,
+    next: &str,
+    key: &str,
+    target_number: VcfNumber,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> Option<String> {
+    let current_value = info_value(current, key);
+    let next_value = info_value(next, key);
+    if current_value.is_none() && next_value.is_none() {
+        return None;
+    }
+    let value = match target_number {
+        VcfNumber::A if current_value == next_value => {
+            overlay_info_number_a(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::A => {
+            merge_info_number_a(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::R if current_value == next_value => {
+            overlay_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::R => {
+            merge_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::G if current_value == next_value => {
+            overlay_info_number_g(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::G => {
+            merge_info_number_g(current_value, next_value, current_map, next_map, alt_count)
+        }
+        VcfNumber::Other => return None,
+    };
+    Some(format!("{key}={value}"))
 }
 
 fn has_mergeable_sampled_info(info: &str, info_numbers: &HashMap<String, VcfNumber>) -> bool {
@@ -1550,6 +1623,22 @@ fn merge_info_number_a(
     sum_numeric_slots(&current, &next, None)
 }
 
+fn overlay_info_number_a(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_a_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count]);
+    let next = next
+        .map(|value| remap_number_a_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count]);
+    overlay_slots(&current, &next, ".")
+}
+
 fn merge_info_number_r(
     current: Option<&str>,
     next: Option<&str>,
@@ -1566,6 +1655,22 @@ fn merge_info_number_r(
     sum_numeric_slots(&current, &next, None)
 }
 
+fn overlay_info_number_r(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_r_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count + 1]);
+    let next = next
+        .map(|value| remap_number_r_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count + 1]);
+    overlay_slots(&current, &next, ".")
+}
+
 fn merge_info_number_g(
     current: Option<&str>,
     next: Option<&str>,
@@ -1580,6 +1685,31 @@ fn merge_info_number_g(
         .map(|value| remap_number_g_slots(value, next_map, alt_count))
         .unwrap_or_else(|| vec![None; genotype_count(alt_count)]);
     sum_numeric_slots(&current, &next, Some("0"))
+}
+
+fn overlay_info_number_g(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_g_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; genotype_count(alt_count)]);
+    let next = next
+        .map(|value| remap_number_g_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; genotype_count(alt_count)]);
+    overlay_slots(&current, &next, ".")
+}
+
+fn overlay_slots(current: &[Option<String>], next: &[Option<String>], missing: &str) -> String {
+    current
+        .iter()
+        .zip(next)
+        .map(|(a, b)| a.as_deref().or(b.as_deref()).unwrap_or(missing).to_owned())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn sum_numeric_slots(
@@ -1748,12 +1878,7 @@ fn contig_order(meta: &[String]) -> HashMap<String, usize> {
     order
 }
 
-fn compare_sites(
-    a: &MergedSite,
-    b: &MergedSite,
-    contigs: &HashMap<String, usize>,
-    merge_mode: MergeMode,
-) -> Ordering {
+fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize>) -> Ordering {
     let a_chrom = a.fixed.first().map(String::as_str).unwrap_or("");
     let b_chrom = b.fixed.first().map(String::as_str).unwrap_or("");
     match (contigs.get(a_chrom).copied(), contigs.get(b_chrom).copied()) {
@@ -1775,13 +1900,7 @@ fn compare_sites(
             .unwrap_or(0);
         a_pos.cmp(&b_pos)
     })
-    .then_with(|| {
-        if merge_mode != MergeMode::Default {
-            a.order.cmp(&b.order)
-        } else {
-            Ordering::Equal
-        }
-    })
+    .then_with(|| a.order.cmp(&b.order))
     .then_with(|| a.fixed.get(2).cmp(&b.fixed.get(2)))
     .then_with(|| a.fixed.get(3).cmp(&b.fixed.get(3)))
     .then_with(|| a.fixed.get(4).cmp(&b.fixed.get(4)))
