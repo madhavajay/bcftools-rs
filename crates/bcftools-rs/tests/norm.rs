@@ -141,6 +141,36 @@ fn norm_rmdup3_left_aligned_duplicate_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn norm_filter_duplicate_removal_fixtures_match_upstream_text_output() {
+    let input = fixture_path("norm.filter.vcf");
+    let filter_file = fixture_path("norm.filter.txt");
+    let expected = std::fs::read_to_string(fixture_path("norm.filter.2.out")).unwrap();
+
+    let membership_expr = format!("ID=@{}", filter_file.display());
+    for include_expr in [membership_expr.as_str(), "ALT!=\"C\""] {
+        let args = [
+            "norm",
+            "--no-version",
+            "-d",
+            "both",
+            "-i",
+            include_expr,
+            input.to_str().unwrap(),
+        ];
+        let (out, err, code) = run(&args);
+        assert_eq!(
+            code, 0,
+            "norm.filter fixture failed for -i {include_expr}: {err}"
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm.filter fixture differed for -i {include_expr}"
+        );
+    }
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");
