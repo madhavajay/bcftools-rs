@@ -438,6 +438,20 @@ fn merge_info_number_vectors_match_upstream_fixture() {
 }
 
 #[test]
+fn merge_id_paired_number_vectors_match_upstream_fixture() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "../../bcftools/test/merge.4.a.vcf",
+        "../../bcftools/test/merge.4.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.4 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.4.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_mode_none_both_all_match_upstream_numbered_fixtures() {
     for (mode, fixture) in [
         ("none", "../../bcftools/test/merge.2.none.out"),
