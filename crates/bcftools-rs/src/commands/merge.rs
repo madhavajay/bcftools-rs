@@ -458,7 +458,11 @@ fn merge_inputs(
     let contigs = contig_order(&first.meta);
     sites.sort_by(|a, b| compare_sites(a, b, &contigs));
     if let Some(limit) = local_alleles {
-        apply_local_alleles(&mut sites, limit, &format_numbers);
+        let input_sample_counts = inputs
+            .iter()
+            .map(|input| input.samples.len())
+            .collect::<Vec<_>>();
+        apply_local_alleles(&mut sites, limit, &format_numbers, &input_sample_counts);
         append_localized_format_meta(&mut merged_meta);
     }
 
@@ -1293,6 +1297,7 @@ fn apply_local_alleles(
     sites: &mut [MergedSite],
     limit: usize,
     format_numbers: &HashMap<String, VcfNumber>,
+    input_sample_counts: &[usize],
 ) {
     for site in sites {
         let alt_count = split_alt(&site.fixed[4]).len();
@@ -1312,7 +1317,15 @@ fn apply_local_alleles(
             }
         }
         site.fixed[8] = new_format;
+        fill_localized_missing_samples(site, limit, input_sample_counts);
     }
+}
+
+#[derive(Clone, Copy)]
+enum LaaToken {
+    Int(usize),
+    Missing,
+    VectorEnd,
 }
 
 fn localized_format(format: &str, format_numbers: &HashMap<String, VcfNumber>) -> String {
@@ -1493,6 +1506,164 @@ fn localize_laa_value(local_alts: &[usize]) -> String {
             .collect::<Vec<_>>()
             .join(",")
     }
+}
+
+fn fill_localized_missing_samples(
+    site: &mut MergedSite,
+    limit: usize,
+    input_sample_counts: &[usize],
+) {
+    let Some(format) = site.fixed.get(8) else {
+        return;
+    };
+    let format_keys = split_format_keys(format);
+    let Some(laa_idx) = format_keys.iter().position(|key| *key == "LAA") else {
+        return;
+    };
+
+    let total_samples = input_sample_counts.iter().sum::<usize>();
+    if total_samples == 0 {
+        return;
+    }
+
+    let stride = limit + 1;
+    let mut laa = vec![LaaToken::VectorEnd; total_samples * stride];
+    let mut present = vec![false; total_samples];
+    let mut n_laa = 0;
+    let mut sample_idx = 0;
+    for (input_idx, sample_count) in input_sample_counts.iter().copied().enumerate() {
+        match site
+            .samples_by_input
+            .get(input_idx)
+            .and_then(Option::as_ref)
+        {
+            Some(values) => {
+                for sample in values.iter().take(sample_count) {
+                    present[sample_idx] = true;
+                    let base = sample_idx * stride;
+                    laa[base] = LaaToken::Int(0);
+                    let sample_laa = parse_laa_tokens(sample, laa_idx);
+                    n_laa = n_laa.max(sample_laa.len().min(limit));
+                    for (idx, token) in sample_laa.into_iter().take(limit).enumerate() {
+                        laa[base + idx + 1] = token;
+                    }
+                    sample_idx += 1;
+                }
+            }
+            None => {
+                for _ in 0..sample_count {
+                    let base = sample_idx * stride;
+                    laa[base] = LaaToken::Missing;
+                    sample_idx += 1;
+                }
+            }
+        }
+    }
+    if n_laa == 0 {
+        return;
+    }
+
+    for (sample_idx, is_present) in present.iter().copied().enumerate() {
+        let src_offset = sample_idx * stride;
+        let dst_offset = sample_idx * n_laa;
+        let mut dst_idx = 0;
+        if is_present {
+            while dst_idx < n_laa {
+                match laa[src_offset + dst_idx + 1] {
+                    LaaToken::Missing => laa[dst_offset + dst_idx] = LaaToken::Missing,
+                    LaaToken::VectorEnd => break,
+                    LaaToken::Int(value) => laa[dst_offset + dst_idx] = LaaToken::Int(value),
+                }
+                dst_idx += 1;
+            }
+        }
+        if dst_idx == 0 {
+            laa[dst_offset] = LaaToken::Missing;
+            dst_idx += 1;
+        }
+        // Match upstream's in-place LAA compaction, including its source-stride
+        // tail write. This preserves byte parity for absent samples in LPL rows.
+        while dst_idx < n_laa {
+            laa[src_offset + dst_idx] = LaaToken::VectorEnd;
+            dst_idx += 1;
+        }
+    }
+
+    let mut sample_idx = 0;
+    for (input_idx, sample_count) in input_sample_counts.iter().copied().enumerate() {
+        if site
+            .samples_by_input
+            .get(input_idx)
+            .is_some_and(Option::is_some)
+        {
+            sample_idx += sample_count;
+            continue;
+        }
+        let values = (0..sample_count)
+            .map(|_| {
+                let dst_offset = sample_idx * n_laa;
+                sample_idx += 1;
+                localized_missing_sample_value(
+                    format,
+                    &render_laa_tokens(&laa[dst_offset..][..n_laa]),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(slot) = site.samples_by_input.get_mut(input_idx) {
+            *slot = Some(values);
+        }
+    }
+}
+
+fn parse_laa_tokens(sample: &str, laa_idx: usize) -> Vec<LaaToken> {
+    let raw = sample.split(':').nth(laa_idx).unwrap_or(".");
+    if raw == "." || raw.is_empty() {
+        return vec![LaaToken::Missing];
+    }
+    raw.split(',')
+        .map(|value| {
+            if value == "." {
+                LaaToken::Missing
+            } else {
+                value
+                    .parse::<usize>()
+                    .map(LaaToken::Int)
+                    .unwrap_or(LaaToken::Missing)
+            }
+        })
+        .collect()
+}
+
+fn render_laa_tokens(tokens: &[LaaToken]) -> String {
+    let mut values = Vec::new();
+    for token in tokens {
+        match token {
+            LaaToken::Int(value) => values.push(value.to_string()),
+            LaaToken::Missing => values.push(".".to_owned()),
+            LaaToken::VectorEnd => break,
+        }
+    }
+    if values.is_empty() {
+        ".".to_owned()
+    } else {
+        values.join(",")
+    }
+}
+
+fn localized_missing_sample_value(format: &str, laa: &str) -> String {
+    format
+        .split(':')
+        .map(|key| {
+            if key == "GT" {
+                "./."
+            } else if key == "LAA" {
+                laa
+            } else {
+                "."
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn allele_map(old_alts: &[String], merged_alts: &[String]) -> Vec<Option<usize>> {
