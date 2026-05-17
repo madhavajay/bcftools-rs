@@ -1054,6 +1054,26 @@ fn view_drop_genotypes_no_header_matches_upstream_fixture() {
 }
 
 #[test]
+fn view_trim_alt_symbolic_gvcf_fixtures_match_upstream() {
+    let path = fixture_path("merge.gvcf.2.a.vcf");
+    for (args, expected_name) in [
+        (
+            vec!["view", "--no-version", "-HA", path.to_str().unwrap()],
+            "merge.gvcf.2.a.1.out",
+        ),
+        (
+            vec!["view", "--no-version", "-HAA", path.to_str().unwrap()],
+            "merge.gvcf.2.a.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(expected_name)).unwrap();
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "view trim ALT fixture failed for {args:?}: {err}");
+        assert_eq!(out, expected, "view trim ALT differed for {args:?}");
+    }
+}
+
+#[test]
 fn view_threads_writes_bgzf_vcf_output() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let input = fixture_path("aa.vcf");
