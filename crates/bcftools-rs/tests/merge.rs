@@ -467,6 +467,23 @@ fn merge_gvcf10_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf2_default_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--gvcf",
+        "-",
+        "../../bcftools/test/merge.gvcf.2.a.vcf",
+        "../../bcftools/test/merge.gvcf.2.b.vcf",
+        "../../bcftools/test/merge.gvcf.2.c.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.gvcf.2 default fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.gvcf.2.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn gvcf_merge_reference_block_fixture_matches_upstream_text_output() {
     let (out, err, code) = run(&[
         "merge",
