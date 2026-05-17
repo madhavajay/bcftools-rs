@@ -157,6 +157,52 @@ fn merge_unions_missing_sites_with_missing_sample_values() {
 }
 
 #[test]
+fn merge_missing_to_ref_fills_absent_sites_as_reference() {
+    let dir = TempDir::new().unwrap();
+    let a_path = dir.path().join("a.vcf");
+    std::fs::write(
+        &a_path,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=1000>\n\
+##INFO=<ID=AN,Number=1,Type=Integer,Description=\"Total number of alleles\">\n\
+##INFO=<ID=AC,Number=A,Type=Integer,Description=\"Allele count\">\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE_A\n\
+1\t2\t.\tA\tC\t.\tPASS\tAN=2;AC=1\tGT\t0/1\n",
+    )
+    .unwrap();
+    let b_path = dir.path().join("b.vcf");
+    std::fs::write(
+        &b_path,
+        "##fileformat=VCFv4.2\n\
+##contig=<ID=1,length=1000>\n\
+##INFO=<ID=AN,Number=1,Type=Integer,Description=\"Total number of alleles\">\n\
+##INFO=<ID=AC,Number=A,Type=Integer,Description=\"Allele count\">\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE_B\n\
+1\t3\t.\tG\tT\t.\tPASS\tAN=2;AC=2\tGT\t1/1\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "-0",
+        a_path.to_str().unwrap(),
+        b_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "merge -0 failed: {err}");
+    assert!(
+        out.contains("1\t2\t.\tA\tC\t.\tPASS\tAN=4;AC=1\tGT\t0/1\t0/0"),
+        "absent SAMPLE_B should be filled as hom-ref and counted in AN: {out}"
+    );
+    assert!(
+        out.contains("1\t3\t.\tG\tT\t.\tPASS\tAN=4;AC=2\tGT\t0/0\t1/1"),
+        "absent SAMPLE_A should be filled as hom-ref and counted in AN: {out}"
+    );
+}
+
+#[test]
 fn merge_writes_bgzf_vcf_output() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
