@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #207 (`progress/missing2ref-common-filter`, merge commit
+  `a00461e`) added common `+missing2ref -i` / `-e` record filtering through
+  the shared text filter engine, filtering records before missing-GT rewrite
+  to match the upstream plugin framework.
 - 2026-05-18: PR #206
   (`progress/todo-sync-after-contrast-rare-allele-summary`, merge commit
   `d6a052b`) synced the TODO docs after PR #205.
@@ -679,12 +683,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`d6a052b`) (315 lib unit tests plus
+  latest merged commit on `main` (`a00461e`) (316 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/missing2ref-common-filter`,
-  adding common `+missing2ref -i` / `-e` record filtering through the
-  existing shared text filter engine without touching `htslib-rs`,
-  `noodles`, or their submodules.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
