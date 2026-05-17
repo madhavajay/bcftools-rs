@@ -90,3 +90,39 @@ fn parental_origin_dup_4() {
 fn parental_origin_dup_5() {
     check("20:104", "dup", "parental-origin.5.out");
 }
+
+#[test]
+fn parental_origin_include_filter_limits_informative_sites() {
+    ensure_binary_built();
+    let input = fixture_path("parental-origin.vcf");
+    let expected = std::fs::read_to_string(fixture_path("parental-origin.1.out")).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+parental-origin",
+            input.to_str().unwrap(),
+            "-r",
+            "20:100-102",
+            "-p",
+            "proband,father,mother",
+            "-t",
+            "del",
+            "-i",
+            "POS=100",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "include filter failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected);
+}

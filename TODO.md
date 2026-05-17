@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #214
+  (`progress/todo-sync-after-contrast-common-filter`, merge commit
+  `89a0f97`) synced the TODO docs after PR #213.
 - 2026-05-18: PR #213 (`progress/contrast-common-filter`, merge commit
   `240a3f3`) added common `+contrast -i` / `-e` record filtering through the
   shared text filter engine before annotation and stderr statistic
@@ -703,10 +706,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`240a3f3`) (319 lib unit tests plus
+  latest merged commit on `main` (`89a0f97`) (319 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/parental-origin-common-filter`,
+  adding common `+parental-origin -i/-e` record filtering through the shared
+  text filter engine before CNV parental-origin likelihood accumulation.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1368,12 +1372,13 @@ Current local slice:
   exclusion. Includes a local port of HTSlib `kfunc.c` `kf_betai`
   (modified Lentz continued fraction, reusing `htslib_rs::math::
   kf_lgamma`) backing `calc_binom_one_sided`/`calc_binom_two_sided`.
-  Emits the `type/predicted_origin/quality/nmarkers` summary.
-  Byte-for-byte parity with `parental-origin.{1,2,3,4,5}.out`. 5
+  Common `-i`/`-e` record filtering routes through the shared text filter
+  engine before likelihood accumulation. Emits the
+  `type/predicted_origin/quality/nmarkers` summary.
+  Byte-for-byte parity with `parental-origin.{1,2,3,4,5}.out`. 6
   integration tests in `crates/bcftools-rs/tests/
-  plugin_parental_origin.rs` + 3 unit tests. Remaining: `-i`/`-e`
-  filtering and the `-d` informative-site debug listing (filter
-  engine).
+  plugin_parental_origin.rs` + 4 unit tests. Remaining: the `-d`
+  informative-site debug listing.
 - [x] `+fixploidy` (`crates/bcftools-rs/src/commands/plugins/fixploidy.rs`):
   port of `fixploidy.c` plus the needed `ploidy.c` subset. Parses the
   `CHROM FROM TO SEX PLOIDY` regions file (`-p`) and the `NAME SEX`

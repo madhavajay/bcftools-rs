@@ -14,6 +14,7 @@ use crate::commands::plugins::contrast::FilterMode as ContrastFilterMode;
 use crate::commands::plugins::fill_from_fasta::FilterMode as FillFromFastaFilterMode;
 use crate::commands::plugins::guess_ploidy::FilterMode as GuessPloidyFilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
+use crate::commands::plugins::parental_origin::FilterMode as ParentalOriginFilterMode;
 use crate::diagnostics::fmt_etag;
 
 const USAGE: &str = "\n\
@@ -108,6 +109,20 @@ fn set_contrast_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one contrast -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_parental_origin_filter(
+    target: &mut Option<(ParentalOriginFilterMode, String)>,
+    mode: ParentalOriginFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one parental-origin -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -396,6 +411,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut po_greedy = false;
     let mut po_min_binom: Option<f64> = None;
     let mut po_debug = false;
+    let mut po_filter: Option<(ParentalOriginFilterMode, String)> = None;
     // dosage options.
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
@@ -658,7 +674,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             _ if raw.starts_with("--genome=") && plugin_name.as_deref() == Some("guess-ploidy") => {
                 gp_region = Some(guess_ploidy_genome_region(&raw["--genome=".len()..])?);
             }
-            // parental-origin: -r REGION, -t del|dup, -g, -b, -d.
+            // parental-origin: -r REGION, -t del|dup, -g, -b, -d, -i/-e.
             "-r" | "--region" if plugin_name.as_deref() == Some("parental-origin") => {
                 po_region = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -679,6 +695,61 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-d" | "--debug" if plugin_name.as_deref() == Some("parental-origin") => {
                 po_debug = true;
+            }
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                let mode = if raw == "-i" || raw == "--include" {
+                    ParentalOriginFilterMode::Include
+                } else {
+                    ParentalOriginFilterMode::Exclude
+                };
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::other("parental-origin requires an expression after -i/-e")
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+                set_parental_origin_filter(&mut po_filter, mode, expr)?;
+            }
+            _ if raw.starts_with("--include=")
+                && plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                set_parental_origin_filter(
+                    &mut po_filter,
+                    ParentalOriginFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=")
+                && plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                set_parental_origin_filter(
+                    &mut po_filter,
+                    ParentalOriginFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                set_parental_origin_filter(
+                    &mut po_filter,
+                    ParentalOriginFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("parental-origin") =>
+            {
+                set_parental_origin_filter(
+                    &mut po_filter,
+                    ParentalOriginFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             // fixploidy: -d default-ploidy, -f force-ploidy, -t tags (GT).
             "-d" | "--default-ploidy" if plugin_name.as_deref() == Some("fixploidy") => {
@@ -1469,6 +1540,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             po_greedy,
             min_pbinom,
             &tail,
+            po_filter
+                .as_ref()
+                .map(|(mode, expr)| parental_origin::FilterSpec { mode: *mode, expr }),
         )?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
