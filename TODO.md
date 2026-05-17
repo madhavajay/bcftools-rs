@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #203 (`progress/guess-ploidy-genome-shortcut`, merge
+  commit `59e7243`) added `+guess-ploidy -g` / `--genome` shortcut
+  regions for `b37`, `b38`, `hg19`, and `hg38`, plus inline
+  `CHROM:FROM-TO` interval filtering for the local `guess-ploidy` slice.
 - 2026-05-18: PR #202
   (`progress/todo-sync-after-guess-ploidy-af-tag`, merge commit `bdc8b31`)
   synced the TODO docs after PR #201.
@@ -665,11 +669,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`bdc8b31`) (309 lib unit tests plus per-command
+  latest merged commit on `main` (`59e7243`) (311 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/guess-ploidy-genome-shortcut`
-  adds `+guess-ploidy -g/--genome` shortcut regions and inline
-  `CHROM:FROM-TO` interval filtering in `bcftools-rs` only.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
