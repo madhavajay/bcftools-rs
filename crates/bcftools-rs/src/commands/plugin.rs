@@ -337,6 +337,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut tags_list: Option<String> = None;
     // guess-ploidy options.
     let mut gp_region: Option<String> = None;
+    let mut gp_af_tag: Option<String> = None;
     // check-sparsity options.
     let mut sparsity_min_sites = 1usize;
     let mut sparsity_region: Option<String> = None;
@@ -630,10 +631,18 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 window = Some(raw["--window=".len()..].to_owned());
             }
             "--AF-tag" => {
-                prune_af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+                if plugin_name.as_deref() == Some("guess-ploidy") {
+                    gp_af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+                } else {
+                    prune_af_tag = iter.next().map(|s| s.to_string_lossy().into_owned());
+                }
             }
             _ if raw.starts_with("--AF-tag=") => {
-                prune_af_tag = Some(raw["--AF-tag=".len()..].to_owned());
+                if plugin_name.as_deref() == Some("guess-ploidy") {
+                    gp_af_tag = Some(raw["--AF-tag=".len()..].to_owned());
+                } else {
+                    prune_af_tag = Some(raw["--AF-tag=".len()..].to_owned());
+                }
             }
             // ad-bias options.
             "-s" | "--samples" => {
@@ -1344,16 +1353,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     }
 
     if plugin.name == "guess-ploidy" {
-        use crate::commands::plugins::guess_ploidy::{self, Tag};
+        use crate::commands::plugins::guess_ploidy::{self, Options, Tag};
         let input = input.unwrap_or_else(|| "-".to_owned());
         let report = guess_ploidy::run(
             Path::new(&input),
-            Tag::Pl, // default; auto-switches PL->GL->GT on header
-            gp_region.as_deref(),
-            1e-3,
-            0.5,
-            false,
-            verbose as u32,
+            Options {
+                tag: Tag::Pl, // default; auto-switches PL->GL->GT on header
+                region: gp_region.as_deref(),
+                af_tag: gp_af_tag.as_deref(),
+                gt_err_prob: 1e-3,
+                af_dflt: 0.5,
+                include_indels: false,
+                verbose: verbose as u32,
+            },
         )?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);

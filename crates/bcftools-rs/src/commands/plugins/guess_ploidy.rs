@@ -50,44 +50,33 @@ struct Counts {
     ncount: i64,
 }
 
+#[derive(Clone, Copy)]
+pub struct Options<'a> {
+    pub tag: Tag,
+    pub region: Option<&'a str>,
+    pub af_tag: Option<&'a str>,
+    pub gt_err_prob: f64,
+    pub af_dflt: f64,
+    pub include_indels: bool,
+    pub verbose: u32,
+}
+
 /// Reads the input and returns the guess-ploidy report (with the two
 /// `bcftools`-tagged provenance lines the harness strips via
 /// `grep -v bcftools`).
-pub fn run(
-    input: &Path,
-    tag: Tag,
-    region: Option<&str>,
-    gt_err_prob: f64,
-    af_dflt: f64,
-    include_indels: bool,
-    verbose: u32,
-) -> io::Result<String> {
+pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    Ok(compute(
-        &text,
-        tag,
-        region,
-        gt_err_prob,
-        af_dflt,
-        include_indels,
-        verbose,
-    ))
+    compute(&text, opts).map_err(io::Error::other)
 }
 
-fn compute(
-    text: &str,
-    mut tag: Tag,
-    region: Option<&str>,
-    gt_err_prob: f64,
-    af_dflt: f64,
-    include_indels: bool,
-    verbose: u32,
-) -> String {
+fn compute(text: &str, opts: Options<'_>) -> Result<String, String> {
     let lines: Vec<&str> = text.lines().collect();
+    let mut tag = opts.tag;
 
     let mut has_pl = false;
     let mut has_gl = false;
     let mut has_gt = false;
+    let mut has_af_tag = opts.af_tag.is_none();
     let mut samples: Vec<&str> = Vec::new();
     for l in &lines {
         if l.starts_with("##FORMAT=<ID=PL,") {
@@ -96,9 +85,18 @@ fn compute(
             has_gl = true;
         } else if l.starts_with("##FORMAT=<ID=GT,") {
             has_gt = true;
+        } else if let Some(tag) = opts.af_tag
+            && info_header_has_id(l, tag)
+        {
+            has_af_tag = true;
         } else if l.starts_with("#CHROM") {
             samples = l.split('\t').skip(9).collect();
         }
+    }
+    if let Some(tag) = opts.af_tag
+        && !has_af_tag
+    {
+        return Err(format!("No such INFO tag: {tag}"));
     }
     // PL -> GL -> GT auto-switch (upstream run()).
     if tag == Tag::Pl && !has_pl {
@@ -130,7 +128,7 @@ fn compute(
         if f.len() < 10 {
             continue;
         }
-        if let Some(r) = region
+        if let Some(r) = opts.region
             && f[0] != r
         {
             continue;
@@ -145,7 +143,7 @@ fn compute(
         if n_allele == 1 {
             continue;
         }
-        if !include_indels {
+        if !opts.include_indels {
             let is_snp = alts.iter().any(|a| {
                 classify_variant(reference, a)
                     .variant_type
@@ -175,7 +173,7 @@ fn compute(
                     if a0 == "." || a0.is_empty() {
                         continue; // missing -> tmp stays None
                     }
-                    let p = gt_err_prob;
+                    let p = opts.gt_err_prob;
                     let t = if toks.len() < 2 || toks[1] == "." {
                         // haploid
                         if a0 == "0" {
@@ -294,8 +292,14 @@ fn compute(
         }
 
         if freq[0] == 0.0 && freq[1] == 0.0 {
-            freq[0] = 1.0 - af_dflt;
-            freq[1] = af_dflt;
+            freq[0] = 1.0 - opts.af_dflt;
+            freq[1] = opts.af_dflt;
+        }
+        if let Some(tag) = opts.af_tag
+            && let Some(af) = parse_info_float_first(f[7], tag)
+        {
+            freq[0] = 1.0 - af;
+            freq[1] = af;
         }
         let sum = freq[0] + freq[1];
         freq[0] /= sum;
@@ -316,7 +320,7 @@ fn compute(
     }
 
     let mut out = String::new();
-    if verbose > 0 {
+    if opts.verbose > 0 {
         out.push_str(
             "# This file was produced by: bcftools +guess-ploidy(bcftools-rs+htslib-rs)\n",
         );
@@ -345,7 +349,7 @@ fn compute(
         } else {
             'U'
         };
-        if verbose > 0 {
+        if opts.verbose > 0 {
             out.push_str(&format!(
                 "SEX\t{s}\t{sex}\t{phap:.6}\t{pdip:.6}\t{}\t{:.6}\n",
                 c.ncount,
@@ -355,7 +359,33 @@ fn compute(
             out.push_str(&format!("{s}\t{sex}\n"));
         }
     }
-    out
+    Ok(out)
+}
+
+fn info_header_has_id(line: &str, tag: &str) -> bool {
+    line.strip_prefix("##INFO=<ID=")
+        .and_then(|rest| rest.split([',', '>']).next())
+        == Some(tag)
+}
+
+fn parse_info_float_first(info: &str, tag: &str) -> Option<f64> {
+    if info == "." {
+        return None;
+    }
+    for kv in info.split(';') {
+        let Some((key, val)) = kv.split_once('=') else {
+            continue;
+        };
+        if key != tag {
+            continue;
+        }
+        let first = val.split(',').next()?;
+        if first == "." {
+            return None;
+        }
+        return first.parse::<f64>().ok();
+    }
+    None
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
@@ -401,6 +431,18 @@ fn stdin_tmp_path() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn opts<'a>(region: Option<&'a str>, af_tag: Option<&'a str>) -> Options<'a> {
+        Options {
+            tag: Tag::Pl,
+            region,
+            af_tag,
+            gt_err_prob: 1e-3,
+            af_dflt: 0.5,
+            include_indels: false,
+            verbose: 1,
+        }
+    }
+
     #[test]
     fn tag_parse() {
         assert!(matches!(Tag::parse("PL"), Ok(Tag::Pl)));
@@ -416,10 +458,60 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
 11\t100\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n\
 X\t200\t.\tA\tC\t.\t.\t.\tPL\t0,5,10\n";
-        let out = compute(vcf, Tag::Pl, Some("X"), 1e-3, 0.5, false, 1);
+        let out = compute(vcf, opts(Some("X"), None)).unwrap();
         // Only the X site counts -> nSites == 1 for S1.
         let sex_line = out.lines().find(|l| l.starts_with("SEX\tS1")).unwrap();
         assert_eq!(sex_line.split('\t').nth(5).unwrap(), "1");
         assert!(out.contains("# [1]SEX\t[2]Sample"));
+    }
+
+    #[test]
+    fn af_tag_overrides_observed_frequency() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##INFO=<ID=AF,Number=A,Type=Float,Description=\"AF\">\n\
+##INFO=<ID=OTHER,Number=A,Type=Float,Description=\"Other AF\">\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+X\t200\t.\tA\tC\t.\t.\tAF=0.01;OTHER=0.9\tPL\t0,10,100\n";
+        let default = compute(vcf, opts(Some("X"), None)).unwrap();
+        let tagged = compute(vcf, opts(Some("X"), Some("OTHER"))).unwrap();
+        let default_score = default
+            .lines()
+            .find(|l| l.starts_with("SEX\tS1"))
+            .unwrap()
+            .split('\t')
+            .nth(6)
+            .unwrap()
+            .to_owned();
+        let tagged_score = tagged
+            .lines()
+            .find(|l| l.starts_with("SEX\tS1"))
+            .unwrap()
+            .split('\t')
+            .nth(6)
+            .unwrap()
+            .to_owned();
+        assert_ne!(default_score, tagged_score);
+    }
+
+    #[test]
+    fn af_tag_must_exist_in_info_header() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+X\t200\t.\tA\tC\t.\t.\tAF=0.01\tPL\t0,10,100\n";
+        let err = compute(vcf, opts(Some("X"), Some("AF"))).unwrap_err();
+        assert_eq!(err, "No such INFO tag: AF");
+    }
+
+    #[test]
+    fn parse_info_float_first_value_or_none() {
+        assert_eq!(
+            parse_info_float_first("AN=2;AF=0.25,0.75", "AF"),
+            Some(0.25)
+        );
+        assert_eq!(parse_info_float_first("AN=2;AF=.", "AF"), None);
+        assert_eq!(parse_info_float_first("AN=2", "AF"), None);
+        assert_eq!(parse_info_float_first(".", "AF"), None);
     }
 }
