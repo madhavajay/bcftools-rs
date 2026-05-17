@@ -1,4 +1,4 @@
-//! End-to-end tests for the `+tag2tag` plugin (gl-to-pl, gl-to-gp, gp-to-gt).
+//! End-to-end tests for the `+tag2tag` plugin.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -105,5 +105,56 @@ fn tag2tag_via_plugin_subcommand() {
         "--gl-to-pl",
     ]);
     assert_eq!(code, 0, "plugin tag2tag failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn tag2tag_lxx_to_xx_matches_upstream_fixture() {
+    let input = fixture_path("tag2tag.LPL.1.vcf");
+    let expected = std::fs::read_to_string(fixture_path("tag2tag.LPL.1.1.vcf")).unwrap();
+    let (out, err, code) = run(&[
+        "+tag2tag",
+        "--no-version",
+        input.to_str().unwrap(),
+        "--",
+        "--LXX-to-XX",
+    ]);
+    assert_eq!(code, 0, "+tag2tag --LXX-to-XX failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn tag2tag_lxx_to_xx_replace_matches_upstream_fixture() {
+    let input = fixture_path("tag2tag.LPL.1.vcf");
+    let expected = std::fs::read_to_string(fixture_path("tag2tag.LPL.1.2.vcf")).unwrap();
+    let (out, err, code) = run(&[
+        "+tag2tag",
+        "--no-version",
+        input.to_str().unwrap(),
+        "--",
+        "--LXX-to-XX",
+        "-r",
+    ]);
+    assert_eq!(code, 0, "+tag2tag --LXX-to-XX -r failed: {err}");
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn tag2tag_lxx_to_xx_defaults_and_skip_matches_upstream_fixture() {
+    let input = fixture_path("tag2tag.LPL.1.vcf");
+    let expected = std::fs::read_to_string(fixture_path("tag2tag.LPL.1.3.vcf")).unwrap();
+    let (out, err, code) = run(&[
+        "+tag2tag",
+        "--no-version",
+        input.to_str().unwrap(),
+        "--",
+        "--LXX-to-XX",
+        "-r",
+        "-d",
+        "AD:0,PL:255",
+        "-s",
+        "3",
+    ]);
+    assert_eq!(code, 0, "+tag2tag --LXX-to-XX defaults/skip failed: {err}");
     assert_eq!(out, expected);
 }

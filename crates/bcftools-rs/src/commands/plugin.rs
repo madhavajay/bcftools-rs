@@ -259,6 +259,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut replace = false;
     let mut threshold: f64 = 0.1;
     let mut conversion: Option<&'static str> = None;
+    let mut tag2tag_defaults: Option<String> = None;
+    let mut tag2tag_skip_nalt = 0usize;
     // af-dist options.
     let mut af_tag: Option<String> = None;
     let mut dev_bins: Option<String> = None;
@@ -566,6 +568,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-d" if plugin_name.as_deref() == Some("fixref") => {
                 fixref_discard = true;
             }
+            "-d" | "--defaults" if plugin_name.as_deref() == Some("tag2tag") => {
+                tag2tag_defaults = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--defaults=") && plugin_name.as_deref() == Some("tag2tag") => {
+                tag2tag_defaults = Some(raw["--defaults=".len()..].to_owned());
+            }
             "-d" | "--debug" if plugin_name.as_deref() == Some("trio-stats") => {
                 trio_stats_debug = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -581,6 +589,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "--gl-to-pl" => conversion = Some("gl-to-pl"),
             "--gp-to-gt" => conversion = Some("gp-to-gt"),
             "--gl-to-gp" => conversion = Some("gl-to-gp"),
+            "--LXX-to-XX" => conversion = Some("lxx-to-xx"),
+            "-s" | "--skip-nalt" if plugin_name.as_deref() == Some("tag2tag") => {
+                tag2tag_skip_nalt = iter
+                    .next()
+                    .and_then(|s| s.to_string_lossy().parse().ok())
+                    .unwrap_or(0);
+            }
             "-d" | "--direction" => {
                 direction = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
@@ -816,14 +831,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             Some("gl-to-pl") => Conversion::GlToPl,
             Some("gp-to-gt") => Conversion::GpToGt,
             Some("gl-to-gp") => Conversion::GlToGp,
+            Some("lxx-to-xx") => Conversion::LxxToXx,
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "tag2tag requires one of --gl-to-pl, --gl-to-gp, or --gp-to-gt in this local slice",
+                    "tag2tag requires one of --gl-to-pl, --gl-to-gp, --gp-to-gt, or --LXX-to-XX in this local slice",
                 ));
             }
         };
-        let vcf = tag2tag::run(Path::new(&input), conv, replace, threshold)?;
+        let localized = tag2tag::LocalizedOptions::from_defaults(
+            tag2tag_defaults.as_deref(),
+            tag2tag_skip_nalt,
+        )?;
+        let vcf = tag2tag::run(Path::new(&input), conv, replace, threshold, localized)?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
