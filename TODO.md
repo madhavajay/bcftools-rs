@@ -201,6 +201,8 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #198 (`progress/todo-sync-after-af-dist-bin-files`, merge
+  commit `944d8f7`) synced the TODO docs after PR #197.
 - 2026-05-17: PR #197 (`progress/af-dist-bin-files`, merge commit
   `84e1fac`) added `+af-dist -d` / `--dev-bins` and `-p` / `--prob-bins`
   file inputs, matching upstream `bin_init` one-boundary-per-line file
@@ -649,10 +651,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`84e1fac`) (305 lib unit tests plus per-command
+  latest merged commit on `main` (`944d8f7`) (305 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/fixploidy-default-ploidy-line` —
+  add `+fixploidy` support for `* * * SEX PLOIDY` default-ploidy lines.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1313,16 +1315,16 @@ Current local slice:
 - [x] `+fixploidy` (`crates/bcftools-rs/src/commands/plugins/fixploidy.rs`):
   port of `fixploidy.c` plus the needed `ploidy.c` subset. Parses the
   `CHROM FROM TO SEX PLOIDY` regions file (`-p`) and the `NAME SEX`
-  sex file (`-s`); supports `-f` forced ploidy, `-d` default ploidy,
-  and the built-in default ruleset when neither `-p` nor `-f` is
+  sex file (`-s`), including `* * * SEX PLOIDY` default-ploidy lines;
+  supports `-f` forced ploidy, `-d` default ploidy, and the built-in
+  default ruleset when neither `-p` nor `-f` is
   given. Mirrors `ploidy_query` (overlap vs default, non-default
   `_max`) and the bcf GT expand / in-place rewrite, preserving
   per-sample separators and phasing and producing exactly the
   per-sample ploidy (single `.` for ploidy 0). Byte-for-byte parity
-  with `fixploidy.out`. 1 integration test in
-  `crates/bcftools-rs/tests/plugin_fixploidy.rs` + 3 unit tests.
-  Remaining: the `* * *` default-ploidy line form and `-t` tags
-  other than GT (upstream also only supports GT).
+  with `fixploidy.out`. 2 integration tests in
+  `crates/bcftools-rs/tests/plugin_fixploidy.rs` + 4 unit tests.
+  Remaining: `-t` tags other than GT (upstream also only supports GT).
 - [x] `+GTsubset` (`crates/bcftools-rs/src/commands/plugins/gtsubset.rs`):
   port of `GTsubset.c`. Outputs only sites where every `-s` sample
   exclusively shares a genotype — all selected samples equal, no other
