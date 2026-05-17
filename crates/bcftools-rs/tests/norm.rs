@@ -171,6 +171,25 @@ fn norm_filter_duplicate_removal_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn norm_check_ref_swap_matches_upstream_text_output() {
+    let input = fixture_path("norm.check-ref.vcf");
+    let reference = fixture_path("norm.check-ref.fa");
+    let expected = std::fs::read_to_string(fixture_path("norm.check-ref.1.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "norm",
+        "--no-version",
+        "-c",
+        "s",
+        "-f",
+        reference.to_str().unwrap(),
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "norm -c s failed: {err}");
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");
