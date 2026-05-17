@@ -33,6 +33,7 @@ Options:\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
     -F, --filter-logic x|+          Narrow filter merge logic support for upstream fixtures [+]\n\
     -g, --gvcf -|REF.FA             Narrow gVCF block splitting for local fixtures\n\
+    -M, --missing-rules TAG:VALUE,.. Apply narrow FORMAT missing rules in gVCF remapping\n\
     -r, --regions REGION            Restrict to a simple REGION in the current text slice\n\
     -0, --missing-to-ref            Fill absent-input samples as 0/0 in the current text slice\n\
         --force-single              Allow a single input for command-shape compatibility\n\
@@ -53,6 +54,7 @@ struct Args {
     gvcf_ref: Option<PathBuf>,
     gvcf_no_ref: bool,
     missing_to_ref: bool,
+    missing_rules: MissingRules,
     regions: Vec<Region>,
 }
 
@@ -97,14 +99,16 @@ enum VcfNumber {
     Other,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 struct MissingRules {
     gvcf_defaults: bool,
+    explicit: HashMap<String, String>,
 }
 
 impl MissingRules {
-    fn for_gvcf_mode(gvcf_defaults: bool) -> Self {
-        Self { gvcf_defaults }
+    fn with_gvcf_mode(mut self, gvcf_defaults: bool) -> Self {
+        self.gvcf_defaults = gvcf_defaults;
+        self
     }
 
     fn format_fill(
@@ -114,19 +118,24 @@ impl MissingRules {
         input_gt: Option<&str>,
         input_alts: &[String],
     ) -> String {
-        if !self.gvcf_defaults {
-            return ".".to_owned();
+        let has_ref_symbolic = input_alts.iter().any(|alt| is_ref_symbolic_alt(alt));
+        if !has_ref_symbolic && let Some(fill) = self.explicit.get(key) {
+            return fill.clone();
         }
 
-        match key {
-            "AD" => "0".to_owned(),
-            "PL" if genotype_ploidy(input_gt).is_some_and(|ploidy| ploidy == 1) => {
-                non_ref_haploid_value(value, input_alts)
-                    .or_else(|| max_numeric_token(value))
-                    .unwrap_or_else(|| ".".to_owned())
+        if self.gvcf_defaults {
+            match key {
+                "AD" => "0".to_owned(),
+                "PL" if genotype_ploidy(input_gt).is_some_and(|ploidy| ploidy == 1) => {
+                    non_ref_haploid_value(value, input_alts)
+                        .or_else(|| max_numeric_token(value))
+                        .unwrap_or_else(|| ".".to_owned())
+                }
+                "PL" => max_numeric_token(value).unwrap_or_else(|| ".".to_owned()),
+                _ => ".".to_owned(),
             }
-            "PL" => max_numeric_token(value).unwrap_or_else(|| ".".to_owned()),
-            _ => ".".to_owned(),
+        } else {
+            ".".to_owned()
         }
     }
 }
@@ -213,6 +222,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut gvcf_ref = None;
     let mut gvcf_no_ref = false;
     let mut missing_to_ref = false;
+    let mut missing_rules = MissingRules::default();
     let mut regions = Vec::new();
 
     let mut iter = argv.iter().skip(1).peekable();
@@ -243,6 +253,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 } else {
                     gvcf_no_ref = true;
                 }
+            }
+            "-M" | "--missing-rules" => {
+                missing_rules = parse_missing_rules(&next_string(&mut iter, raw.as_ref())?)
             }
             "-r" | "--regions" => {
                 regions.extend(parse_regions(&next_string(&mut iter, raw.as_ref())?)?);
@@ -281,6 +294,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                     gvcf_no_ref = true;
                 }
             }
+            _ if raw.starts_with("--missing-rules=") => {
+                missing_rules = parse_missing_rules(value_after_equals(&raw))
+            }
             _ if raw.starts_with("--regions=") => {
                 regions.extend(parse_regions(value_after_equals(&raw))?);
             }
@@ -307,6 +323,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 } else {
                     gvcf_no_ref = true;
                 }
+            }
+            _ if raw.starts_with("-M") && raw.len() > 2 => {
+                missing_rules = parse_missing_rules(&raw[2..])
             }
             _ if raw.starts_with("-m") && raw.len() > 2 => merge_mode = parse_merge_mode(&raw[2..]),
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
@@ -348,6 +367,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         gvcf_ref,
         gvcf_no_ref,
         missing_to_ref,
+        missing_rules,
         regions,
     })
 }
@@ -457,6 +477,19 @@ fn parse_info_rules(raw: &str) -> InfoRules {
     rules
 }
 
+fn parse_missing_rules(raw: &str) -> MissingRules {
+    let mut rules = MissingRules::default();
+    for rule in raw.split(',') {
+        let Some((tag, value)) = rule.split_once(':') else {
+            continue;
+        };
+        if !tag.is_empty() {
+            rules.explicit.insert(tag.to_owned(), value.to_owned());
+        }
+    }
+    rules
+}
+
 fn read_file_list(path: &Path) -> Result<Vec<PathBuf>, ParseOutcome> {
     let text = fs::read_to_string(path)
         .map_err(|e| ParseOutcome::Error(format!("failed to read {}: {e}", path.display())))?;
@@ -503,6 +536,7 @@ fn run(args: &Args) -> io::Result<()> {
     if !args.regions.is_empty() {
         filter_inputs_by_regions(&mut inputs, &args.regions);
     }
+    let gvcf_mode = args.gvcf_ref.is_some() || args.gvcf_no_ref;
     let merged = merge_inputs(
         &inputs,
         args.force_samples,
@@ -510,7 +544,7 @@ fn run(args: &Args) -> io::Result<()> {
         args.merge_mode,
         args.local_alleles,
         args.missing_to_ref,
-        args.gvcf_ref.is_some() || args.gvcf_no_ref,
+        args.missing_rules.clone().with_gvcf_mode(gvcf_mode),
     )?;
     write_output(merged.as_bytes(), args)
 }
@@ -896,7 +930,7 @@ fn merge_inputs(
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
     missing_to_ref: bool,
-    gvcf_mode: bool,
+    missing_rules: MissingRules,
 ) -> io::Result<String> {
     let first = inputs
         .first()
@@ -927,7 +961,7 @@ fn merge_inputs(
     let format_numbers = format_numbers(&merged_meta);
     let info_numbers = info_numbers(&merged_meta);
     let ordered_info_numbers = ordered_info_numbers(&merged_meta);
-    let missing_rules = MissingRules::for_gvcf_mode(gvcf_mode);
+    let gvcf_mode = missing_rules.gvcf_defaults;
     let context = MergeContext {
         format_numbers: &format_numbers,
         info_numbers: &info_numbers,
@@ -3456,7 +3490,7 @@ mod tests {
             MergeMode::Default,
             None,
             false,
-            false,
+            MissingRules::default(),
         )
         .unwrap();
         assert!(merged.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB"));
