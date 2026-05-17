@@ -201,10 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/norm-rmdup-left-align` extends
-  byte-for-byte text parity for upstream `norm.rmdup.3.{1,2}.out` by adding a
-  narrow FASTA-backed left-alignment path for symbolic `<DEL>` rows and simple
-  one-base deletions before duplicate removal.
+- 2026-05-17: PR #155 (`progress/norm-rmdup-left-align`, merge commit
+  `fa1d920`) extended byte-for-byte text parity for upstream
+  `norm.rmdup.3.{1,2}.out` by adding a narrow FASTA-backed left-alignment path
+  for symbolic `<DEL>` rows and simple one-base deletions before duplicate
+  removal.
 - 2026-05-17: PR #153 (`progress/norm-rmdup-fixtures`, merge commit
   `315acfe`) extended byte-for-byte text parity for upstream
   `norm.rmdup.2.{1,2}.out` by preserving existing PASS FILTER headers in the
@@ -520,9 +521,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`315acfe`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`fa1d920`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/norm-rmdup-left-align`; keep the
+- Current code slice in flight: none after PR #155; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
