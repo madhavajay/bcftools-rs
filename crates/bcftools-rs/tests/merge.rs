@@ -288,6 +288,22 @@ fn merge_lpl_force_samples_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_abc_force_samples_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--force-samples",
+        "../../bcftools/test/merge.a.vcf",
+        "../../bcftools/test/merge.b.vcf",
+        "../../bcftools/test/merge.c.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.abc --force-samples fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.abc.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_lpl_local_alleles_one_fixture_matches_upstream_text_output() {
     let (out, err, code) = run(&[
         "merge",
@@ -627,6 +643,8 @@ fn merge_id_paired_number_vectors_match_upstream_fixture() {
     let (out, err, code) = run(&[
         "merge",
         "--no-version",
+        "-m",
+        "id",
         "../../bcftools/test/merge.4.a.vcf",
         "../../bcftools/test/merge.4.b.vcf",
     ]);
