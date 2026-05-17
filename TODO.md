@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #157 (`progress/norm-rmdup-include-filter`, merge commit
+  `c434a28`) added byte-for-byte text parity for upstream `norm.filter.2.out`
+  by supporting `-i`/`--include` gating in the local `norm -d`
+  duplicate-removal slice, including `ID=@file` membership and simple shared
+  filter expressions such as `ALT!="C"`.
 - 2026-05-17: PR #156 (`progress/todo-sync-after-norm-rmdup-left-align`,
   merge commit `d2d803d`) synced the TODO/test-status docs after PR #155.
 - 2026-05-17: PR #155 (`progress/norm-rmdup-left-align`, merge commit
@@ -523,13 +528,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`d2d803d`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`c434a28`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/norm-rmdup-include-filter` extends
-  the local `norm -d` duplicate-removal slice with `-i`/`--include` gating for
-  upstream `norm.filter.2.out` command shapes (`ID=@file` and `ALT!="C"`).
-  Keep the one-branch rule, run the full local gate, and wait for both required
-  GitHub checks before merge.
+- Current code slice in flight: none after PR #157; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
