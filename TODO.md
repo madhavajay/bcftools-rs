@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #187 (`progress/merge-gvcf2-star-modes`, merge commit
+  `09d3cc9`) added byte-for-byte text parity for upstream
+  `merge.gvcf.2.{1,2}.out` under `merge --gvcf - -m both,*` and
+  `merge --gvcf - -m both,**` by projecting reference-symbolic `<*>` alleles
+  out of no-reference gVCF merge rows.
+- 2026-05-17: PR #186 (`progress/todo-sync-after-merge-gvcf2-default`, merge
+  commit `51b14e7`) synced the TODO docs after PR #185.
 - 2026-05-17: PR #185 (`progress/merge-gvcf2-default`, merge commit
   `6c89ce8`) added byte-for-byte text parity for upstream `merge.gvcf.2.out`
   under `merge --gvcf -` by tightening no-reference gVCF
@@ -618,12 +625,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`6c89ce8`) (297 lib unit tests plus per-command
+  latest merged commit on `main` (`09d3cc9`) (297 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf2-star-modes` adds
-  byte-for-byte text parity for upstream `merge.gvcf.2.{1,2}.out` under
-  `merge --gvcf - -m both,*` and `merge --gvcf - -m both,**` by projecting
-  reference-symbolic `<*>` alleles out of no-reference gVCF merge rows.
+- Current code slice in flight: none; `main` is synced through PR #187
+  (`09d3cc9`).
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
