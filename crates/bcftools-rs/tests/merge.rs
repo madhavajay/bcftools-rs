@@ -438,6 +438,29 @@ fn merge_info_number_vectors_match_upstream_fixture() {
 }
 
 #[test]
+fn merge_mode_none_both_all_match_upstream_numbered_fixtures() {
+    for (mode, fixture) in [
+        ("none", "../../bcftools/test/merge.2.none.out"),
+        ("both", "../../bcftools/test/merge.2.both.out"),
+        ("all", "../../bcftools/test/merge.2.all.out"),
+    ] {
+        let (out, err, code) = run(&[
+            "merge",
+            "--no-version",
+            "--force-samples",
+            "-m",
+            mode,
+            "../../bcftools/test/merge.2.a.vcf",
+            "../../bcftools/test/merge.2.b.vcf",
+        ]);
+        assert_eq!(code, 0, "merge.2 -m {mode} fixture failed: {err}");
+
+        let expected = std::fs::read_to_string(fixture).unwrap();
+        assert_eq!(out, expected, "mode {mode}");
+    }
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
