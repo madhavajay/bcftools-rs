@@ -242,6 +242,24 @@ fn merge_lpl_force_samples_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_lpl_local_alleles_one_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--force-samples",
+        "-L",
+        "1",
+        "../../bcftools/test/merge.LPL.a.vcf",
+        "../../bcftools/test/merge.LPL.b.vcf",
+        "../../bcftools/test/merge.LPL.c.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.LPL -L 1 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.LPL.2.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_phased_fixture_matches_upstream_text_output() {
     let (out, err, code) = run(&[
         "merge",

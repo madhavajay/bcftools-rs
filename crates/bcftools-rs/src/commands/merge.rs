@@ -44,6 +44,7 @@ struct Args {
     force_samples: bool,
     info_rules: InfoRules,
     merge_mode: MergeMode,
+    local_alleles: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -133,6 +134,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut force_samples = false;
     let mut info_rules = InfoRules::default();
     let mut merge_mode = MergeMode::Default;
+    let mut local_alleles = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -147,6 +149,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             "-m" | "--merge" => {
                 merge_mode = parse_merge_mode(&next_string(&mut iter, raw.as_ref())?);
+            }
+            "-L" | "--local-alleles" => {
+                local_alleles = Some(parse_local_alleles(&next_string(&mut iter, raw.as_ref())?)?);
             }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
@@ -167,6 +172,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--merge=") => {
                 merge_mode = parse_merge_mode(value_after_equals(&raw))
             }
+            _ if raw.starts_with("--local-alleles=") => {
+                local_alleles = Some(parse_local_alleles(value_after_equals(&raw))?)
+            }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
             }
@@ -177,6 +185,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 file_list = Some(PathBuf::from(&raw[2..]))
             }
             _ if raw.starts_with("-i") && raw.len() > 2 => info_rules = parse_info_rules(&raw[2..]),
+            _ if raw.starts_with("-L") && raw.len() > 2 => {
+                local_alleles = Some(parse_local_alleles(&raw[2..])?)
+            }
             _ if raw.starts_with("-m") && raw.len() > 2 => merge_mode = parse_merge_mode(&raw[2..]),
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
@@ -210,7 +221,20 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         force_samples,
         info_rules,
         merge_mode,
+        local_alleles,
     })
+}
+
+fn parse_local_alleles(raw: &str) -> Result<usize, ParseOutcome> {
+    let value = raw.parse::<usize>().map_err(|_| {
+        ParseOutcome::Error(format!("Could not parse argument: --local-alleles {raw}"))
+    })?;
+    if value == 0 {
+        return Err(ParseOutcome::Error(format!(
+            "Error: \"--local-alleles {raw}\" makes no sense, expected value bigger or equal than 1"
+        )));
+    }
+    Ok(value)
 }
 
 fn parse_merge_mode(raw: &str) -> MergeMode {
@@ -282,6 +306,7 @@ fn run(args: &Args) -> io::Result<()> {
         args.force_samples,
         args.info_rules,
         args.merge_mode,
+        args.local_alleles,
     )?;
     write_output(merged.as_bytes(), args)
 }
@@ -381,6 +406,7 @@ fn merge_inputs(
     force_samples: bool,
     info_rules: InfoRules,
     merge_mode: MergeMode,
+    local_alleles: Option<usize>,
 ) -> io::Result<String> {
     let first = inputs
         .first()
@@ -407,17 +433,10 @@ fn merge_inputs(
     }
 
     let fileformat = merged_fileformat(inputs);
-    let merged_meta = merged_meta(inputs);
+    let mut merged_meta = merged_meta(inputs);
     let format_numbers = format_numbers(&merged_meta);
     let info_numbers = info_numbers(&merged_meta);
     let ordered_info_numbers = ordered_info_numbers(&merged_meta);
-    let mut out = render_meta_with_pass_filter(&merged_meta, info_rules, fileformat.as_deref());
-    out.push_str(&first.fixed_header.join("\t"));
-    if !sample_names.is_empty() {
-        out.push('\t');
-        out.push_str(&sample_names.join("\t"));
-    }
-    out.push('\n');
 
     for input in &inputs[1..] {
         if !fixed_headers_compatible(&first.fixed_header, &input.fixed_header) {
@@ -438,6 +457,18 @@ fn merge_inputs(
     )?;
     let contigs = contig_order(&first.meta);
     sites.sort_by(|a, b| compare_sites(a, b, &contigs));
+    if let Some(limit) = local_alleles {
+        apply_local_alleles(&mut sites, limit, &format_numbers);
+        append_localized_format_meta(&mut merged_meta);
+    }
+
+    let mut out = render_meta_with_pass_filter(&merged_meta, info_rules, fileformat.as_deref());
+    out.push_str(&first.fixed_header.join("\t"));
+    if !sample_names.is_empty() {
+        out.push('\t');
+        out.push_str(&sample_names.join("\t"));
+    }
+    out.push('\n');
 
     for site in sites {
         let mut samples = Vec::new();
@@ -606,6 +637,85 @@ fn ordered_info_numbers(meta: &[String]) -> Vec<(String, VcfNumber)> {
             Some((id, number))
         })
         .collect()
+}
+
+fn append_localized_format_meta(meta: &mut Vec<String>) {
+    if meta
+        .iter()
+        .any(|line| line.starts_with("##FORMAT=<ID=LAA,"))
+    {
+        return;
+    }
+
+    let localized = meta
+        .iter()
+        .filter_map(|line| localized_format_meta_line(line))
+        .collect::<Vec<_>>();
+    if localized.is_empty() {
+        return;
+    }
+
+    meta.push("##FORMAT=<ID=LAA,Number=.,Type=Integer,Description=\"Localized alleles: subset of alternate alleles relevant for each sample\">".to_owned());
+    meta.extend(localized);
+}
+
+fn localized_format_meta_line(line: &str) -> Option<String> {
+    let id = meta_id(line, "FORMAT")?;
+    let number = meta_attr(line, "Number")?;
+    if !matches!(number, "A" | "R" | "G") {
+        return None;
+    }
+
+    let mut out = line.to_owned();
+    out = rewrite_meta_attr(&out, "ID", &format!("L{id}"));
+    out = rewrite_meta_attr(&out, "Number", ".");
+    if let Some(description) = meta_attr(line, "Description") {
+        let localized = if let Some(body) = description
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        {
+            format!("\"Localized field: {body}\"")
+        } else {
+            format!("Localized field: {description}")
+        };
+        out = rewrite_meta_attr(&out, "Description", &localized);
+    }
+    Some(out)
+}
+
+fn rewrite_meta_attr(line: &str, key: &str, value: &str) -> String {
+    let Some(body_start) = line.find("=<").map(|idx| idx + 2) else {
+        return line.to_owned();
+    };
+    let Some(value_start) = line[body_start..]
+        .find(&format!("{key}="))
+        .map(|idx| body_start + idx + key.len() + 1)
+    else {
+        return line.to_owned();
+    };
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let bytes = line.as_bytes();
+    let mut value_end = value_start;
+    while value_end < line.len() {
+        let ch = bytes[value_end] as char;
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            in_quotes = !in_quotes;
+        } else if !in_quotes && (ch == ',' || ch == '>') {
+            break;
+        }
+        value_end += 1;
+    }
+
+    let mut out = String::new();
+    out.push_str(&line[..value_start]);
+    out.push_str(value);
+    out.push_str(&line[value_end..]);
+    out
 }
 
 fn meta_id(line: &str, kind: &str) -> Option<String> {
@@ -1177,6 +1287,210 @@ fn normalize_alts(reference: &str, alt: &str, merged_ref: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn apply_local_alleles(
+    sites: &mut [MergedSite],
+    limit: usize,
+    format_numbers: &HashMap<String, VcfNumber>,
+) {
+    for site in sites {
+        let alt_count = split_alt(&site.fixed[4]).len();
+        if alt_count <= limit || site.fixed.len() < 9 {
+            continue;
+        }
+        let old_format = site.fixed[8].clone();
+        let new_format = localized_format(&old_format, format_numbers);
+        if new_format == old_format {
+            continue;
+        }
+
+        for values in site.samples_by_input.iter_mut().flatten() {
+            for sample in values {
+                *sample =
+                    localize_sample_value(&old_format, sample, alt_count, limit, format_numbers);
+            }
+        }
+        site.fixed[8] = new_format;
+    }
+}
+
+fn localized_format(format: &str, format_numbers: &HashMap<String, VcfNumber>) -> String {
+    let keys = split_format_keys(format);
+    if !keys
+        .iter()
+        .any(|key| is_localizable_format_key(key, format_numbers))
+    {
+        return format.to_owned();
+    }
+
+    let mut out = Vec::new();
+    for key in keys {
+        if is_localizable_format_key(key, format_numbers) {
+            out.push(format!("L{key}"));
+        } else {
+            out.push(key.to_owned());
+        }
+    }
+    out.push("LAA".to_owned());
+    out.join(":")
+}
+
+fn is_localizable_format_key(key: &str, format_numbers: &HashMap<String, VcfNumber>) -> bool {
+    matches!(
+        format_numbers.get(key),
+        Some(VcfNumber::A | VcfNumber::R | VcfNumber::G)
+    )
+}
+
+fn localize_sample_value(
+    input_format: &str,
+    sample: &str,
+    alt_count: usize,
+    limit: usize,
+    format_numbers: &HashMap<String, VcfNumber>,
+) -> String {
+    let input_keys = split_format_keys(input_format);
+    let input_values = sample.split(':').collect::<Vec<_>>();
+    let input_index = input_keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| (*key, idx))
+        .collect::<HashMap<_, _>>();
+    let Some(pl) = input_index
+        .get("PL")
+        .and_then(|idx| input_values.get(*idx).copied())
+    else {
+        return sample.to_owned();
+    };
+
+    let local_alts = choose_local_alts_from_pl(pl, alt_count, limit);
+    let mut out = Vec::new();
+    for key in input_keys {
+        if is_localizable_format_key(key, format_numbers) {
+            let value = input_index
+                .get(key)
+                .and_then(|idx| input_values.get(*idx).copied())
+                .unwrap_or(".");
+            out.push(localize_format_value(
+                key,
+                value,
+                &local_alts,
+                format_numbers,
+            ));
+        } else {
+            out.push(
+                input_index
+                    .get(key)
+                    .and_then(|idx| input_values.get(*idx).copied())
+                    .unwrap_or(".")
+                    .to_owned(),
+            );
+        }
+    }
+    out.push(localize_laa_value(&local_alts));
+    out.join(":")
+}
+
+fn choose_local_alts_from_pl(raw: &str, alt_count: usize, limit: usize) -> Vec<usize> {
+    if raw == "." {
+        return Vec::new();
+    }
+    let values = raw.split(',').collect::<Vec<_>>();
+    let mut allele_probs = vec![0.0; alt_count + 1];
+    for b in 0..=alt_count {
+        for a in 0..=b {
+            let idx = genotype_index(a, b);
+            let Some(value) = values.get(idx) else {
+                continue;
+            };
+            let Some(prob) = pl_to_probability(value) else {
+                continue;
+            };
+            allele_probs[a] += prob;
+            allele_probs[b] += prob;
+        }
+    }
+
+    let mut alts = (1..=alt_count).collect::<Vec<_>>();
+    alts.sort_by(|a, b| {
+        allele_probs[*b]
+            .partial_cmp(&allele_probs[*a])
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.cmp(b))
+    });
+    alts.truncate(limit.min(alt_count));
+    alts.sort_unstable();
+    alts
+}
+
+fn pl_to_probability(raw: &str) -> Option<f64> {
+    if raw == "." {
+        return None;
+    }
+    let pl = raw.parse::<f64>().ok()?;
+    Some(10_f64.powf(-pl / 10.0))
+}
+
+fn localize_format_value(
+    key: &str,
+    value: &str,
+    local_alts: &[usize],
+    format_numbers: &HashMap<String, VcfNumber>,
+) -> String {
+    if value == "." {
+        return value.to_owned();
+    }
+    match format_numbers.get(key).copied().unwrap_or(VcfNumber::Other) {
+        VcfNumber::A => localize_number_a(value, local_alts),
+        VcfNumber::R => localize_number_r(value, local_alts),
+        VcfNumber::G => localize_number_g(value, local_alts),
+        VcfNumber::Other => value.to_owned(),
+    }
+}
+
+fn localize_number_a(raw: &str, local_alts: &[usize]) -> String {
+    let values = raw.split(',').collect::<Vec<_>>();
+    local_alts
+        .iter()
+        .map(|allele| values.get(allele - 1).copied().unwrap_or("."))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn localize_number_r(raw: &str, local_alts: &[usize]) -> String {
+    let values = raw.split(',').collect::<Vec<_>>();
+    std::iter::once(0)
+        .chain(local_alts.iter().copied())
+        .map(|allele| values.get(allele).copied().unwrap_or("."))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn localize_number_g(raw: &str, local_alts: &[usize]) -> String {
+    let values = raw.split(',').collect::<Vec<_>>();
+    let alleles = std::iter::once(0)
+        .chain(local_alts.iter().copied())
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    for (b_idx, b) in alleles.iter().enumerate() {
+        for a in &alleles[..=b_idx] {
+            out.push(values.get(genotype_index(*a, *b)).copied().unwrap_or("."));
+        }
+    }
+    out.join(",")
+}
+
+fn localize_laa_value(local_alts: &[usize]) -> String {
+    if local_alts.is_empty() {
+        ".".to_owned()
+    } else {
+        local_alts
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 fn allele_map(old_alts: &[String], merged_alts: &[String]) -> Vec<Option<usize>> {
@@ -1977,8 +2291,14 @@ mod tests {
 1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t1/1\n",
         )
         .unwrap();
-        let merged =
-            merge_inputs(&[a, b], false, InfoRules::default(), MergeMode::Default).unwrap();
+        let merged = merge_inputs(
+            &[a, b],
+            false,
+            InfoRules::default(),
+            MergeMode::Default,
+            None,
+        )
+        .unwrap();
         assert!(merged.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB"));
         assert!(merged.contains("1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t1/1"));
     }
