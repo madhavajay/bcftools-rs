@@ -330,6 +330,33 @@ fn merge_broken_gvcf_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf10_fixtures_match_upstream_text_output() {
+    for (extra_args, expected_path) in [
+        (
+            Vec::<&str>::new(),
+            "../../bcftools/test/merge.gvcf.10.1.out",
+        ),
+        (
+            vec!["-m", "none"],
+            "../../bcftools/test/merge.gvcf.10.2.out",
+        ),
+    ] {
+        let mut args = vec![
+            "merge",
+            "--no-version",
+            "../../bcftools/test/merge.gvcf.10.a.vcf",
+            "../../bcftools/test/merge.gvcf.10.b.vcf",
+        ];
+        args.splice(2..2, extra_args);
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "merge.gvcf.10 fixture failed for {args:?}: {err}");
+
+        let expected = std::fs::read_to_string(expected_path).unwrap();
+        assert_eq!(out, expected, "merge.gvcf.10 fixture differed for {args:?}");
+    }
+}
+
+#[test]
 fn merge_sites_only_alt_union_matches_upstream_fixture() {
     for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
         let mut args = vec![

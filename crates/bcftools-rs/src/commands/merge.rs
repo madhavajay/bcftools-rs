@@ -930,7 +930,11 @@ fn can_merge_sampled_same_position(
                         && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
                 }
         }
-        MergeMode::None => subset_compatible || site_has_non_ref && record_has_non_ref,
+        MergeMode::None => {
+            subset_compatible
+                || site_has_non_ref && record_has_non_ref
+                || single_ref_symbolic_alt_compatible(&site.fixed[4], &record.fixed[4])
+        }
         MergeMode::Both => {
             if subset_compatible {
                 return true;
@@ -953,6 +957,25 @@ fn can_merge_sampled_same_position(
 
 fn alt_contains_non_ref(alt: &str) -> bool {
     split_alt(alt).iter().any(|alt| alt == "<NON_REF>")
+}
+
+fn single_ref_symbolic_alt_compatible(a_alt: &str, b_alt: &str) -> bool {
+    let a_alts = split_alt(a_alt);
+    let b_alts = split_alt(b_alt);
+    is_single_ref_symbolic_alt(&a_alts) && !contains_ref_symbolic_alt(&b_alts)
+        || is_single_ref_symbolic_alt(&b_alts) && !contains_ref_symbolic_alt(&a_alts)
+}
+
+fn is_single_ref_symbolic_alt(alts: &[String]) -> bool {
+    matches!(alts, [alt] if is_ref_symbolic_alt(alt))
+}
+
+fn contains_ref_symbolic_alt(alts: &[String]) -> bool {
+    alts.iter().any(|alt| is_ref_symbolic_alt(alt))
+}
+
+fn is_ref_symbolic_alt(alt: &str) -> bool {
+    alt == "<NON_REF>" || alt == "<*>"
 }
 
 fn same_ref_alt_subset_compatible(a_ref: &str, a_alt: &str, b_ref: &str, b_alt: &str) -> bool {
