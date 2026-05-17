@@ -290,6 +290,27 @@ fn merge_mode_none_keeps_conflicting_same_position_records_as_separate_rows() {
 }
 
 #[test]
+fn merge_mode_both_and_snp_ins_del_match_upstream_text_fixtures() {
+    for (mode, fixture) in [
+        ("both", "../../bcftools/test/merge.10.2.out"),
+        ("snp-ins-del", "../../bcftools/test/merge.10.3.out"),
+    ] {
+        let (out, err, code) = run(&[
+            "merge",
+            "--no-version",
+            "-m",
+            mode,
+            "../../bcftools/test/merge.10.a.vcf",
+            "../../bcftools/test/merge.10.b.vcf",
+        ]);
+        assert_eq!(code, 0, "merge.10 -m {mode} fixture failed: {err}");
+
+        let expected = std::fs::read_to_string(fixture).unwrap();
+        assert_eq!(out, expected, "mode {mode}");
+    }
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");

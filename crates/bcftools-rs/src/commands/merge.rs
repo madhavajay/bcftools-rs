@@ -1,9 +1,9 @@
 //! Focused `bcftools merge` implementation (upstream `vcfmerge.c`).
 //!
 //! This local slice merges records that are present in every input or are
-//! absent from some inputs and have identical site fields. Full synced-reader
-//! merging, allele unification, full INFO rules, and gVCF mode remain tracked
-//! in `TODO.md`.
+//! absent from some inputs and have identical site fields, plus a narrow
+//! same-position allele-union slice. Full synced-reader merging, full allele
+//! unification, full INFO rules, and gVCF mode remain tracked in `TODO.md`.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ Usage:   bcftools merge [OPTIONS] <A.vcf.gz> <B.vcf.gz> [...]\n\
 Options:\n\
     -l, --file-list FILE            Read input file names from FILE\n\
     -i, --info-rules TAG:METHOD,..  Apply AC:sum/AN:sum in the current text ALT-union slice\n\
-    -m, --merge TYPE                Support `none`; other modes accepted for command-shape compatibility\n\
+    -m, --merge TYPE                Support narrow none/both/snp-ins-del slices; other modes accepted for command-shape compatibility\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --force-single              Allow a single input for command-shape compatibility\n\
@@ -56,6 +56,8 @@ struct InfoRules {
 enum MergeMode {
     Default,
     None,
+    Both,
+    SnpInsDel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +206,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
 fn parse_merge_mode(raw: &str) -> MergeMode {
     match raw {
         "none" => MergeMode::None,
+        "both" => MergeMode::Both,
+        "snp-ins-del" => MergeMode::SnpInsDel,
         _ => MergeMode::Default,
     }
 }
@@ -470,7 +474,8 @@ fn collect_sites(
 ) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
-    let mut by_locus = HashMap::new();
+    let mut by_locus: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_position: HashMap<String, Vec<usize>> = HashMap::new();
 
     for (input_idx, input) in inputs.iter().enumerate() {
         for record in &input.records {
@@ -496,33 +501,68 @@ fn collect_sites(
                     ));
                 }
                 site.samples_by_input[input_idx] = Some(record.samples.clone());
-            } else if merge_mode != MergeMode::None
-                && let Some(site_idx) = by_locus.get(&locus_key(record)).copied()
-            {
-                let site: &mut MergedSite = &mut sites[site_idx];
-                if can_merge_same_locus_alt_union(site, record) {
-                    merge_sites_only_alt_union(site, record, info_rules);
-                    site.samples_by_input[input_idx] = Some(record.samples.clone());
-                } else {
-                    let existing = &site.fixed;
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                            "conflicting records at {}:{} require full merge semantics",
-                            existing[0], existing[1]
-                        ),
-                    ));
-                }
             } else {
-                let mut samples_by_input = vec![None; inputs.len()];
-                samples_by_input[input_idx] = Some(record.samples.clone());
-                by_key.insert(key, sites.len());
-                by_locus.insert(locus_key(record), sites.len());
-                sites.push(MergedSite {
-                    fixed: record.fixed.clone(),
-                    samples_by_input,
-                    order: sites.len(),
-                });
+                let mut merged = false;
+                let mut same_locus_conflict = None;
+                if merge_mode != MergeMode::None {
+                    if let Some(site_indices) = by_locus.get(&locus_key(record)).cloned() {
+                        for site_idx in site_indices {
+                            let site: &mut MergedSite = &mut sites[site_idx];
+                            if can_merge_same_locus_alt_union(site, record) {
+                                merge_sites_only_alt_union(site, record, info_rules);
+                                site.samples_by_input[input_idx] = Some(record.samples.clone());
+                                merged = true;
+                                break;
+                            }
+                            same_locus_conflict = Some(site_idx);
+                        }
+                    }
+                    if !merged
+                        && supports_sampled_same_position_union(merge_mode)
+                        && let Some(site_indices) = by_position.get(&position_key(record)).cloned()
+                    {
+                        for site_idx in site_indices {
+                            let site: &mut MergedSite = &mut sites[site_idx];
+                            if can_merge_sampled_same_position(site, record, merge_mode) {
+                                merge_sampled_same_position(site, record, input_idx)?;
+                                merged = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !merged
+                        && merge_mode == MergeMode::Default
+                        && let Some(site_idx) = same_locus_conflict
+                    {
+                        let existing = &sites[site_idx].fixed;
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "conflicting records at {}:{} require full merge semantics",
+                                existing[0], existing[1]
+                            ),
+                        ));
+                    }
+                }
+                if !merged {
+                    let site_idx = sites.len();
+                    let mut samples_by_input = vec![None; inputs.len()];
+                    samples_by_input[input_idx] = Some(record.samples.clone());
+                    by_key.insert(key, site_idx);
+                    by_locus
+                        .entry(locus_key(record))
+                        .or_default()
+                        .push(site_idx);
+                    by_position
+                        .entry(position_key(record))
+                        .or_default()
+                        .push(site_idx);
+                    sites.push(MergedSite {
+                        fixed: record.fixed.clone(),
+                        samples_by_input,
+                        order: site_idx,
+                    });
+                }
             }
         }
     }
@@ -550,11 +590,284 @@ fn locus_key(record: &RecordLine) -> String {
         .join("\t")
 }
 
+fn position_key(record: &RecordLine) -> String {
+    record
+        .fixed
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
 fn can_merge_same_locus_alt_union(site: &MergedSite, record: &RecordLine) -> bool {
     (site.fixed.len() == 8 || site.fixed.len() == 9)
         && record.fixed.len() == 8
         && record.samples.is_empty()
         && site.fixed[..4] == record.fixed[..4]
+}
+
+fn supports_sampled_same_position_union(merge_mode: MergeMode) -> bool {
+    matches!(merge_mode, MergeMode::Both | MergeMode::SnpInsDel)
+}
+
+fn can_merge_sampled_same_position(
+    site: &MergedSite,
+    record: &RecordLine,
+    merge_mode: MergeMode,
+) -> bool {
+    if site.fixed.len() < 9
+        || record.fixed.len() < 9
+        || site.fixed[..3] != record.fixed[..3]
+        || site.fixed[8] != record.fixed[8]
+        || merged_ref(&site.fixed[3], &record.fixed[3]).is_none()
+    {
+        return false;
+    }
+
+    match merge_mode {
+        MergeMode::Both => {
+            let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
+            site_class != CoarseVariantClass::Other
+                && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
+        }
+        MergeMode::SnpInsDel => {
+            let site_class = precise_variant_class(&site.fixed[3], &site.fixed[4]);
+            site_class != PreciseVariantClass::Other
+                && site_class == precise_variant_class(&record.fixed[3], &record.fixed[4])
+        }
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoarseVariantClass {
+    Snp,
+    Indel,
+    Other,
+}
+
+fn coarse_variant_class(reference: &str, alt: &str) -> CoarseVariantClass {
+    let classes = split_alt(alt)
+        .into_iter()
+        .map(|alt| precise_allele_class(reference, &alt))
+        .collect::<Vec<_>>();
+    if classes.is_empty() {
+        return CoarseVariantClass::Other;
+    }
+    if classes
+        .iter()
+        .all(|class| *class == PreciseVariantClass::Snp)
+    {
+        CoarseVariantClass::Snp
+    } else if classes.iter().all(|class| {
+        matches!(
+            class,
+            PreciseVariantClass::Insertion | PreciseVariantClass::Deletion
+        )
+    }) {
+        CoarseVariantClass::Indel
+    } else {
+        CoarseVariantClass::Other
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreciseVariantClass {
+    Snp,
+    Insertion,
+    Deletion,
+    Other,
+}
+
+fn precise_variant_class(reference: &str, alt: &str) -> PreciseVariantClass {
+    let classes = split_alt(alt)
+        .into_iter()
+        .map(|alt| precise_allele_class(reference, &alt))
+        .collect::<Vec<_>>();
+    let Some(first) = classes.first().copied() else {
+        return PreciseVariantClass::Other;
+    };
+    if classes.iter().all(|class| *class == first) {
+        first
+    } else {
+        PreciseVariantClass::Other
+    }
+}
+
+fn precise_allele_class(reference: &str, alt: &str) -> PreciseVariantClass {
+    if reference.len() == alt.len() && reference.len() == 1 {
+        PreciseVariantClass::Snp
+    } else if alt.len() > reference.len() && alt.starts_with(reference) {
+        PreciseVariantClass::Insertion
+    } else if reference.len() > alt.len() && reference.starts_with(alt) {
+        PreciseVariantClass::Deletion
+    } else {
+        PreciseVariantClass::Other
+    }
+}
+
+fn merge_sampled_same_position(
+    site: &mut MergedSite,
+    record: &RecordLine,
+    input_idx: usize,
+) -> io::Result<()> {
+    if site.samples_by_input[input_idx].is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "duplicate record at {}:{}",
+                record.fixed[0], record.fixed[1]
+            ),
+        ));
+    }
+
+    let old_ref = site.fixed[3].clone();
+    let old_alts = normalize_alts(&old_ref, &site.fixed[4], &old_ref);
+    let new_ref = merged_ref(&old_ref, &record.fixed[3]).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "conflicting records at {}:{} require full merge semantics",
+                record.fixed[0], record.fixed[1]
+            ),
+        )
+    })?;
+    let normalized_site_alts = normalize_alts(&old_ref, &site.fixed[4], &new_ref);
+    let normalized_record_alts = normalize_alts(&record.fixed[3], &record.fixed[4], &new_ref);
+
+    let mut merged_alts = normalized_site_alts.clone();
+    for alt in &normalized_record_alts {
+        if !merged_alts.contains(alt) {
+            merged_alts.push(alt.clone());
+        }
+    }
+
+    let old_site_map = allele_map(&normalized_site_alts, &merged_alts);
+    let record_map = allele_map(&normalized_record_alts, &merged_alts);
+    if new_ref != old_ref || merged_alts != old_alts {
+        let format = site.fixed[8].clone();
+        for values in site.samples_by_input.iter_mut().flatten() {
+            *values = remap_sample_values(&format, values, &old_site_map, merged_alts.len());
+        }
+    }
+
+    site.fixed[3] = new_ref;
+    site.fixed[4] = if merged_alts.is_empty() {
+        ".".to_owned()
+    } else {
+        merged_alts.join(",")
+    };
+    site.samples_by_input[input_idx] = Some(remap_sample_values(
+        &record.fixed[8],
+        &record.samples,
+        &record_map,
+        merged_alts.len(),
+    ));
+    Ok(())
+}
+
+fn merged_ref(a: &str, b: &str) -> Option<String> {
+    if a.len() >= b.len() && a.starts_with(b) {
+        Some(a.to_owned())
+    } else if b.starts_with(a) {
+        Some(b.to_owned())
+    } else {
+        None
+    }
+}
+
+fn normalize_alts(reference: &str, alt: &str, merged_ref: &str) -> Vec<String> {
+    let suffix = merged_ref.strip_prefix(reference).unwrap_or("");
+    split_alt(alt)
+        .into_iter()
+        .map(|alt| format!("{alt}{suffix}"))
+        .collect()
+}
+
+fn allele_map(old_alts: &[String], merged_alts: &[String]) -> Vec<Option<usize>> {
+    let mut map = Vec::with_capacity(old_alts.len() + 1);
+    map.push(Some(0));
+    for alt in old_alts {
+        map.push(
+            merged_alts
+                .iter()
+                .position(|merged| merged == alt)
+                .map(|idx| idx + 1),
+        );
+    }
+    map
+}
+
+fn remap_sample_values(
+    format: &str,
+    samples: &[String],
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+) -> Vec<String> {
+    let keys = format.split(':').collect::<Vec<_>>();
+    samples
+        .iter()
+        .map(|sample| {
+            let mut values = sample.split(':').map(str::to_owned).collect::<Vec<_>>();
+            for (idx, key) in keys.iter().enumerate() {
+                let Some(value) = values.get_mut(idx) else {
+                    continue;
+                };
+                match *key {
+                    "GT" => *value = remap_gt(value, allele_map),
+                    "AD" => *value = remap_ad(value, allele_map, alt_count),
+                    _ => {}
+                }
+            }
+            values.join(":")
+        })
+        .collect()
+}
+
+fn remap_gt(raw: &str, allele_map: &[Option<usize>]) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() {
+            let mut allele = ch.to_string();
+            while let Some(next) = chars.peek().copied() {
+                if next.is_ascii_digit() {
+                    allele.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let mapped = allele
+                .parse::<usize>()
+                .ok()
+                .and_then(|idx| allele_map.get(idx).copied().flatten());
+            match mapped {
+                Some(idx) => out.push_str(&idx.to_string()),
+                None => out.push('.'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn remap_ad(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    if raw == "." {
+        return raw.to_owned();
+    }
+    let old_values = raw.split(',').collect::<Vec<_>>();
+    let mut values = vec![".".to_owned(); alt_count + 1];
+    for (old_idx, value) in old_values.iter().enumerate() {
+        if let Some(new_idx) = allele_map.get(old_idx).copied().flatten()
+            && let Some(slot) = values.get_mut(new_idx)
+        {
+            *slot = (*value).to_owned();
+        }
+    }
+    values.join(",")
 }
 
 fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_rules: InfoRules) {
@@ -671,7 +984,7 @@ fn compare_sites(
         a_pos.cmp(&b_pos)
     })
     .then_with(|| {
-        if merge_mode == MergeMode::None {
+        if merge_mode != MergeMode::Default {
             a.order.cmp(&b.order)
         } else {
             Ordering::Equal
