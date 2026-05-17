@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #101 (`progress/merge-fileformat-max-text-fixture`, merge
+  commit `d7338d4`) preserved the highest input VCF fileformat in the
+  text-backed merge header, with byte-for-byte `merge.symbolic.1.1.out`
+  coverage.
 - 2026-05-17: PR #99 (`progress/merge-info-af-join-text-fixture`, merge
   commit `e1f4e91`) added narrow `-i AF:join` INFO-rule joining for
   sites-only ALT-union records, with byte-for-byte `merge.join.1.out`
@@ -415,9 +419,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`e1f4e91`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`d7338d4`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #99. The next branch should pick one
+- No code slice is in flight after PR #101. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
