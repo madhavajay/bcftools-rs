@@ -8,8 +8,8 @@
 //! controls). `-f` / `--max-allele-freq` accumulates the upstream rare-allele
 //! enrichment summary on stderr. Fisher's exact test routes through
 //! `htslib_rs::math::kt_fisher_exact`; float INFO uses the shared HTSlib
-//! `kputd` formatter. `-i`/`-e` filtering still needs the filter engine
-//! tracked in `TODO.md`.
+//! `kputd` formatter. Common `-i`/`-e` filters route through the shared text
+//! filter engine before annotation/stat accumulation.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -22,6 +22,7 @@ use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::math::kt_fisher_exact;
 
 use super::prune::kputd;
+use crate::filter::{self as bcffilter, EvalContext};
 use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, Default)]
@@ -55,6 +56,18 @@ pub struct Output {
     pub stderr: String,
 }
 
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
+}
+
 /// Reads the input and returns the contrast-annotated VCF text.
 pub fn run(
     input: &Path,
@@ -63,9 +76,10 @@ pub fn run(
     case: &str,
     force_samples: bool,
     max_ac: Option<&str>,
+    filter: Option<FilterSpec<'_>>,
 ) -> io::Result<Output> {
     let text = read_vcf_text(input)?;
-    compute(&text, annots, control, case, force_samples, max_ac).map_err(io::Error::other)
+    compute(&text, annots, control, case, force_samples, max_ac, filter).map_err(io::Error::other)
 }
 
 /// Resolve a `-0`/`-1` argument: a comma list of sample names, or (only if
@@ -122,6 +136,7 @@ fn compute(
     case: &str,
     force_samples: bool,
     max_ac: Option<&str>,
+    filter: Option<FilterSpec<'_>>,
 ) -> Result<Output, String> {
     let lines: Vec<&str> = text.lines().collect();
     let sample_idx: Vec<&str> = lines
@@ -183,6 +198,11 @@ fn compute(
         if f.len() < 10 {
             out.push_str(line);
             out.push('\n');
+            continue;
+        }
+        if let Some(filter) = filter
+            && !record_passes_filter(&f, filter)?
+        {
             continue;
         }
         let gt_slot = f[8].split(':').position(|k| k == "GT");
@@ -343,6 +363,23 @@ fn compute(
     })
 }
 
+fn record_passes_filter(fields: &[&str], filter: FilterSpec<'_>) -> Result<bool, String> {
+    let fields: Vec<String> = fields.iter().map(|field| (*field).to_owned()).collect();
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, &fields)
+        })
+        .map_err(|e| e.to_string())?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
 #[derive(Default)]
 struct Stats {
     ntotal: i32,
@@ -485,7 +522,7 @@ mod tests {
     #[test]
     fn matches_upstream_contrast_out() {
         let a = Annots::parse("PASSOC,FASSOC,NOVELAL,NOVELGT").unwrap();
-        let out = compute(VCF, a, "a,b", "c", false, None).unwrap().vcf;
+        let out = compute(VCF, a, "a,b", "c", false, None, None).unwrap().vcf;
         let d = body(&out);
         assert_eq!(
             d[0],
@@ -508,7 +545,7 @@ mod tests {
     #[test]
     fn nassoc_with_force_samples_missing_case() {
         let a = Annots::parse("NASSOC").unwrap();
-        let out = compute(VCF, a, "a,b,c", "d", true, None).unwrap().vcf;
+        let out = compute(VCF, a, "a,b,c", "d", true, None, None).unwrap().vcf;
         let d = body(&out);
         assert_eq!(
             d[0],
@@ -523,7 +560,7 @@ mod tests {
     #[test]
     fn rare_allele_summary_accumulates_minor_alleles() {
         let a = Annots::parse("NASSOC").unwrap();
-        let out = compute(VCF, a, "a,b", "c", false, Some("1")).unwrap();
+        let out = compute(VCF, a, "a,b", "c", false, Some("1"), None).unwrap();
         assert!(
             out.stderr
                 .contains("Total/processed/skipped/case_allele/case_gt:\t4\t4\t0\t0\t0\n")
@@ -550,7 +587,7 @@ mod tests {
     #[test]
     fn zero_max_ac_disables_rare_allele_summary() {
         let a = Annots::parse("NASSOC").unwrap();
-        let out = compute(VCF, a, "a,b", "c", false, Some("0")).unwrap();
+        let out = compute(VCF, a, "a,b", "c", false, Some("0"), None).unwrap();
         assert!(
             out.stderr
                 .contains("Total/processed/skipped/case_allele/case_gt:\t4\t4\t0\t0\t0\n")
@@ -562,5 +599,49 @@ mod tests {
     fn c_e_format_uses_c_default_precision() {
         assert_eq!(c_e_format(0.09803921568627558), "9.803922e-02");
         assert_eq!(c_e_format(1.0), "1.000000e+00");
+    }
+
+    #[test]
+    fn include_exclude_filters_records_before_annotation() {
+        let a = Annots::parse("NASSOC").unwrap();
+        let include = compute(
+            VCF,
+            a,
+            "a,b",
+            "c",
+            false,
+            None,
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: "POS=101",
+            }),
+        )
+        .unwrap();
+        let d = body(&include.vcf);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0],
+            "1\t101\t.\tA\tG\t.\t.\tNASSOC=4,0,1,1\tGT\t0/0\t0/0\t0/1"
+        );
+        assert!(
+            include
+                .stderr
+                .contains("Total/processed/skipped/case_allele/case_gt:\t1\t1\t0\t0\t0\n")
+        );
+
+        let exclude = compute(
+            VCF,
+            a,
+            "a,b",
+            "c",
+            false,
+            None,
+            Some(FilterSpec {
+                mode: FilterMode::Exclude,
+                expr: "POS=101",
+            }),
+        )
+        .unwrap();
+        assert_eq!(body(&exclude.vcf).len(), 3);
     }
 }
