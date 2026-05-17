@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #117 (`progress/merge-local-alleles-lpl1`, merge commit
+  `f208be0`) added narrow text-backed `merge --force-samples -L 1` local
+  alleles FORMAT-vector localization, with byte-for-byte `merge.LPL.2.out`
+  coverage.
 - 2026-05-17: PR #115 (`progress/merge-existing-fixture-coverage`, merge
   commit `25807b4`) added byte-for-byte Rust coverage for already-supported
   `merge.LPL.1.out` and `merge.phased.1.1.out` upstream fixtures.
@@ -444,11 +448,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`25807b4`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`f208be0`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-local-alleles-lpl1` adds a
-  narrow text-backed `merge --force-samples -L 1` local-alleles slice with
-  byte-for-byte `merge.LPL.2.out` coverage. Keep the one-branch rule, run the
+- No code slice is in flight after PR #117. The next branch should pick one
+  local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
