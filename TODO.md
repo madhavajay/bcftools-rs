@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #159 (`progress/norm-check-ref-swap`, merge commit
+  `1813674`) added byte-for-byte text parity for upstream
+  `norm.check-ref.1.out` by supporting narrow `-c s` reference-check swap
+  behavior in the local `norm` slice.
 - 2026-05-17: PR #158 (`progress/todo-sync-after-norm-rmdup-include-filter`,
   merge commit `96e890a`) synced the TODO docs after PR #157.
 - 2026-05-17: PR #157 (`progress/norm-rmdup-include-filter`, merge commit
@@ -530,12 +534,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`96e890a`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`1813674`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/norm-check-ref-swap` extends the
-  local `norm` slice with narrow `-c s` reference-check swap behavior for
-  upstream `norm.check-ref.1.out`. Keep the one-branch rule, run the full
-  local gate, and wait for both required GitHub checks before merge.
+- Current code slice in flight: none after PR #159; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
