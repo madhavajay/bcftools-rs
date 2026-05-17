@@ -538,7 +538,7 @@ fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
         .iter()
         .map(|input| input.records.clone())
         .collect::<Vec<_>>();
-    let ref_hints = reference_block_ref_hints(&records_by_input);
+    let ref_hints = record_ref_hints(&records_by_input);
 
     for (input_idx, input) in inputs.iter_mut().enumerate() {
         let mut split_records = Vec::new();
@@ -573,7 +573,9 @@ fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
                     } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
                         breaks.push(other_start);
                         breaks.push((other_start + 1).min(end + 1));
-                        skip_positions.insert(other_start);
+                        if record.samples.is_empty() && other.samples.is_empty() {
+                            skip_positions.insert(other_start);
+                        }
                         let other_ref_len = other.fixed[3].len().max(1) as u64;
                         if other_ref_len > 1 {
                             breaks.push((other_start + other_ref_len).min(end + 1));
@@ -600,18 +602,14 @@ fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
     }
 }
 
-fn reference_block_ref_hints(
-    records_by_input: &[Vec<RecordLine>],
-) -> HashMap<(String, u64), String> {
+fn record_ref_hints(records_by_input: &[Vec<RecordLine>]) -> HashMap<(String, u64), String> {
     let mut hints = HashMap::new();
     for record in records_by_input.iter().flatten() {
-        if reference_block_span(record).is_some()
-            && let (Some(chrom), Some(pos), Some(reference)) = (
-                record.fixed.first(),
-                record_pos(record),
-                record.fixed.get(3),
-            )
-        {
+        if let (Some(chrom), Some(pos), Some(reference)) = (
+            record.fixed.first(),
+            record_pos(record),
+            record.fixed.get(3),
+        ) {
             hints
                 .entry((chrom.clone(), pos))
                 .or_insert_with(|| reference.clone());

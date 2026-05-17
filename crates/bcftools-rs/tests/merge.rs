@@ -499,6 +499,26 @@ fn merge_gvcf8_no_reference_block_split_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf5_non_ref_order_fixture_matches_upstream_text_output() {
+    for extra_args in [Vec::<&str>::new(), vec!["--merge", "none"]] {
+        let mut args = vec![
+            "merge",
+            "--no-version",
+            "--gvcf",
+            "-",
+            "../../bcftools/test/merge.gvcf.5.a.vcf",
+            "../../bcftools/test/merge.gvcf.5.b.vcf",
+        ];
+        args.splice(4..4, extra_args);
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "merge.gvcf.5 fixture failed for {args:?}: {err}");
+
+        let expected = std::fs::read_to_string("../../bcftools/test/merge.gvcf.5.1.out").unwrap();
+        assert_eq!(out, expected, "merge.gvcf.5 fixture differed for {args:?}");
+    }
+}
+
+#[test]
 fn merge_sites_only_alt_union_matches_upstream_fixture() {
     for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
         let mut args = vec![
