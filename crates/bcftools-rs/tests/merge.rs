@@ -516,6 +516,22 @@ fn merge_gvcf8_no_reference_block_split_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_mrules_default_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--gvcf",
+        "-",
+        "../../bcftools/test/merge.mrules.1.a.vcf",
+        "../../bcftools/test/merge.mrules.1.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.mrules.1.1 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.mrules.1.1.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_gvcf5_non_ref_order_fixture_matches_upstream_text_output() {
     for extra_args in [Vec::<&str>::new(), vec!["--merge", "none"]] {
         let mut args = vec![
