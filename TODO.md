@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #93 (`progress/merge-mode-both-text-fixtures`, merge commit
+  `b1e7cb0`) added narrow sampled same-position allele unions for
+  `merge -m both` and `merge -m snp-ins-del`, including GT allele remapping
+  and byte-for-byte `merge.10.{2,3}.out` coverage.
 - 2026-05-17: PR #91 (`progress/merge-mode-none-text-fixture`, merge commit
   `78ce1f5`) added a narrow `merge -m none` text-backed slice that keeps
   same-position conflicting records as separate rows, with byte-for-byte
@@ -401,9 +405,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`78ce1f5`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`b1e7cb0`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #91. The next branch should pick one
+- No code slice is in flight after PR #93. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
