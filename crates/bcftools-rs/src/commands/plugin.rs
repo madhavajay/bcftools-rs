@@ -265,6 +265,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut af_tag: Option<String> = None;
     let mut dev_bins: Option<String> = None;
     let mut prob_bins: Option<String> = None;
+    let mut af_list: Option<String> = None;
     // remove-overlaps options.
     let mut mark_expr: Option<String> = None;
     let mut mark_tag: Option<String> = None;
@@ -342,6 +343,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     while let Some(arg) = iter.next() {
         let raw = arg.to_string_lossy();
         match raw.as_ref() {
+            "-l" | "--list" if plugin_name.as_deref() == Some("af-dist") => {
+                af_list = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--list=") && plugin_name.as_deref() == Some("af-dist") => {
+                af_list = Some(raw["--list=".len()..].to_owned());
+            }
             "-l" | "--list-plugins" => list = true,
             "-lv" => {
                 list = true;
@@ -1370,7 +1377,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         let af = af_tag.as_deref().unwrap_or("AF");
         let dev = dev_bins.as_deref().unwrap_or(DEFAULT_BINS);
         let prob = prob_bins.as_deref().unwrap_or(DEFAULT_BINS);
-        let report = af_dist::run(Path::new(&input), af, dev, prob)?;
+        let report = af_dist::run(Path::new(&input), af, dev, prob, af_list.as_deref())?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
