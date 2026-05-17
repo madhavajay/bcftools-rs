@@ -117,3 +117,36 @@ fn contrast_novelgt_only() {
         "contrast.1.2.out",
     );
 }
+
+#[test]
+fn contrast_rare_allele_summary_to_stderr() {
+    ensure_binary_built();
+    let input = fixture_path("contrast.vcf");
+    let out = Command::new(bin_path())
+        .args([
+            "+contrast",
+            input.to_str().unwrap(),
+            "-a",
+            "NASSOC",
+            "-0",
+            "a,b",
+            "-1",
+            "c",
+            "-f",
+            "1",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "max_AC/PASSOC/FASSOC/NASSOC:\t1\t9.803922e-02\t0.000000,0.333333\t12,0,4,2\n"
+        )
+    );
+}

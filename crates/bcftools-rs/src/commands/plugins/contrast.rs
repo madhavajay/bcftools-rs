@@ -5,10 +5,11 @@
 //! `PASSOC` (Fisher's exact test, REF vs non-REF), `FASSOC` (non-REF
 //! proportion in controls/cases), `NASSOC` (the 4 allele counts),
 //! `NOVELAL`/`NOVELGT` (case samples with an allele/genotype not seen in
-//! controls). Fisher's exact test routes through
+//! controls). `-f` / `--max-allele-freq` accumulates the upstream rare-allele
+//! enrichment summary on stderr. Fisher's exact test routes through
 //! `htslib_rs::math::kt_fisher_exact`; float INFO uses the shared HTSlib
-//! `kputd` formatter. `-i`/`-e` filtering and `-f` rare-allele enrichment
-//! need infrastructure tracked in `TODO.md`.
+//! `kputd` formatter. `-i`/`-e` filtering still needs the filter engine
+//! tracked in `TODO.md`.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -49,6 +50,11 @@ impl Annots {
     }
 }
 
+pub struct Output {
+    pub vcf: String,
+    pub stderr: String,
+}
+
 /// Reads the input and returns the contrast-annotated VCF text.
 pub fn run(
     input: &Path,
@@ -56,9 +62,10 @@ pub fn run(
     control: &str,
     case: &str,
     force_samples: bool,
-) -> io::Result<String> {
+    max_ac: Option<&str>,
+) -> io::Result<Output> {
     let text = read_vcf_text(input)?;
-    compute(&text, annots, control, case, force_samples).map_err(io::Error::other)
+    compute(&text, annots, control, case, force_samples, max_ac).map_err(io::Error::other)
 }
 
 /// Resolve a `-0`/`-1` argument: a comma list of sample names, or (only if
@@ -114,7 +121,8 @@ fn compute(
     control: &str,
     case: &str,
     force_samples: bool,
-) -> Result<String, String> {
+    max_ac: Option<&str>,
+) -> Result<Output, String> {
     let lines: Vec<&str> = text.lines().collect();
     let sample_idx: Vec<&str> = lines
         .iter()
@@ -124,6 +132,14 @@ fn compute(
 
     let control_smpl = resolve_samples(control, &sample_idx, force_samples)?;
     let case_smpl = resolve_samples(case, &sample_idx, force_samples)?;
+    let max_ac = match max_ac {
+        Some(raw) => {
+            let parsed = parse_max_ac(raw, sample_idx.len())?;
+            (parsed != 0).then_some(parsed)
+        }
+        None => None,
+    };
+    let mut stats = Stats::default();
 
     let mut out = String::with_capacity(text.len() + 512);
     let fileformat = lines.iter().position(|l| l.starts_with("##fileformat="));
@@ -205,6 +221,7 @@ fn compute(
             }
         }
 
+        stats.ntotal += 1;
         let mut skipped = false;
         if control_als == 0 && !control_smpl.is_empty() {
             skipped = true;
@@ -246,6 +263,16 @@ fn compute(
             if !has_gt && !case_smpl.is_empty() {
                 skipped = true;
             }
+        }
+        if skipped {
+            stats.nskipped += 1;
+        } else {
+            stats.ntested += 1;
+        }
+        if let Some(max_ac) = max_ac
+            && !skipped
+        {
+            stats.add_rare_allele_counts(max_ac, nals);
         }
 
         // Build the annotated INFO. Skipped records are written verbatim.
@@ -289,9 +316,11 @@ fn compute(
             }
             if !novelal.is_empty() {
                 push(&mut info, "NOVELAL", &novelal.join(","));
+                stats.ncase_al += 1;
             }
             if !novelgt.is_empty() {
                 push(&mut info, "NOVELGT", &novelgt.join(","));
+                stats.ncase_gt += 1;
             }
             let owned = if info.is_empty() {
                 ".".to_owned()
@@ -308,7 +337,93 @@ fn compute(
             out.push('\n');
         }
     }
-    Ok(out)
+    Ok(Output {
+        vcf: out,
+        stderr: stats.stderr(max_ac),
+    })
+}
+
+#[derive(Default)]
+struct Stats {
+    ntotal: i32,
+    ntested: i32,
+    nskipped: i32,
+    ncase_al: i32,
+    ncase_gt: i32,
+    nals: [i32; 4],
+}
+
+impl Stats {
+    fn add_rare_allele_counts(&mut self, max_ac: i32, nals: [i32; 4]) {
+        if nals[0] + nals[2] > nals[1] + nals[3] {
+            if nals[1] + nals[3] <= max_ac {
+                for (dst, src) in self.nals.iter_mut().zip(nals) {
+                    *dst += src;
+                }
+            }
+        } else if nals[0] + nals[2] <= max_ac {
+            self.nals[0] += nals[1];
+            self.nals[1] += nals[0];
+            self.nals[2] += nals[3];
+            self.nals[3] += nals[2];
+        }
+    }
+
+    fn stderr(&self, max_ac: Option<i32>) -> String {
+        let mut out = format!(
+            "Total/processed/skipped/case_allele/case_gt:\t{}\t{}\t{}\t{}\t{}\n",
+            self.ntotal, self.ntested, self.nskipped, self.ncase_al, self.ncase_gt
+        );
+        if let Some(max_ac) = max_ac {
+            let p =
+                kt_fisher_exact(self.nals[0], self.nals[1], self.nals[2], self.nals[3]).two_tail;
+            let f0 = if self.nals[0] + self.nals[1] != 0 {
+                self.nals[1] as f32 / (self.nals[0] + self.nals[1]) as f32
+            } else {
+                0.0
+            };
+            let f1 = if self.nals[2] + self.nals[3] != 0 {
+                self.nals[3] as f32 / (self.nals[2] + self.nals[3]) as f32
+            } else {
+                0.0
+            };
+            out.push_str(&format!(
+                "max_AC/PASSOC/FASSOC/NASSOC:\t{max_ac}\t{}\t{f0:.6},{f1:.6}\t{},{},{},{}\n",
+                c_e_format(p),
+                self.nals[0],
+                self.nals[1],
+                self.nals[2],
+                self.nals[3]
+            ));
+        }
+        out
+    }
+}
+
+fn parse_max_ac(raw: &str, nsamples: usize) -> Result<i32, String> {
+    if let Ok(value) = raw.parse::<i32>() {
+        return Ok(value);
+    }
+    let value = raw
+        .parse::<f64>()
+        .map_err(|_| format!("Could not parse the argument: -f, --max-allele-freq {raw}"))?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!(
+            "Expected integer or float from the range [0,1]: -f, --max-allele-freq {raw}"
+        ));
+    }
+    let mut max_ac = (value * nsamples as f64) as i32;
+    if max_ac == 0 {
+        max_ac = 1;
+    }
+    Ok(max_ac)
+}
+
+fn c_e_format(v: f64) -> String {
+    let s = format!("{v:.6e}");
+    let (mant, exp) = s.split_once('e').unwrap();
+    let n = exp.parse::<i32>().unwrap();
+    format!("{mant}e{n:+03}")
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
@@ -370,7 +485,7 @@ mod tests {
     #[test]
     fn matches_upstream_contrast_out() {
         let a = Annots::parse("PASSOC,FASSOC,NOVELAL,NOVELGT").unwrap();
-        let out = compute(VCF, a, "a,b", "c", false).unwrap();
+        let out = compute(VCF, a, "a,b", "c", false, None).unwrap().vcf;
         let d = body(&out);
         assert_eq!(
             d[0],
@@ -393,7 +508,7 @@ mod tests {
     #[test]
     fn nassoc_with_force_samples_missing_case() {
         let a = Annots::parse("NASSOC").unwrap();
-        let out = compute(VCF, a, "a,b,c", "d", true).unwrap();
+        let out = compute(VCF, a, "a,b,c", "d", true, None).unwrap().vcf;
         let d = body(&out);
         assert_eq!(
             d[0],
@@ -403,5 +518,49 @@ mod tests {
             d[3],
             "1\t103\t.\tA\tG\t.\t.\tNASSOC=1,5,0,0\tGT\t1/1\t1/1\t0/1"
         );
+    }
+
+    #[test]
+    fn rare_allele_summary_accumulates_minor_alleles() {
+        let a = Annots::parse("NASSOC").unwrap();
+        let out = compute(VCF, a, "a,b", "c", false, Some("1")).unwrap();
+        assert!(
+            out.stderr
+                .contains("Total/processed/skipped/case_allele/case_gt:\t4\t4\t0\t0\t0\n")
+        );
+        assert!(
+            out.stderr.contains(
+                "max_AC/PASSOC/FASSOC/NASSOC:\t1\t9.803922e-02\t0.000000,0.333333\t12,0,4,2\n"
+            ),
+            "{}",
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn parse_max_ac_float_uses_sample_count_with_min_one() {
+        assert_eq!(parse_max_ac("0", 3).unwrap(), 0);
+        assert_eq!(parse_max_ac("2", 3).unwrap(), 2);
+        assert_eq!(parse_max_ac("0.1", 3).unwrap(), 1);
+        assert_eq!(parse_max_ac("1.0", 3).unwrap(), 3);
+        assert!(parse_max_ac("x", 3).is_err());
+        assert!(parse_max_ac("1.1", 3).is_err());
+    }
+
+    #[test]
+    fn zero_max_ac_disables_rare_allele_summary() {
+        let a = Annots::parse("NASSOC").unwrap();
+        let out = compute(VCF, a, "a,b", "c", false, Some("0")).unwrap();
+        assert!(
+            out.stderr
+                .contains("Total/processed/skipped/case_allele/case_gt:\t4\t4\t0\t0\t0\n")
+        );
+        assert!(!out.stderr.contains("max_AC/PASSOC/FASSOC/NASSOC"));
+    }
+
+    #[test]
+    fn c_e_format_uses_c_default_precision() {
+        assert_eq!(c_e_format(0.09803921568627558), "9.803922e-02");
+        assert_eq!(c_e_format(1.0), "1.000000e+00");
     }
 }

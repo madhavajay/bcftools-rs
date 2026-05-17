@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #204
+  (`progress/todo-sync-after-guess-ploidy-genome-shortcut`, merge commit
+  `954f3fa`) synced the TODO docs after PR #203.
 - 2026-05-18: PR #203 (`progress/guess-ploidy-genome-shortcut`, merge
   commit `59e7243`) added `+guess-ploidy -g` / `--genome` shortcut
   regions for `b37`, `b38`, `hg19`, and `hg38`, plus inline
@@ -669,10 +672,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`59e7243`) (311 lib unit tests plus per-command
-  and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+  latest merged commit on `main` (`954f3fa`) (311 lib unit tests plus
+  per-command and per-plugin integration suites).
+- Current code slice in flight: `progress/contrast-rare-allele-summary`,
+  adding `+contrast -f` / `--max-allele-freq` rare-allele enrichment
+  summary output without touching `htslib-rs`, `noodles`, or their
+  submodules.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1246,16 +1251,18 @@ Current local slice:
   (`kt_fisher_exact` two-tail), `FASSOC` (`f32` non-REF proportions, `.`
   when undefined), `NASSOC` (4 ints), `NOVELAL` (case samples with an
   allele absent from controls), `NOVELGT` (novel genotype bitmask vs the
-  control genotype set; `else if` after NOVELAL exactly as upstream); the
-  requested `##INFO` defs + htslib `##FILTER=<ID=PASS>` header injection;
-  every record written (skipped ones verbatim); floats via the shared
-  `kputd`. Byte-for-byte parity with `contrast.out` (PASSOC,FASSOC,
+  control genotype set; `else if` after NOVELAL exactly as upstream);
+  `-f`/`--max-allele-freq` rare-allele enrichment (`max_AC`) summary and
+  upstream-style processing totals on stderr; the requested `##INFO` defs
+  + htslib `##FILTER=<ID=PASS>` header injection; every record written
+  (skipped ones verbatim); floats via the shared `kputd`.
+  Byte-for-byte parity with `contrast.out` (PASSOC,FASSOC,
   NOVELAL,NOVELGT; list **and** file `-0`/`-1`), `contrast.1.out`
   (NASSOC, `--force-samples` with an absent case sample), `contrast.1.1.out`
   (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 5 integration tests
-  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 2 unit tests.
-  Remaining: `-f` rare-allele enrichment (`max_AC`) and `-i`/`-e`
-  filtering (filter engine).
+  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 2 unit tests on
+  `main`; this branch raises coverage to 6 integration tests + 6 unit tests.
+  Remaining: `-i`/`-e` filtering (filter engine).
 - [x] `+fixref` (`crates/bcftools-rs/src/commands/plugins/fixref.rs`):
   port of `fixref.c` FASTA-reference strand fixing — `ref-alt` & `swap`
   (REF/ALT column changes only), `flip` & `flip-all` (also flip + swap
