@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: in-flight `progress/norm-rmdup-left-align` extends
+  byte-for-byte text parity for upstream `norm.rmdup.3.{1,2}.out` by adding a
+  narrow FASTA-backed left-alignment path for symbolic `<DEL>` rows and simple
+  one-base deletions before duplicate removal.
 - 2026-05-17: PR #153 (`progress/norm-rmdup-fixtures`, merge commit
   `315acfe`) extended byte-for-byte text parity for upstream
   `norm.rmdup.2.{1,2}.out` by preserving existing PASS FILTER headers in the
@@ -518,8 +522,7 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest merged commit on `main` (`315acfe`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none after PR #153; start one focused
-  local-only branch from fresh `main` for the next TODO item, keep the
+- Current code slice in flight: `progress/norm-rmdup-left-align`; keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
@@ -770,7 +773,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave B — File-Level Manipulation
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out` and `norm.rmdup.2.{1,2}.out` coverage, and `--no-version` command-shape compatibility. 5 integration tests in `crates/bcftools-rs/tests/norm.rs`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode, narrow FASTA-backed left alignment for symbolic `<DEL>` records and simple one-base deletions before duplicate removal, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out`, `norm.rmdup.2.{1,2}.out`, and `norm.rmdup.3.{1,2}.out` text coverage, and `--no-version` command-shape compatibility. 6 integration tests in `crates/bcftools-rs/tests/norm.rs`.
   - [ ] Remaining: left alignment, reference-check modes (`-c`), split/join multiallelics (`-m`), atomization, old-record tags, keep-sum INFO/FORMAT projection, overlap handling, right alignment with GFF, symbolic allele edge cases, and full upstream `test_vcf_norm` parity.
 - [x] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
   - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:

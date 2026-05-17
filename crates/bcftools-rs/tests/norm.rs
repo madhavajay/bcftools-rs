@@ -114,6 +114,33 @@ fn norm_rmdup2_numbered_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn norm_rmdup3_left_aligned_duplicate_fixtures_match_upstream_text_output() {
+    let input = fixture_path("norm.rmdup.3.vcf");
+    let reference = fixture_path("norm.rmdup.3.fa");
+    for (mode, fixture) in [
+        ("exact", "norm.rmdup.3.1.out"),
+        ("all", "norm.rmdup.3.2.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let (out, err, code) = run(&[
+            "norm",
+            "--no-version",
+            "-d",
+            mode,
+            "-f",
+            reference.to_str().unwrap(),
+            input.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "norm.rmdup.3 fixture failed for -d {mode}: {err}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm.rmdup.3 fixture differed for -d {mode}"
+        );
+    }
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");

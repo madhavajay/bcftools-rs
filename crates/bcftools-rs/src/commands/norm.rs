@@ -16,6 +16,7 @@ use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
 use crate::diagnostics::fmt_etag;
+use crate::reference::FastaReference;
 use crate::vcf_compat::normalize_vcf_text;
 
 const USAGE: &str = "\n\
@@ -33,6 +34,7 @@ Options:\n\
 #[derive(Debug)]
 struct Args {
     input: PathBuf,
+    fasta_ref: Option<PathBuf>,
     output: Option<PathBuf>,
     output_kind: OutputKind,
     rm_dup: DupMode,
@@ -97,6 +99,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
 
 fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut input = None;
+    let mut fasta_ref = None;
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
     let mut rm_dup = DupMode::None;
@@ -110,7 +113,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 rm_dup = parse_dup_mode(&next_string(&mut iter, raw.as_ref())?)?
             }
             "-f" | "--fasta-ref" => {
-                let _ = next_string(&mut iter, raw.as_ref())?;
+                fasta_ref = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?));
             }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
@@ -123,10 +126,10 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 rm_dup = parse_dup_mode(value_after_equals(&raw))?
             }
             _ if raw.starts_with("--fasta-ref=") => {
-                let _ = value_after_equals(&raw);
+                fasta_ref = Some(PathBuf::from(value_after_equals(&raw)));
             }
             _ if raw.starts_with("-f") && raw.len() > 2 => {
-                let _ = &raw[2..];
+                fasta_ref = Some(PathBuf::from(&raw[2..]));
             }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
@@ -157,6 +160,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         input.ok_or_else(|| ParseOutcome::Error("expected one input VCF/BCF path".into()))?;
     Ok(Args {
         input,
+        fasta_ref,
         output,
         output_kind,
         rm_dup,
@@ -200,7 +204,12 @@ fn parse_dup_mode(raw: &str) -> Result<DupMode, ParseOutcome> {
 
 fn run(args: &Args) -> io::Result<()> {
     let input = read_vcf_text(&args.input)?;
-    let output = remove_duplicates(&input, args.rm_dup)?;
+    let reference = args
+        .fasta_ref
+        .as_ref()
+        .map(FastaReference::open)
+        .transpose()?;
+    let output = remove_duplicates(&input, args.rm_dup, reference.as_ref())?;
     write_output(output.as_bytes(), args)
 }
 
@@ -243,7 +252,11 @@ fn stdin_tmp_path() -> PathBuf {
     ))
 }
 
-fn remove_duplicates(input: &str, mode: DupMode) -> io::Result<String> {
+fn remove_duplicates(
+    input: &str,
+    mode: DupMode,
+    reference: Option<&FastaReference>,
+) -> io::Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut seen = HashSet::new();
     let filter_header_seen = input
@@ -274,23 +287,129 @@ fn remove_duplicates(input: &str, mode: DupMode) -> io::Result<String> {
         if line.trim().is_empty() {
             continue;
         }
-        let fields: Vec<&str> = line.split('\t').collect();
+        let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
         if fields.len() < 8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid VCF record with fewer than 8 columns: {line}"),
             ));
         }
-        let keys = duplicate_keys(&fields, mode);
+        if let Some(reference) = reference {
+            normalize_duplicate_record(&mut fields, reference)?;
+        }
+        let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+        let keys = duplicate_keys(&field_refs, mode);
         let is_dup = keys.iter().any(|key| seen.contains(key));
         if !is_dup {
             seen.extend(keys);
-            out.push_str(line);
+            out.push_str(&fields.join("\t"));
             out.push('\n');
         }
     }
 
     Ok(out)
+}
+
+fn normalize_duplicate_record(fields: &mut [String], reference: &FastaReference) -> io::Result<()> {
+    if fields.len() < 8 || fields[4].contains(',') {
+        return Ok(());
+    }
+
+    if fields[4] == "<DEL>" {
+        normalize_symbolic_deletion(fields, reference)
+    } else {
+        normalize_simple_deletion(fields, reference)
+    }
+}
+
+fn normalize_symbolic_deletion(
+    fields: &mut [String],
+    reference: &FastaReference,
+) -> io::Result<()> {
+    if !info_has_negative_svlen(&fields[7]) {
+        return Ok(());
+    }
+    let pos = parse_pos(&fields[1])?;
+    let Some(first_deleted) = fetch_base(reference, &fields[0], pos)? else {
+        return Ok(());
+    };
+    let deletion_start = leftmost_repeat_start(reference, &fields[0], pos, first_deleted)?;
+    if deletion_start <= 1 || deletion_start == pos {
+        return Ok(());
+    }
+    let anchor_pos = deletion_start - 1;
+    if let Some(anchor) = fetch_base(reference, &fields[0], anchor_pos)? {
+        fields[1] = anchor_pos.to_string();
+        fields[3] = char::from(anchor).to_string();
+    }
+    Ok(())
+}
+
+fn normalize_simple_deletion(fields: &mut [String], reference: &FastaReference) -> io::Result<()> {
+    let reference_allele = fields[3].as_bytes();
+    let alternate = fields[4].as_bytes();
+    if reference_allele.len() <= alternate.len() || !reference_allele.starts_with(alternate) {
+        return Ok(());
+    }
+    let deleted = &reference_allele[alternate.len()..];
+    if deleted.len() != 1 {
+        return Ok(());
+    }
+    let deleted_base = deleted[0];
+
+    let pos = parse_pos(&fields[1])?;
+    let deletion_start = pos + alternate.len();
+    let deletion_start = leftmost_repeat_start(
+        reference,
+        &fields[0],
+        deletion_start,
+        deleted_base.to_ascii_uppercase(),
+    )?;
+    if deletion_start <= 1 {
+        return Ok(());
+    }
+    let anchor_pos = deletion_start - 1;
+    if let Some(anchor) = fetch_base(reference, &fields[0], anchor_pos)? {
+        fields[1] = anchor_pos.to_string();
+        fields[3] = format!("{}{}", char::from(anchor), char::from(deleted_base));
+        fields[4] = char::from(anchor).to_string();
+    }
+    Ok(())
+}
+
+fn info_has_negative_svlen(info: &str) -> bool {
+    info.split(';').any(|entry| {
+        entry
+            .strip_prefix("SVLEN=")
+            .and_then(|value| value.split(',').next())
+            .is_some_and(|value| value.starts_with('-'))
+    })
+}
+
+fn parse_pos(raw: &str) -> io::Result<usize> {
+    raw.parse::<usize>()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("invalid POS '{raw}'")))
+}
+
+fn leftmost_repeat_start(
+    reference: &FastaReference,
+    chrom: &str,
+    mut pos: usize,
+    base: u8,
+) -> io::Result<usize> {
+    while pos > 1 && fetch_base(reference, chrom, pos - 1)? == Some(base.to_ascii_uppercase()) {
+        pos -= 1;
+    }
+    Ok(pos)
+}
+
+fn fetch_base(reference: &FastaReference, chrom: &str, pos: usize) -> io::Result<Option<u8>> {
+    let region = format!("{chrom}:{pos}-{pos}");
+    match reference.fetch_region(&region) {
+        Ok(sequence) => Ok(sequence.first().map(|base| base.to_ascii_uppercase())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn duplicate_keys(fields: &[&str], mode: DupMode) -> Vec<DupKey> {
@@ -332,7 +451,11 @@ fn dup_key(fields: &[&str], rest: &str) -> DupKey {
 fn exact_rest(fields: &[&str]) -> String {
     let mut alts: Vec<&str> = fields[4].split(',').collect();
     alts.sort_unstable();
-    format!("{}:{}", fields[3], alts.join(","))
+    if alts.iter().any(|alt| alt.starts_with('<')) {
+        format!("{}:{}:{}", fields[3], alts.join(","), fields[7])
+    } else {
+        format!("{}:{}", fields[3], alts.join(","))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -434,7 +557,7 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
 1\t2\t.\tA\tC\t.\t.\t.\n\
 1\t2\t.\tA\tG\t.\t.\t.\n";
-        let out = remove_duplicates(input, DupMode::All).unwrap();
+        let out = remove_duplicates(input, DupMode::All, None).unwrap();
         assert!(out.contains("1\t2\t.\tA\tC\t.\t.\t."));
         assert!(!out.contains("1\t2\t.\tA\tG\t.\t.\t."));
     }
