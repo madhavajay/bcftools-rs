@@ -201,6 +201,8 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #158 (`progress/todo-sync-after-norm-rmdup-include-filter`,
+  merge commit `96e890a`) synced the TODO docs after PR #157.
 - 2026-05-17: PR #157 (`progress/norm-rmdup-include-filter`, merge commit
   `c434a28`) added byte-for-byte text parity for upstream `norm.filter.2.out`
   by supporting `-i`/`--include` gating in the local `norm -d`
@@ -528,12 +530,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`c434a28`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`96e890a`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none after PR #157; start one focused
-  local-only branch from fresh `main` for the next TODO item, keep the
-  one-branch rule, run the full local gate, and wait for both required GitHub
-  checks before merge.
+- Current code slice in flight: `progress/norm-check-ref-swap` extends the
+  local `norm` slice with narrow `-c s` reference-check swap behavior for
+  upstream `norm.check-ref.1.out`. Keep the one-branch rule, run the full
+  local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -562,7 +564,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `isec` | broad text slice | `commands/isec.rs` — full synced-reader pending |
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
-| `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup` plus include-gated duplicate removal |
+| `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s` |
 | `plugin` | registry + 32 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
@@ -782,7 +784,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave B — File-Level Manipulation
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, `-i`/`--include` gating for duplicate-removal decisions including `ID=@file` file membership and simple shared filter expressions, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode, narrow FASTA-backed left alignment for symbolic `<DEL>` records and simple one-base deletions before duplicate removal, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out`, `norm.rmdup.2.{1,2}.out`, `norm.rmdup.3.{1,2}.out`, and `norm.filter.2.out` text coverage, and `--no-version` command-shape compatibility. 7 integration tests in `crates/bcftools-rs/tests/norm.rs`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, `-i`/`--include` gating for duplicate-removal decisions including `ID=@file` file membership and simple shared filter expressions, narrow `-c s` reference-check swap behavior, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode and for `-c s`, narrow FASTA-backed left alignment for symbolic `<DEL>` records and simple one-base deletions before duplicate removal, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out`, `norm.rmdup.2.{1,2}.out`, `norm.rmdup.3.{1,2}.out`, `norm.filter.2.out`, and `norm.check-ref.1.out` text coverage, and `--no-version` command-shape compatibility. 8 integration tests in `crates/bcftools-rs/tests/norm.rs`.
   - [ ] Remaining: left alignment, reference-check modes (`-c`), split/join multiallelics (`-m`), atomization, old-record tags, keep-sum INFO/FORMAT projection, overlap handling, right alignment with GFF, symbolic allele edge cases, and full upstream `test_vcf_norm` parity.
 - [x] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
   - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:

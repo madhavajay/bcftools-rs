@@ -1,8 +1,9 @@
 //! Focused `bcftools norm` implementation (upstream `vcfnorm.c`).
 //!
 //! This first local slice supports duplicate-record removal with
-//! `-d/--rm-dup`. Left alignment, reference checks, atomization, split/join
-//! multiallelics, and INFO/FORMAT projection remain tracked in `TODO.md`.
+//! `-d/--rm-dup` and a narrow `-c s` reference-swap path. Full left alignment,
+//! atomization, split/join multiallelics, and INFO/FORMAT projection remain
+//! tracked in `TODO.md`.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -26,6 +27,7 @@ Usage:   bcftools norm [OPTIONS] <in.vcf.gz>\n\
 \n\
 Options:\n\
     -d, --rm-dup TYPE              Remove duplicate records: snps|indels|both|all|exact|none|any\n\
+    -c, --check-ref MODE           Reference check mode; this slice supports 's' swap\n\
     -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
     -i, --include EXPR             Include records matching EXPR in duplicate-removal decisions\n\
     -o, --output FILE              Write output to a file [standard output]\n\
@@ -41,6 +43,7 @@ struct Args {
     output_kind: OutputKind,
     rm_dup: DupMode,
     include_expr: Option<String>,
+    check_ref: Option<CheckRefMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +61,11 @@ enum DupMode {
     Indels,
     Both,
     All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckRefMode {
+    Swap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,6 +115,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut output_kind = OutputKind::VcfText;
     let mut rm_dup = DupMode::None;
     let mut include_expr = None;
+    let mut check_ref = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -115,6 +124,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-h" | "--help" | "-?" => return Err(ParseOutcome::Usage),
             "-d" | "--rm-dup" | "--rm-dups" => {
                 rm_dup = parse_dup_mode(&next_string(&mut iter, raw.as_ref())?)?
+            }
+            "-c" | "--check-ref" => {
+                check_ref = Some(parse_check_ref_mode(&next_string(
+                    &mut iter,
+                    raw.as_ref(),
+                )?)?)
             }
             "-f" | "--fasta-ref" => {
                 fasta_ref = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?));
@@ -130,6 +145,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--rm-dup=") || raw.starts_with("--rm-dups=") => {
                 rm_dup = parse_dup_mode(value_after_equals(&raw))?
             }
+            _ if raw.starts_with("--check-ref=") => {
+                check_ref = Some(parse_check_ref_mode(value_after_equals(&raw))?);
+            }
             _ if raw.starts_with("--fasta-ref=") => {
                 fasta_ref = Some(PathBuf::from(value_after_equals(&raw)));
             }
@@ -144,6 +162,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             _ if raw.starts_with("--output-type=") => {
                 output_kind = parse_output_kind(value_after_equals(&raw))?
+            }
+            _ if raw.starts_with("-c") && raw.len() > 2 => {
+                check_ref = Some(parse_check_ref_mode(&raw[2..])?)
             }
             _ if raw.starts_with("-d") && raw.len() > 2 => rm_dup = parse_dup_mode(&raw[2..])?,
             _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
@@ -174,6 +195,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output_kind,
         rm_dup,
         include_expr,
+        check_ref,
     })
 }
 
@@ -212,6 +234,15 @@ fn parse_dup_mode(raw: &str) -> Result<DupMode, ParseOutcome> {
     }
 }
 
+fn parse_check_ref_mode(raw: &str) -> Result<CheckRefMode, ParseOutcome> {
+    match raw {
+        "s" => Ok(CheckRefMode::Swap),
+        _ => Err(ParseOutcome::Error(format!(
+            "unsupported check-ref mode '{raw}' in this local norm slice"
+        ))),
+    }
+}
+
 fn run(args: &Args) -> io::Result<()> {
     let input = read_vcf_text(&args.input)?;
     let reference = args
@@ -219,17 +250,27 @@ fn run(args: &Args) -> io::Result<()> {
         .as_ref()
         .map(FastaReference::open)
         .transpose()?;
-    let include_filter = args
-        .include_expr
-        .as_deref()
-        .map(IncludeFilter::from_expr)
-        .transpose()?;
-    let output = remove_duplicates(
-        &input,
-        args.rm_dup,
-        reference.as_ref(),
-        include_filter.as_ref(),
-    )?;
+    let output = if let Some(CheckRefMode::Swap) = args.check_ref {
+        let reference = reference.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "-c s requires -f/--fasta-ref in this local norm slice",
+            )
+        })?;
+        check_reference_swap(&input, reference)?
+    } else {
+        let include_filter = args
+            .include_expr
+            .as_deref()
+            .map(IncludeFilter::from_expr)
+            .transpose()?;
+        remove_duplicates(
+            &input,
+            args.rm_dup,
+            reference.as_ref(),
+            include_filter.as_ref(),
+        )?
+    };
     write_output(output.as_bytes(), args)
 }
 
@@ -423,6 +464,120 @@ fn value_matches_any(value: &FilterValue, values: &HashSet<String>) -> bool {
         }
         FilterValue::String(value) => values.contains(value),
         FilterValue::List(list) => list.iter().any(|value| value_matches_any(value, values)),
+    }
+}
+
+fn check_reference_swap(input: &str, reference: &FastaReference) -> io::Result<String> {
+    let mut out = String::with_capacity(input.len());
+    let filter_header_seen = input
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
+    let mut filter_header_inserted = false;
+
+    for line in input.lines() {
+        if line.starts_with("##fileformat=") {
+            out.push_str(line);
+            out.push('\n');
+            if !filter_header_seen && !filter_header_inserted {
+                out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+                filter_header_inserted = true;
+            }
+            continue;
+        }
+        if line.starts_with("#CHROM") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+        if fields.len() < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid VCF record with fewer than 8 columns: {line}"),
+            ));
+        }
+        swap_ref_alt_if_needed(&mut fields, reference)?;
+        out.push_str(&fields.join("\t"));
+        out.push('\n');
+    }
+
+    Ok(out)
+}
+
+fn swap_ref_alt_if_needed(fields: &mut [String], reference: &FastaReference) -> io::Result<()> {
+    if fields[3].len() != 1 {
+        return Ok(());
+    }
+    let pos = parse_pos(&fields[1])?;
+    let Some(reference_base) = fetch_base(reference, &fields[0], pos)? else {
+        return Ok(());
+    };
+    if fields[3].as_bytes()[0].to_ascii_uppercase() == reference_base {
+        return Ok(());
+    }
+    let Some(alt_index) = fields[4]
+        .split(',')
+        .position(|alt| alt.len() == 1 && alt.as_bytes()[0].to_ascii_uppercase() == reference_base)
+    else {
+        return Ok(());
+    };
+
+    let old_ref = fields[3].clone();
+    let mut alts: Vec<String> = fields[4].split(',').map(str::to_owned).collect();
+    alts[alt_index] = old_ref;
+    fields[3] = char::from(reference_base).to_string();
+    fields[4] = alts.join(",");
+    swap_genotypes(fields, alt_index + 1);
+    Ok(())
+}
+
+fn swap_genotypes(fields: &mut [String], alt_allele: usize) {
+    if fields.len() <= 9 {
+        return;
+    }
+    let gt_index = fields[8].split(':').position(|key| key == "GT");
+    let Some(gt_index) = gt_index else {
+        return;
+    };
+    for sample in &mut fields[9..] {
+        let mut parts: Vec<String> = sample.split(':').map(str::to_owned).collect();
+        if let Some(gt) = parts.get_mut(gt_index) {
+            *gt = swap_gt_alleles(gt, alt_allele);
+            *sample = parts.join(":");
+        }
+    }
+}
+
+fn swap_gt_alleles(gt: &str, alt_allele: usize) -> String {
+    let mut out = String::with_capacity(gt.len());
+    let mut allele = String::new();
+    for ch in gt.chars() {
+        if ch == '/' || ch == '|' {
+            out.push_str(&swapped_allele(&allele, alt_allele));
+            allele.clear();
+            out.push(ch);
+        } else {
+            allele.push(ch);
+        }
+    }
+    out.push_str(&swapped_allele(&allele, alt_allele));
+    out
+}
+
+fn swapped_allele(raw: &str, alt_allele: usize) -> String {
+    match raw.parse::<usize>() {
+        Ok(0) => alt_allele.to_string(),
+        Ok(value) if value == alt_allele => "0".to_owned(),
+        _ => raw.to_owned(),
     }
 }
 
