@@ -670,17 +670,24 @@ fn can_merge_sampled_same_position(
 
     let site_has_non_ref = alt_contains_non_ref(&site.fixed[4]);
     let record_has_non_ref = alt_contains_non_ref(&record.fixed[4]);
-    let subset_compatible = same_ref_alt_subset_compatible(
+    let same_ref_subset_compatible = same_ref_alt_subset_compatible(
         &site.fixed[3],
         &site.fixed[4],
         &record.fixed[3],
         &record.fixed[4],
     );
+    let ref_extended_subset_compatible = ref_extended_alt_subset_compatible(
+        &site.fixed[3],
+        &site.fixed[4],
+        &record.fixed[3],
+        &record.fixed[4],
+    );
+    let subset_compatible = same_ref_subset_compatible || ref_extended_subset_compatible;
     match merge_mode {
         MergeMode::Default => {
             let site_alts = split_alt(&site.fixed[4]);
             let record_alts = split_alt(&record.fixed[4]);
-            site_alts.is_empty() || record_alts.is_empty() || {
+            ref_extended_subset_compatible || site_alts.is_empty() || record_alts.is_empty() || {
                 let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
                 site_class != CoarseVariantClass::Other
                     && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
@@ -714,6 +721,21 @@ fn same_ref_alt_subset_compatible(a_ref: &str, a_alt: &str, b_ref: &str, b_alt: 
     let a_alts = split_alt(a_alt);
     let b_alts = split_alt(b_alt);
     if a_ref != b_ref || a_ref.is_empty() || a_alts.is_empty() || b_alts.is_empty() {
+        return false;
+    }
+    a_alts.iter().all(|alt| b_alts.contains(alt)) || b_alts.iter().all(|alt| a_alts.contains(alt))
+}
+
+fn ref_extended_alt_subset_compatible(a_ref: &str, a_alt: &str, b_ref: &str, b_alt: &str) -> bool {
+    let Some(merged_ref) = merged_ref(a_ref, b_ref) else {
+        return false;
+    };
+    if a_ref == b_ref {
+        return false;
+    }
+    let a_alts = normalize_alts(a_ref, a_alt, &merged_ref);
+    let b_alts = normalize_alts(b_ref, b_alt, &merged_ref);
+    if a_ref.is_empty() || b_ref.is_empty() || a_alts.is_empty() || b_alts.is_empty() {
         return false;
     }
     a_alts.iter().all(|alt| b_alts.contains(alt)) || b_alts.iter().all(|alt| a_alts.contains(alt))
@@ -918,7 +940,13 @@ fn normalize_alts(reference: &str, alt: &str, merged_ref: &str) -> Vec<String> {
     let suffix = merged_ref.strip_prefix(reference).unwrap_or("");
     split_alt(alt)
         .into_iter()
-        .map(|alt| format!("{alt}{suffix}"))
+        .map(|alt| {
+            if alt == "*" || (alt.starts_with('<') && alt.ends_with('>')) {
+                alt
+            } else {
+                format!("{alt}{suffix}")
+            }
+        })
         .collect()
 }
 
