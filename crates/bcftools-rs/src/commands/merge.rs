@@ -27,7 +27,7 @@ Usage:   bcftools merge [OPTIONS] <A.vcf.gz> <B.vcf.gz> [...]\n\
 Options:\n\
     -l, --file-list FILE            Read input file names from FILE\n\
     -i, --info-rules TAG:METHOD,..  Apply AC:sum/AN:sum in the current text ALT-union slice\n\
-    -m, --merge TYPE                Accepted for command-shape compatibility in this same-site slice\n\
+    -m, --merge TYPE                Support `none`; other modes accepted for command-shape compatibility\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --force-single              Allow a single input for command-shape compatibility\n\
@@ -43,12 +43,19 @@ struct Args {
     output_kind: OutputKind,
     force_samples: bool,
     info_rules: InfoRules,
+    merge_mode: MergeMode,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct InfoRules {
     sum_ac: bool,
     sum_an: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeMode {
+    Default,
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +120,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut force_single = false;
     let mut force_samples = false;
     let mut info_rules = InfoRules::default();
+    let mut merge_mode = MergeMode::Default;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -126,7 +134,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 info_rules = parse_info_rules(&next_string(&mut iter, raw.as_ref())?);
             }
             "-m" | "--merge" => {
-                let _ = next_string(&mut iter, raw.as_ref())?;
+                merge_mode = parse_merge_mode(&next_string(&mut iter, raw.as_ref())?);
             }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
@@ -144,7 +152,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--info-rules=") => {
                 info_rules = parse_info_rules(value_after_equals(&raw))
             }
-            _ if raw.starts_with("--merge=") => {}
+            _ if raw.starts_with("--merge=") => {
+                merge_mode = parse_merge_mode(value_after_equals(&raw))
+            }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
             }
@@ -155,7 +165,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 file_list = Some(PathBuf::from(&raw[2..]))
             }
             _ if raw.starts_with("-i") && raw.len() > 2 => info_rules = parse_info_rules(&raw[2..]),
-            _ if raw.starts_with("-m") && raw.len() > 2 => {}
+            _ if raw.starts_with("-m") && raw.len() > 2 => merge_mode = parse_merge_mode(&raw[2..]),
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?
@@ -187,7 +197,15 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output_kind,
         force_samples,
         info_rules,
+        merge_mode,
     })
+}
+
+fn parse_merge_mode(raw: &str) -> MergeMode {
+    match raw {
+        "none" => MergeMode::None,
+        _ => MergeMode::Default,
+    }
 }
 
 fn parse_info_rules(raw: &str) -> InfoRules {
@@ -246,7 +264,12 @@ fn run(args: &Args) -> io::Result<()> {
     for path in &args.inputs {
         inputs.push(parse_vcf_text(&read_vcf_text(path)?)?);
     }
-    let merged = merge_inputs(&inputs, args.force_samples, args.info_rules)?;
+    let merged = merge_inputs(
+        &inputs,
+        args.force_samples,
+        args.info_rules,
+        args.merge_mode,
+    )?;
     write_output(merged.as_bytes(), args)
 }
 
@@ -344,6 +367,7 @@ fn merge_inputs(
     inputs: &[VcfInput],
     force_samples: bool,
     info_rules: InfoRules,
+    merge_mode: MergeMode,
 ) -> io::Result<String> {
     let first = inputs
         .first()
@@ -386,9 +410,9 @@ fn merge_inputs(
         }
     }
 
-    let mut sites = collect_sites(inputs, info_rules)?;
+    let mut sites = collect_sites(inputs, info_rules, merge_mode)?;
     let contigs = contig_order(&first.meta);
-    sites.sort_by(|a, b| compare_sites(a, b, &contigs));
+    sites.sort_by(|a, b| compare_sites(a, b, &contigs, merge_mode));
 
     for site in sites {
         let mut samples = Vec::new();
@@ -439,7 +463,11 @@ fn render_meta_with_pass_filter(meta: &[String]) -> String {
     out
 }
 
-fn collect_sites(inputs: &[VcfInput], info_rules: InfoRules) -> io::Result<Vec<MergedSite>> {
+fn collect_sites(
+    inputs: &[VcfInput],
+    info_rules: InfoRules,
+    merge_mode: MergeMode,
+) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
     let mut by_locus = HashMap::new();
@@ -468,7 +496,9 @@ fn collect_sites(inputs: &[VcfInput], info_rules: InfoRules) -> io::Result<Vec<M
                     ));
                 }
                 site.samples_by_input[input_idx] = Some(record.samples.clone());
-            } else if let Some(site_idx) = by_locus.get(&locus_key(record)).copied() {
+            } else if merge_mode != MergeMode::None
+                && let Some(site_idx) = by_locus.get(&locus_key(record)).copied()
+            {
                 let site: &mut MergedSite = &mut sites[site_idx];
                 if can_merge_same_locus_alt_union(site, record) {
                     merge_sites_only_alt_union(site, record, info_rules);
@@ -613,7 +643,12 @@ fn contig_order(meta: &[String]) -> HashMap<String, usize> {
     order
 }
 
-fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize>) -> Ordering {
+fn compare_sites(
+    a: &MergedSite,
+    b: &MergedSite,
+    contigs: &HashMap<String, usize>,
+    merge_mode: MergeMode,
+) -> Ordering {
     let a_chrom = a.fixed.first().map(String::as_str).unwrap_or("");
     let b_chrom = b.fixed.first().map(String::as_str).unwrap_or("");
     match (contigs.get(a_chrom).copied(), contigs.get(b_chrom).copied()) {
@@ -634,6 +669,13 @@ fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize
             .and_then(|pos| pos.parse::<u64>().ok())
             .unwrap_or(0);
         a_pos.cmp(&b_pos)
+    })
+    .then_with(|| {
+        if merge_mode == MergeMode::None {
+            a.order.cmp(&b.order)
+        } else {
+            Ordering::Equal
+        }
     })
     .then_with(|| a.fixed.get(2).cmp(&b.fixed.get(2)))
     .then_with(|| a.fixed.get(3).cmp(&b.fixed.get(3)))
@@ -711,7 +753,8 @@ mod tests {
 1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t1/1\n",
         )
         .unwrap();
-        let merged = merge_inputs(&[a, b], false, InfoRules::default()).unwrap();
+        let merged =
+            merge_inputs(&[a, b], false, InfoRules::default(), MergeMode::Default).unwrap();
         assert!(merged.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB"));
         assert!(merged.contains("1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t1/1"));
     }
