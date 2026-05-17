@@ -19,7 +19,7 @@ Status values:
 | `test_index` | enabled | VCF/BCF indexing, explicit output path, and streaming index creation pass in CI. |
 | `test_vcf_idxstats` | enabled | `bcftools index -s/-n` over TBI/CSI, VCF.gz, BCF, and direct CSI paths passes in CI. |
 | `test_vcf_sort` | rust-covered | Rust integration coverage covers coordinate sorting, output formats, write-index, temp-prefix/compression-level shape, and Kestrel header compatibility; full Perl slice still depends on broader `query` parity. |
-| `test_vcf_view` | rust-covered | Rust integration coverage includes VCF/VCF.gz/BCF I/O, sample/region/target filtering, common site filters, genotype/phasing filters, expressions over core/INFO fields, output formats, threading, and Kestrel headers; full Perl parity remains incomplete for advanced FORMAT/sample expression and structured writer semantics. |
+| `test_vcf_view` | rust-covered | Rust integration coverage includes VCF/VCF.gz/BCF I/O, sample/region/target filtering, common site filters, genotype/phasing filters, expressions over core/INFO fields, repeated `-A` symbolic reference ALT trimming with byte-for-byte `merge.gvcf.2.a.{1,2}.out` coverage, output formats, threading, and Kestrel headers; full Perl parity remains incomplete for advanced FORMAT/sample expression and structured writer semantics. |
 | `test_csq` | not-yet-ported | `csq` not ported. |
 | `test_csq_real` | not-yet-ported | `csq` not ported. |
 | `test_gtcheck` | not-yet-ported | `gtcheck` not ported. |

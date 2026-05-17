@@ -45,6 +45,7 @@ Usage:   bcftools view [OPTIONS] <in.vcf.gz>|<in.bcf> [REGION...]\n\
 \n\
 Output options:\n\
     -G, --drop-genotypes              drop individual genotype information\n\
+    -A, --trim-alt-alleles            trim symbolic reference ALT alleles; repeat to trim even if ALT becomes '.'\n\
     -f, --apply-filters LIST          require at least one listed FILTER string\n\
     -g, --genotype [^]hom|het|miss    require or exclude genotype class\n\
     -i, --include EXPR                include only records matching expression\n\
@@ -128,6 +129,7 @@ struct RunOptions<'a> {
     sample_list: Option<&'a str>,
     sample_list_is_file: bool,
     drop_genotypes: bool,
+    trim_alts: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -659,6 +661,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         LongOpt::new("uncalled", HasArg::None, b'u' as i32),
         LongOpt::new("exclude-uncalled", HasArg::None, b'U' as i32),
         LongOpt::new("drop-genotypes", HasArg::None, b'G' as i32),
+        LongOpt::new("trim-alt-alleles", HasArg::None, b'A' as i32),
         LongOpt::new("types", HasArg::Required, b'v' as i32),
         LongOpt::new("exclude-types", HasArg::Required, b'V' as i32),
         LongOpt::new("no-version", HasArg::None, OPT_NO_VERSION),
@@ -678,6 +681,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut sample_list: Option<String> = None;
     let mut sample_list_is_file = false;
     let mut drop_genotypes = false;
+    let mut trim_alts = 0usize;
     let mut apply_filters = None;
     let mut expression_filter = None;
     let mut type_filter = None;
@@ -698,7 +702,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
     let mut target_files = Vec::new();
 
     let mut g = Getopt::new(
-        "o:O:l:f:g:i:e:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGv:V:",
+        "o:O:l:f:g:i:e:kc:C:m:M:npPhHq:Q:r:R:s:S:t:T:uUGAv:V:",
         &long_opts,
         &parse_argv,
     );
@@ -903,6 +907,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
                     }
                 }
                 v if v == b'G' as i32 => drop_genotypes = true,
+                v if v == b'A' as i32 => trim_alts += 1,
                 v if v == b'v' as i32 || v == b'V' as i32 => {
                     let exclude = v == b'V' as i32;
                     if type_filter.is_some() && type_filter_exclude != exclude {
@@ -1089,6 +1094,7 @@ pub fn main(argv: &[OsString]) -> ExitCode {
         sample_list: sample_list.as_deref(),
         sample_list_is_file,
         drop_genotypes,
+        trim_alts,
     };
 
     match run(path, &options, argv) {
@@ -1265,6 +1271,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 in_fmt,
                 options.header_only,
                 options.no_header,
+                options.trim_alts,
                 version_lines.as_ref(),
                 io::stdout().lock(),
             ),
@@ -1273,6 +1280,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                 in_fmt,
                 options.header_only,
                 options.no_header,
+                options.trim_alts,
                 version_lines.as_ref(),
                 File::create(p)?,
             ),
@@ -1307,6 +1315,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    options.trim_alts,
                     None,
                     bgzf,
                 )
@@ -1318,6 +1327,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    options.trim_alts,
                     None,
                     bgzf,
                 )
@@ -1372,6 +1382,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    options.trim_alts,
                     None,
                     io::stdout().lock(),
                 )
@@ -1396,6 +1407,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                     in_fmt,
                     options.header_only,
                     options.no_header,
+                    options.trim_alts,
                     None,
                     File::create(p)?,
                 )
@@ -1437,6 +1449,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                         in_fmt,
                         options.header_only,
                         options.no_header,
+                        options.trim_alts,
                         None,
                         bgzf,
                     )
@@ -1448,6 +1461,7 @@ fn run(path: &Path, options: &RunOptions<'_>, argv: &[OsString]) -> io::Result<(
                         in_fmt,
                         options.header_only,
                         options.no_header,
+                        options.trim_alts,
                         None,
                         bgzf,
                     )
@@ -1624,6 +1638,7 @@ fn write_sample_subset_bcf<W: Write>(
         sample_list: options.sample_list,
         sample_list_is_file: options.sample_list_is_file,
         drop_genotypes: options.drop_genotypes,
+        trim_alts: options.trim_alts,
     };
     write_sample_subset_vcf_text(&text, &bcf_options, version_lines, &mut projected)?;
     write_bcf_from_vcf_text(&projected, out)
@@ -2394,6 +2409,7 @@ fn write_vcf_text_passthrough<W: Write>(
     fmt: format::Format,
     header_only: bool,
     no_header: bool,
+    trim_alts: usize,
     version_lines: Option<&crate::header_version::HeaderVersionLines>,
     out: W,
 ) -> io::Result<()> {
@@ -2405,6 +2421,7 @@ fn write_vcf_text_passthrough<W: Write>(
             BufReader::new(normalized),
             header_only,
             no_header,
+            trim_alts,
             version_lines,
             out,
         );
@@ -2415,6 +2432,7 @@ fn write_vcf_text_passthrough<W: Write>(
         BufReader::new(normalized),
         header_only,
         no_header,
+        trim_alts,
         version_lines,
         out,
     )
@@ -2478,6 +2496,7 @@ fn write_vcf_text_passthrough_reader<R, W>(
     mut reader: R,
     header_only: bool,
     no_header: bool,
+    trim_alts: usize,
     version_lines: Option<&crate::header_version::HeaderVersionLines>,
     mut out: W,
 ) -> io::Result<()>
@@ -2514,7 +2533,8 @@ where
         if header_only {
             break;
         }
-        let normalized = normalize_vcf_text_record_line(&line, &field_types);
+        let trimmed = trim_symbolic_alt_record_line(&line, trim_alts, &field_types);
+        let normalized = normalize_vcf_text_record_line(&trimmed, &field_types);
         out.write_all(normalized.as_bytes())?;
     }
     Ok(())
@@ -2524,6 +2544,8 @@ where
 struct VcfFieldTypes {
     info: HashMap<String, VcfScalarType>,
     format: HashMap<String, VcfScalarType>,
+    info_number: HashMap<String, VcfFieldNumber>,
+    format_number: HashMap<String, VcfFieldNumber>,
 }
 
 #[derive(Clone, Copy)]
@@ -2532,12 +2554,24 @@ enum VcfScalarType {
     Float,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VcfFieldNumber {
+    A,
+    R,
+    G,
+}
+
 impl VcfFieldTypes {
     fn observe_header_line(&mut self, line: &str) {
         if let Some((id, field_type)) = parse_typed_header_line(line, "##INFO=<") {
             self.info.insert(id, field_type);
         } else if let Some((id, field_type)) = parse_typed_header_line(line, "##FORMAT=<") {
             self.format.insert(id, field_type);
+        }
+        if let Some((id, number)) = parse_numbered_header_line(line, "##INFO=<") {
+            self.info_number.insert(id, number);
+        } else if let Some((id, number)) = parse_numbered_header_line(line, "##FORMAT=<") {
+            self.format_number.insert(id, number);
         }
     }
 }
@@ -2548,7 +2582,9 @@ fn parse_typed_header_line(line: &str, prefix: &str) -> Option<(String, VcfScala
     let mut id = None;
     let mut field_type = None;
     for item in body.split(',') {
-        let (key, value) = item.split_once('=')?;
+        let Some((key, value)) = item.split_once('=') else {
+            continue;
+        };
         match key {
             "ID" => id = Some(value.to_string()),
             "Type" => {
@@ -2562,6 +2598,226 @@ fn parse_typed_header_line(line: &str, prefix: &str) -> Option<(String, VcfScala
         }
     }
     Some((id?, field_type?))
+}
+
+fn parse_numbered_header_line(line: &str, prefix: &str) -> Option<(String, VcfFieldNumber)> {
+    let body = line.strip_prefix(prefix)?.trim_end();
+    let body = body.strip_suffix('>').unwrap_or(body);
+    let mut id = None;
+    let mut number = None;
+    for item in body.split(',') {
+        let Some((key, value)) = item.split_once('=') else {
+            continue;
+        };
+        match key {
+            "ID" => id = Some(value.to_string()),
+            "Number" => {
+                number = match value {
+                    "A" => Some(VcfFieldNumber::A),
+                    "R" => Some(VcfFieldNumber::R),
+                    "G" => Some(VcfFieldNumber::G),
+                    _ => None,
+                };
+            }
+            _ => {}
+        }
+    }
+    Some((id?, number?))
+}
+
+fn trim_symbolic_alt_record_line(
+    line: &str,
+    trim_alts: usize,
+    field_types: &VcfFieldTypes,
+) -> String {
+    if trim_alts == 0 {
+        return line.to_string();
+    }
+    let had_newline = line.ends_with('\n');
+    let body = line.trim_end_matches(['\r', '\n']);
+    let mut fields = body.split('\t').map(str::to_string).collect::<Vec<_>>();
+    if fields.len() < 8 {
+        return line.to_string();
+    }
+
+    let alts = split_vcf_list(&fields[4]);
+    if alts.is_empty() {
+        return line.to_string();
+    }
+    let keep_alt = symbolic_trim_keep_alt(&alts, trim_alts);
+    if keep_alt.iter().all(|keep| *keep) {
+        return line.to_string();
+    }
+
+    fields[4] = render_trimmed_alt(&alts, &keep_alt);
+    fields[7] = trim_info_values(&fields[7], &keep_alt, &field_types.info_number);
+    if fields.len() > 9 {
+        let format_keys = fields[8].split(':').map(str::to_string).collect::<Vec<_>>();
+        for sample in &mut fields[9..] {
+            *sample = trim_format_sample_values(
+                sample,
+                &format_keys,
+                &keep_alt,
+                &field_types.format_number,
+            );
+        }
+    }
+
+    let mut out = fields.join("\t");
+    if had_newline {
+        out.push('\n');
+    }
+    out
+}
+
+fn split_vcf_list(raw: &str) -> Vec<&str> {
+    if raw == "." || raw.is_empty() {
+        Vec::new()
+    } else {
+        raw.split(',').collect()
+    }
+}
+
+fn symbolic_trim_keep_alt(alts: &[&str], trim_alts: usize) -> Vec<bool> {
+    alts.iter()
+        .map(|alt| {
+            if !is_symbolic_reference_alt(alt) {
+                true
+            } else if trim_alts >= 2 {
+                false
+            } else {
+                alts.len() == 1
+            }
+        })
+        .collect()
+}
+
+fn is_symbolic_reference_alt(alt: &str) -> bool {
+    alt == "<*>" || alt == "<NON_REF>"
+}
+
+fn render_trimmed_alt(alts: &[&str], keep_alt: &[bool]) -> String {
+    let kept = alts
+        .iter()
+        .zip(keep_alt)
+        .filter_map(|(alt, keep)| keep.then_some(*alt))
+        .collect::<Vec<_>>();
+    if kept.is_empty() {
+        ".".to_owned()
+    } else {
+        kept.join(",")
+    }
+}
+
+fn trim_info_values(
+    info: &str,
+    keep_alt: &[bool],
+    numbers: &HashMap<String, VcfFieldNumber>,
+) -> String {
+    if info == "." || info.is_empty() {
+        return info.to_owned();
+    }
+    info.split(';')
+        .map(|item| {
+            let Some((key, value)) = item.split_once('=') else {
+                return item.to_owned();
+            };
+            match numbers.get(key).copied() {
+                Some(number) => format!("{key}={}", trim_numbered_value(value, keep_alt, number)),
+                None => item.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn trim_format_sample_values(
+    sample: &str,
+    format_keys: &[String],
+    keep_alt: &[bool],
+    numbers: &HashMap<String, VcfFieldNumber>,
+) -> String {
+    sample
+        .split(':')
+        .enumerate()
+        .map(|(idx, value)| {
+            let Some(number) = format_keys
+                .get(idx)
+                .and_then(|key| numbers.get(key))
+                .copied()
+            else {
+                return value.to_owned();
+            };
+            trim_numbered_value(value, keep_alt, number)
+        })
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn trim_numbered_value(value: &str, keep_alt: &[bool], number: VcfFieldNumber) -> String {
+    if value == "." || value.is_empty() {
+        return value.to_owned();
+    }
+    match number {
+        VcfFieldNumber::A => trim_number_a(value, keep_alt),
+        VcfFieldNumber::R => trim_number_r(value, keep_alt),
+        VcfFieldNumber::G => trim_number_g(value, keep_alt),
+    }
+}
+
+fn trim_number_a(value: &str, keep_alt: &[bool]) -> String {
+    let values = value.split(',').collect::<Vec<_>>();
+    let kept = keep_alt
+        .iter()
+        .enumerate()
+        .filter(|(_, keep)| **keep)
+        .map(|(idx, _)| values.get(idx).copied().unwrap_or("."))
+        .collect::<Vec<_>>();
+    if kept.is_empty() {
+        ".".to_owned()
+    } else {
+        kept.join(",")
+    }
+}
+
+fn trim_number_r(value: &str, keep_alt: &[bool]) -> String {
+    let values = value.split(',').collect::<Vec<_>>();
+    let mut kept = vec![values.first().copied().unwrap_or(".")];
+    for (idx, keep) in keep_alt.iter().enumerate() {
+        if *keep {
+            kept.push(values.get(idx + 1).copied().unwrap_or("."));
+        }
+    }
+    kept.join(",")
+}
+
+fn trim_number_g(value: &str, keep_alt: &[bool]) -> String {
+    let values = value.split(',').collect::<Vec<_>>();
+    let kept_alleles = std::iter::once(0)
+        .chain(
+            keep_alt
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, keep)| keep.then_some(idx + 1)),
+        )
+        .collect::<Vec<_>>();
+    let mut kept = Vec::new();
+    for (b_idx, old_b) in kept_alleles.iter().enumerate() {
+        for old_a in &kept_alleles[..=b_idx] {
+            kept.push(
+                values
+                    .get(vcf_genotype_index(*old_a, *old_b))
+                    .copied()
+                    .unwrap_or("."),
+            );
+        }
+    }
+    kept.join(",")
+}
+
+fn vcf_genotype_index(a: usize, b: usize) -> usize {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    hi * (hi + 1) / 2 + lo
 }
 
 fn normalize_vcf_text_record_line(line: &str, field_types: &VcfFieldTypes) -> String {
