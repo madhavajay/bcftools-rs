@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #125 (`progress/merge-gvcf10-text-fixtures`, merge commit
+  `8743da0`) added narrow gVCF reference-symbolic same-position handling in
+  the text-backed `merge` slice, with byte-for-byte
+  `merge.gvcf.10.{1,2}.out` coverage.
 - 2026-05-17: PR #123 (`progress/merge-broken-gvcf-text-fixture`, merge
   commit `43b8a2c`) added narrow exact-site reference-block handling in the
   text-backed `merge` slice, with byte-for-byte `merge.broken-gvcf.1.out`
@@ -459,11 +463,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`2152996`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`8743da0`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf10-text-fixtures` is
-  adding byte-for-byte `merge.gvcf.10.{1,2}.out` coverage for the narrow
-  text-backed gVCF reference-symbolic same-position merge path. Keep the
+- Current code slice in flight: none after PR #125; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
