@@ -26,16 +26,17 @@ struct Bins {
 }
 
 impl Bins {
-    /// Port of `bin_init(list_def, 0, 1)` for the comma-list form.
+    /// Port of `bin_init(list_def, 0, 1)`.
     fn new(list_def: &str) -> Result<Bins, String> {
-        if !list_def.contains(',') {
-            return Err(format!(
-                "af-dist bin file form '{list_def}' is not supported in this slice"
-            ));
-        }
         let (min, max) = (0.0f32, 1.0f32);
+        let list = if list_def.contains(',') {
+            list_def.split(',').map(str::to_owned).collect()
+        } else {
+            read_bin_file(list_def)?
+        };
+
         let mut bins: Vec<f32> = Vec::new();
-        for tok in list_def.split(',') {
+        for tok in list {
             let v: f64 = tok
                 .parse()
                 .map_err(|_| format!("Could not parse {list_def}: {tok}"))?;
@@ -48,7 +49,11 @@ impl Bins {
             bins.push(v);
         }
         if min != max {
-            assert!(bins.len() > 1);
+            if bins.len() <= 1 {
+                return Err(format!(
+                    "Expected at least two bin boundaries in {list_def}"
+                ));
+            }
             let max_err = (bins[1] - bins[0]) * 1e-6;
             if (bins[0] - min).abs() > max_err {
                 bins.insert(0, min);
@@ -94,6 +99,16 @@ impl Bins {
             (imin - 1) as usize
         }
     }
+}
+
+fn read_bin_file(list_def: &str) -> Result<Vec<String>, String> {
+    let text =
+        fs::read_to_string(list_def).map_err(|_| format!("Error: failed to read {list_def}"))?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Reads the input VCF/BCF and returns the af-dist report text (including
@@ -360,6 +375,21 @@ mod tests {
         assert_eq!(b.size(), 11);
         assert_eq!(b.value(0), 0.0);
         assert_eq!(b.value(10), 1.0);
+    }
+
+    #[test]
+    fn bin_file_reads_one_boundary_per_line_and_inserts_extremes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("bins.txt");
+        fs::write(&path, "0.25\n0.5\n0.75\n\n").unwrap();
+
+        let b = Bins::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(b.size(), 5);
+        assert_eq!(b.value(0), 0.0);
+        assert_eq!(b.value(1), 0.25);
+        assert_eq!(b.value(2), 0.5);
+        assert_eq!(b.value(3), 0.75);
+        assert_eq!(b.value(4), 1.0);
     }
 
     #[test]

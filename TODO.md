@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #196
+  (`progress/todo-sync-after-missing2ref-major-phased`, merge commit
+  `df15fa7`) synced the TODO docs after PR #195.
 - 2026-05-17: PR #195 (`progress/missing2ref-major-phased`, merge commit
   `b2e34bc`) added `+missing2ref -p` / `--phased` and `-m` / `--major`
   genotype-fill modes, covering phased separator behavior and per-record
@@ -642,10 +645,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`b2e34bc`) (304 lib unit tests plus per-command
+  latest merged commit on `main` (`df15fa7`) (304 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/af-dist-bin-files` — add
+  `+af-dist -d` / `--dev-bins` and `-p` / `--prob-bins` bin-definition file
+  inputs.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1117,13 +1121,12 @@ Current local slice:
   (`|AF - nALT/nALL|`), with all binning arithmetic in `f32` to match
   upstream's `float` edge sensitivity. Skips records with no INFO/AF and
   samples that are not fully called (vector_end/missing). VCF/VCF.gz/BCF
-  and stdin input; `-t`/`--af-tag`, `-d`/`--dev-bins`, `-p`/`--prob-bins`,
-  and `-l`/`--list min,max` debug genotype dumps for matching RA/AA
-  probabilities.
+  and stdin input; `-t`/`--af-tag`, `-d`/`--dev-bins` and
+  `-p`/`--prob-bins` comma lists or one-boundary-per-line files, and
+  `-l`/`--list min,max` debug genotype dumps for matching RA/AA probabilities.
   Byte-for-byte parity with `af-dist.out` after the harness
-  `grep -v bcftools`. 2 integration tests in
-  `crates/bcftools-rs/tests/plugin_af_dist.rs` + 5 unit tests. Remaining:
-  bin-definition file inputs for `-d`/`-p`.
+  `grep -v bcftools`. 3 integration tests in
+  `crates/bcftools-rs/tests/plugin_af_dist.rs` + 6 unit tests.
 - [x] `+smpl-stats` (`crates/bcftools-rs/src/commands/plugins/smpl_stats.rs`,
   default "all" filter): port of `smpl-stats.c` `process_record`/`destroy`.
   Per-sample stats (npass, non-ref, homRR, homAA, het, hemi, SNV, indel,
