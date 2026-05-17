@@ -552,12 +552,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`37049ce`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`8c12ab4`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none after PR #165; start one focused
-  local-only branch from fresh `main` for the next TODO item, keep the
-  one-branch rule, run the full local gate, and wait for both required GitHub
-  checks before merge.
+- Current code slice in flight: `progress/norm-existing-split-fixtures`,
+  adding Rust coverage for already-supported upstream `norm.breakend.1.1.out`
+  and `norm.5.{1,2}.out` split fixtures. Keep the one-branch rule, run the
+  full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -806,7 +806,7 @@ The waves are ordered to land foundational machinery first (read/write/index, th
 ### Wave B — File-Level Manipulation
 
 - [ ] `norm` (`vcfnorm.c`, 116k) — left-align indels, split/join multiallelics (`-m -/+any/+snps/+indels/+both`), `-c` reference-check modes, `--rm-dup`, `--atomize`, `-N`. Depends on Phase 1 `abuf`, `vcfbuf`, reference. Covered by `test_vcf_norm`.
-  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, `-i`/`--include` gating for duplicate-removal decisions including `ID=@file` file membership and simple shared filter expressions, narrow `-c s` reference-check swap behavior, narrow `-m -` multiallelic splitting with `-S lex` ordering and `--multi-overlaps .|0` GT projection, narrow filtered `-m +both` multiallelic joining for simple records, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode and for `-c s`, narrow FASTA-backed left alignment for symbolic `<DEL>` records and simple one-base deletions before duplicate removal, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out`, `norm.rmdup.2.{1,2}.out`, `norm.rmdup.3.{1,2}.out`, `norm.filter.{1,2}.out`, `norm.check-ref.1.out`, `norm.sort.{1,2}.out`, and `norm.split.5.1.out` text coverage, and `--no-version` command-shape compatibility. 11 integration tests in `crates/bcftools-rs/tests/norm.rs`.
+  - [x] Snapshot coverage (`crates/bcftools-rs/src/commands/norm.rs`): first local command slice for duplicate-record removal with `-d`/`--rm-dup none|exact|snps|indels|both|any|all`, `-i`/`--include` gating for duplicate-removal decisions including `ID=@file` file membership and simple shared filter expressions, narrow `-c s` reference-check swap behavior, narrow `-m -` multiallelic splitting with `-S lex` ordering and `--multi-overlaps .|0` GT projection, narrow filtered `-m +both` multiallelic joining for simple records, VCF/VCF.gz/BCF input, VCF/BGZF VCF/BCF output via `-O v|z|u|b`, `-o` file output, upstream-style PASS filter header insertion/preservation for normalized VCF text, `-f`/`--fasta-ref` command-shape compatibility in duplicate-removal mode and for `-c s`, narrow FASTA-backed left alignment for symbolic `<DEL>` records and simple one-base deletions before duplicate removal, byte-for-byte upstream `norm.rmdup.{1,2,3,4,5}.out`, `norm.rmdup.2.{1,2}.out`, `norm.rmdup.3.{1,2}.out`, `norm.filter.{1,2}.out`, `norm.check-ref.1.out`, `norm.sort.{1,2}.out`, `norm.split.5.1.out`, `norm.breakend.1.1.out`, and `norm.5.{1,2}.out` text coverage, and `--no-version` command-shape compatibility. 12 integration tests in `crates/bcftools-rs/tests/norm.rs`.
   - [ ] Remaining: left alignment, broader reference-check modes (`-c`), general split/join multiallelics (`-m`), atomization, old-record tags, keep-sum INFO/FORMAT projection beyond GT, overlap handling, right alignment with GFF, symbolic allele edge cases, and full upstream `test_vcf_norm` parity.
 - [x] `sort` (`vcfsort.c`) — coordinate sort with disk-backed external-sort fallback (`extsort.c`). Covered by `test_vcf_sort`.
   - [x] **VNtyper compatibility target**: support the exact command shape used by upstream VNtyper's Kestrel post-processing:
