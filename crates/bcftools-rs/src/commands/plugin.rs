@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::commands::plugins::fill_from_fasta::FilterMode as FillFromFastaFilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
 use crate::diagnostics::fmt_etag;
 
@@ -63,6 +64,20 @@ fn set_missing2ref_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one missing2ref -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_fill_from_fasta_filter(
+    target: &mut Option<(FillFromFastaFilterMode, String)>,
+    mode: FillFromFastaFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one fill-from-fasta -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -343,7 +358,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut ff_fasta: Option<String> = None;
     let mut ff_header: Option<String> = None;
     let mut ff_replace_n = false;
-    let mut ff_has_filter = false;
+    let mut ff_filter: Option<(FillFromFastaFilterMode, String)> = None;
     // parental-origin options.
     let mut po_region: Option<String> = None;
     let mut po_type: Option<String> = None;
@@ -442,8 +457,57 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-i" | "--include" | "-e" | "--exclude"
                 if plugin_name.as_deref() == Some("fill-from-fasta") =>
             {
-                ff_has_filter = true;
-                let _ = iter.next();
+                let mode = if raw == "-i" || raw == "--include" {
+                    FillFromFastaFilterMode::Include
+                } else {
+                    FillFromFastaFilterMode::Exclude
+                };
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::other("fill-from-fasta requires an expression after -i/-e")
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+                set_fill_from_fasta_filter(&mut ff_filter, mode, expr)?;
+            }
+            _ if raw.starts_with("--include=")
+                && plugin_name.as_deref() == Some("fill-from-fasta") =>
+            {
+                set_fill_from_fasta_filter(
+                    &mut ff_filter,
+                    FillFromFastaFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=")
+                && plugin_name.as_deref() == Some("fill-from-fasta") =>
+            {
+                set_fill_from_fasta_filter(
+                    &mut ff_filter,
+                    FillFromFastaFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("fill-from-fasta") =>
+            {
+                set_fill_from_fasta_filter(
+                    &mut ff_filter,
+                    FillFromFastaFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("fill-from-fasta") =>
+            {
+                set_fill_from_fasta_filter(
+                    &mut ff_filter,
+                    FillFromFastaFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             "-h" | "--help" | "-?" => help = true,
             "-V" | "--version" => version = true,
@@ -1149,7 +1213,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             col,
             ff_header.as_deref().map(Path::new),
             ff_replace_n,
-            ff_has_filter,
+            ff_filter.as_ref().map(|(mode, expr)| {
+                crate::commands::plugins::fill_from_fasta::FilterSpec { mode: *mode, expr }
+            }),
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);

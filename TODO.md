@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #208
+  (`progress/todo-sync-after-missing2ref-common-filter`, merge commit
+  `1bc951b`) synced the TODO docs after PR #207.
 - 2026-05-18: PR #207 (`progress/missing2ref-common-filter`, merge commit
   `a00461e`) added common `+missing2ref -i` / `-e` record filtering through
   the shared text filter engine, filtering records before missing-GT rewrite
@@ -683,10 +686,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`a00461e`) (316 lib unit tests plus
+  latest merged commit on `main` (`1bc951b`) (316 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/fill-from-fasta-plugin-filter`,
+  adding plugin-specific `+fill-from-fasta -- -i/-e` filters through the
+  shared text filter engine while preserving upstream annotate-only behavior:
+  records that do not pass the plugin filter are still emitted unchanged.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1394,11 +1399,14 @@ Current local slice:
   (name = first token after `>`, no `.fai` needed), fetches
   `[pos, pos+ref_len)`, applies the upstream uppercasing
   (`c>96 ? c-32`) and `-N` non-ACGTN→N, and supports the `-h`
-  header-line append. Byte-for-byte parity with `ref.out` (`-c REF`)
-  and `aa.2.out` (`-c REF -N`). 2 integration tests in
-  `crates/bcftools-rs/tests/plugin_fill_from_fasta.rs` + 1 unit test.
-  Remaining: `-i`/`-e` filtering (the `aa.out` row needs
-  `-i 'TYPE="snp"'`) — filter engine.
+  header-line append. Plugin-specific `-i`/`-e` filters route through the
+  shared text filter engine and match upstream's annotate-only behavior:
+  non-matching records remain in the output unchanged. Byte-for-byte parity
+  with `aa.out` (`-c AA -h aa.hdr -i 'TYPE="snp"'`), `ref.out` (`-c REF`),
+  and `aa.2.out` (`-c REF -N`). 3 integration tests in
+  `crates/bcftools-rs/tests/plugin_fill_from_fasta.rs` + 2 unit tests.
+  Remaining: full bcftools filter-expression parity is limited by the shared
+  filter engine.
 - [x] `+scatter` (`crates/bcftools-rs/src/commands/plugins/scatter.rs`):
   port of `scatter.c`. Splits a VCF into multiple VCFs by fixed-size
   chunks (`-n N`, sequential integer-named files) or a region list
