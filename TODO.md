@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #206
+  (`progress/todo-sync-after-contrast-rare-allele-summary`, merge commit
+  `d6a052b`) synced the TODO docs after PR #205.
 - 2026-05-18: PR #205 (`progress/contrast-rare-allele-summary`, merge
   commit `06f76d1`) added `+contrast -f` / `--max-allele-freq`
   rare-allele enrichment summary output on stderr, including upstream-style
@@ -676,10 +679,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`06f76d1`) (315 lib unit tests plus
+  latest merged commit on `main` (`d6a052b`) (315 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/missing2ref-common-filter`,
+  adding common `+missing2ref -i` / `-e` record filtering through the
+  existing shared text filter engine without touching `htslib-rs`,
+  `noodles`, or their submodules.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1104,12 +1109,14 @@ Current local slice:
   replaced with either reference allele `0` or the per-record major called
   allele; phased mode mirrors HTSlib text output by using `|` before replaced
   missing alleles, while all other FORMAT subfields are byte-preserved; GT
-  located by FORMAT key index (not position). VCF/VCF.gz/BCF and stdin input;
-  `-o`/`-O u|b|v|z` output via a shared `write_plugin_output` helper in
-  `plugin.rs`. Byte-for-byte parity with the upstream `plugin1.vcf` ->
+  located by FORMAT key index (not position); common `-i`/`-e` record
+  filtering through the shared text filter engine. VCF/VCF.gz/BCF and stdin
+  input; `-o`/`-O u|b|v|z` output via a shared `write_plugin_output` helper
+  in `plugin.rs`. Byte-for-byte parity with the upstream `plugin1.vcf` ->
   `missing2ref.out` fixture (`test_vcf_plugin` / `+missing2ref --no-version`).
-  6 integration tests in `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 7
-  unit tests. Remaining: `-e`/expression-gated mode.
+  7 integration tests in `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 8
+  unit tests. Remaining: full bcftools filter-expression parity is limited by
+  the shared filter engine.
 - [x] `+add-variantkey` (`crates/bcftools-rs/src/commands/plugins/add_variantkey.rs`,
   shared algorithm in `plugins/variantkey.rs`): appends `VKX` (16-hex 64-bit
   VariantKey over CHROM, 0-based POS, REF, first ALT) and `RSX` (8-hex of the

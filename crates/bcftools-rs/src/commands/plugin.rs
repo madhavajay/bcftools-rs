@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
 use crate::diagnostics::fmt_etag;
 
 const USAGE: &str = "\n\
@@ -52,6 +53,20 @@ fn parse_out_kind(raw: &str) -> OutKind {
         Some(b'u' | b'b') => OutKind::Bcf,
         _ => OutKind::VcfText,
     }
+}
+
+fn set_missing2ref_filter(
+    target: &mut Option<(Missing2RefFilterMode, String)>,
+    mode: Missing2RefFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one missing2ref -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +279,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // missing2ref options.
     let mut missing2ref_phased = false;
     let mut missing2ref_major = false;
+    let mut missing2ref_filter: Option<(Missing2RefFilterMode, String)> = None;
     // af-dist options.
     let mut af_tag: Option<String> = None;
     let mut dev_bins: Option<String> = None;
@@ -525,9 +541,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-t" | "--tags" if plugin_name.as_deref() == Some("fixploidy") => {
                 let _ = iter.next();
             }
-            "-i" | "--include" | "-e" | "--exclude" | "--regions" | "-R" | "--regions-file"
-            | "--targets" | "-T" | "--targets-file" | "--regions-overlap" | "--targets-overlap"
-            | "--threads" => {
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() != Some("missing2ref") =>
+            {
+                let _ = iter.next();
+            }
+            "--regions" | "-R" | "--regions-file" | "--targets" | "-T" | "--targets-file"
+            | "--regions-overlap" | "--targets-overlap" | "--threads" => {
                 let _ = iter.next();
             }
             // `-r` is `--regions` (value) before `--`, `--replace` (flag) after.
@@ -605,6 +625,64 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-p" | "--phased" if plugin_name.as_deref() == Some("missing2ref") => {
                 missing2ref_phased = true;
+            }
+            "-i" | "--include" if plugin_name.as_deref() == Some("missing2ref") => {
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("missing2ref requires an expression after -i"))?
+                    .to_string_lossy()
+                    .into_owned();
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Include,
+                    expr,
+                )?;
+            }
+            "-e" | "--exclude" if plugin_name.as_deref() == Some("missing2ref") => {
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("missing2ref requires an expression after -e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Exclude,
+                    expr,
+                )?;
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("missing2ref") => {
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("missing2ref") => {
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("missing2ref") =>
+            {
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("missing2ref") =>
+            {
+                set_missing2ref_filter(
+                    &mut missing2ref_filter,
+                    Missing2RefFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             "-p" | "--ped" => {
                 ped_file = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -904,6 +982,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             Path::new(&input),
             missing2ref_phased,
             missing2ref_major,
+            missing2ref_filter.as_ref().map(|(mode, expr)| {
+                crate::commands::plugins::missing2ref::FilterSpec { mode: *mode, expr }
+            }),
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);

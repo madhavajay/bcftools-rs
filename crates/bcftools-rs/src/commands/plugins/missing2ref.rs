@@ -2,8 +2,8 @@
 //!
 //! Sets missing genotypes to the reference or major allele. This local slice
 //! rewrites missing `.` allele tokens inside the `GT` FORMAT subfield while
-//! preserving all other FORMAT subfields byte-for-byte. The `-e` expression
-//! mode remains tracked in `TODO.md`.
+//! preserving all other FORMAT subfields byte-for-byte. Common `-i`/`-e`
+//! record filters route through the shared text filter engine.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -13,15 +13,38 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext};
 use crate::vcf_compat::normalize_vcf_text;
 
-/// Reads the input VCF/BCF and returns the missing-to-ref rewritten VCF text.
-pub fn run(input: &Path, phased: bool, major: bool) -> io::Result<String> {
-    let text = read_vcf_text(input)?;
-    Ok(rewrite(&text, phased, major))
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
 }
 
-fn rewrite(text: &str, phased: bool, major: bool) -> String {
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
+}
+
+/// Reads the input VCF/BCF and returns the missing-to-ref rewritten VCF text.
+pub fn run(
+    input: &Path,
+    phased: bool,
+    major: bool,
+    filter: Option<FilterSpec<'_>>,
+) -> io::Result<String> {
+    let text = read_vcf_text(input)?;
+    rewrite(&text, phased, major, filter)
+}
+
+fn rewrite(
+    text: &str,
+    phased: bool,
+    major: bool,
+    filter: Option<FilterSpec<'_>>,
+) -> io::Result<String> {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -29,10 +52,35 @@ fn rewrite(text: &str, phased: bool, major: bool) -> String {
             out.push('\n');
             continue;
         }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if let Some(filter) = filter
+            && !record_passes(&fields, filter)?
+        {
+            continue;
+        }
         out.push_str(&rewrite_record(line, phased, major));
         out.push('\n');
     }
-    out
+    Ok(out)
+}
+
+fn record_passes(fields: &[&str], filter: FilterSpec<'_>) -> io::Result<bool> {
+    if fields.len() < 8 {
+        return Ok(true);
+    }
+    let fields_owned: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, &fields_owned)
+        })?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
 }
 
 fn rewrite_record(line: &str, phased: bool, major: bool) -> String {
@@ -221,7 +269,7 @@ mod tests {
         let vcf = "##fileformat=VCFv4.2\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n\
 1\t1\t.\tC\tT\t.\tPASS\t.\tGT\t./.\t0/1\n";
-        let out = rewrite(vcf, false, false);
+        let out = rewrite(vcf, false, false, None).unwrap();
         assert!(out.contains("##fileformat=VCFv4.2\n"));
         assert!(out.contains("\tGT\t0/0\t0/1\n"), "{out}");
     }
@@ -244,5 +292,39 @@ mod tests {
             rewrite_record(tie, false, true),
             "1\t10\t.\tC\tT\t.\tPASS\t.\tGT\t0/1\t0/0"
         );
+    }
+
+    #[test]
+    fn include_exclude_filters_select_records_before_rewrite() {
+        let vcf = "##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n\
+1\t10\t.\tC\tT\t.\tPASS\tDP=5\tGT\t./.\n\
+1\t20\t.\tC\tG\t.\tPASS\tDP=8\tGT\t./.\n";
+
+        let out = rewrite(
+            vcf,
+            false,
+            false,
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: "DP=5",
+            }),
+        )
+        .unwrap();
+        assert!(out.contains("1\t10\t.\tC\tT\t.\tPASS\tDP=5\tGT\t0/0\n"));
+        assert!(!out.contains("1\t20\t"));
+
+        let out = rewrite(
+            vcf,
+            false,
+            false,
+            Some(FilterSpec {
+                mode: FilterMode::Exclude,
+                expr: "DP=5",
+            }),
+        )
+        .unwrap();
+        assert!(!out.contains("1\t10\t"));
+        assert!(out.contains("1\t20\t.\tC\tG\t.\tPASS\tDP=8\tGT\t0/0\n"));
     }
 }

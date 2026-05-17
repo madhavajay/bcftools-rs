@@ -136,6 +136,43 @@ fn missing2ref_reads_stdin() {
 }
 
 #[test]
+fn missing2ref_common_include_exclude_filters_records() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("filter.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n\
+1\t10\t.\tC\tT\t.\tPASS\tDP=5\tGT\t./.\n\
+1\t20\t.\tC\tG\t.\tPASS\tDP=8\tGT\t./.\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "+missing2ref",
+        "--no-version",
+        "-i",
+        "DP=5",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "+missing2ref -i failed: {err}");
+    assert!(out.contains("1\t10\t.\tC\tT\t.\tPASS\tDP=5\tGT\t0/0\n"));
+    assert!(!out.contains("1\t20\t"));
+
+    let (out, err, code) = run(&[
+        "+missing2ref",
+        "--no-version",
+        "--exclude=DP=5",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "+missing2ref -e failed: {err}");
+    assert!(!out.contains("1\t10\t"));
+    assert!(out.contains("1\t20\t.\tC\tG\t.\tPASS\tDP=8\tGT\t0/0\n"));
+}
+
+#[test]
 fn missing2ref_phased_and_major_modes() {
     let dir = TempDir::new().unwrap();
     let input = dir.path().join("major.vcf");
