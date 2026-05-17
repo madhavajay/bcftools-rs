@@ -270,6 +270,40 @@ fn norm_split_multi_overlaps_missing_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn norm_existing_split_fixtures_match_upstream_text_output() {
+    for (input_name, args, fixture) in [
+        (
+            "norm.breakend.1.vcf",
+            vec!["-m", "-"],
+            "norm.breakend.1.1.out",
+        ),
+        (
+            "norm.5.vcf",
+            vec!["-m", "-", "--multi-overlaps", "0"],
+            "norm.5.1.out",
+        ),
+        (
+            "norm.5.vcf",
+            vec!["-m", "-", "--multi-overlaps", "."],
+            "norm.5.2.out",
+        ),
+    ] {
+        let input = fixture_path(input_name);
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let mut command_args = vec!["norm", "--no-version"];
+        command_args.extend(args);
+        command_args.push(input.to_str().unwrap());
+        let (out, err, code) = run(&command_args);
+        assert_eq!(code, 0, "norm split fixture {fixture} failed: {err}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm split fixture {fixture} differed"
+        );
+    }
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");
