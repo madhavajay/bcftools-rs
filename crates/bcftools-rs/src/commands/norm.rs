@@ -16,6 +16,7 @@ use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
 use crate::diagnostics::fmt_etag;
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::reference::FastaReference;
 use crate::vcf_compat::normalize_vcf_text;
 
@@ -26,6 +27,7 @@ Usage:   bcftools norm [OPTIONS] <in.vcf.gz>\n\
 Options:\n\
     -d, --rm-dup TYPE              Remove duplicate records: snps|indels|both|all|exact|none|any\n\
     -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
+    -i, --include EXPR             Include records matching EXPR in duplicate-removal decisions\n\
     -o, --output FILE              Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9] u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --no-version               Accepted for command-shape compatibility\n\
@@ -38,6 +40,7 @@ struct Args {
     output: Option<PathBuf>,
     output_kind: OutputKind,
     rm_dup: DupMode,
+    include_expr: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +106,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
     let mut rm_dup = DupMode::None;
+    let mut include_expr = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -115,6 +119,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-f" | "--fasta-ref" => {
                 fasta_ref = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?));
             }
+            "-i" | "--include" => include_expr = Some(next_string(&mut iter, raw.as_ref())?),
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -128,6 +133,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--fasta-ref=") => {
                 fasta_ref = Some(PathBuf::from(value_after_equals(&raw)));
             }
+            _ if raw.starts_with("--include=") => {
+                include_expr = Some(value_after_equals(&raw).to_owned());
+            }
             _ if raw.starts_with("-f") && raw.len() > 2 => {
                 fasta_ref = Some(PathBuf::from(&raw[2..]));
             }
@@ -138,6 +146,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 output_kind = parse_output_kind(value_after_equals(&raw))?
             }
             _ if raw.starts_with("-d") && raw.len() > 2 => rm_dup = parse_dup_mode(&raw[2..])?,
+            _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?
@@ -164,6 +173,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output,
         output_kind,
         rm_dup,
+        include_expr,
     })
 }
 
@@ -209,7 +219,17 @@ fn run(args: &Args) -> io::Result<()> {
         .as_ref()
         .map(FastaReference::open)
         .transpose()?;
-    let output = remove_duplicates(&input, args.rm_dup, reference.as_ref())?;
+    let include_filter = args
+        .include_expr
+        .as_deref()
+        .map(IncludeFilter::from_expr)
+        .transpose()?;
+    let output = remove_duplicates(
+        &input,
+        args.rm_dup,
+        reference.as_ref(),
+        include_filter.as_ref(),
+    )?;
     write_output(output.as_bytes(), args)
 }
 
@@ -256,6 +276,7 @@ fn remove_duplicates(
     input: &str,
     mode: DupMode,
     reference: Option<&FastaReference>,
+    include_filter: Option<&IncludeFilter>,
 ) -> io::Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut seen = HashSet::new();
@@ -297,6 +318,15 @@ fn remove_duplicates(
         if let Some(reference) = reference {
             normalize_duplicate_record(&mut fields, reference)?;
         }
+        if include_filter
+            .map(|filter| filter.matches(&fields))
+            .transpose()?
+            == Some(false)
+        {
+            out.push_str(&fields.join("\t"));
+            out.push('\n');
+            continue;
+        }
         let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
         let keys = duplicate_keys(&field_refs, mode);
         let is_dup = keys.iter().any(|key| seen.contains(key));
@@ -308,6 +338,92 @@ fn remove_duplicates(
     }
 
     Ok(out)
+}
+
+#[derive(Debug)]
+enum IncludeFilter {
+    Expression(String),
+    FileMembership {
+        token: String,
+        negate: bool,
+        values: HashSet<String>,
+    },
+}
+
+impl IncludeFilter {
+    fn from_expr(raw: &str) -> io::Result<Self> {
+        if let Some((token, negate, path)) = parse_file_membership(raw) {
+            let text = fs::read_to_string(path)?;
+            let values = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            return Ok(Self::FileMembership {
+                token,
+                negate,
+                values,
+            });
+        }
+        Ok(Self::Expression(raw.to_owned()))
+    }
+
+    fn matches(&self, fields: &[String]) -> io::Result<bool> {
+        match self {
+            Self::Expression(expr) => evaluate_expression(expr, fields),
+            Self::FileMembership {
+                token,
+                negate,
+                values,
+            } => {
+                let matched = super::filter::record_lookup(token, fields)
+                    .is_some_and(|value| value_matches_any(&value, values));
+                Ok(matched != *negate)
+            }
+        }
+    }
+}
+
+fn parse_file_membership(raw: &str) -> Option<(String, bool, &str)> {
+    for (needle, negate) in [("!=", true), ("==", false), ("=", false)] {
+        let Some((lhs, rhs)) = raw.split_once(needle) else {
+            continue;
+        };
+        let path = rhs.trim().strip_prefix('@')?;
+        return Some((
+            lhs.trim().to_owned(),
+            negate,
+            path.trim_matches(|c| c == '"' || c == '\''),
+        ));
+    }
+    None
+}
+
+fn evaluate_expression(expr: &str, fields: &[String]) -> io::Result<bool> {
+    bcffilter::eval_expression_with(expr, &EvalContext::new(), |name, sample_index| {
+        if sample_index.is_some() {
+            return None;
+        }
+        super::filter::record_lookup(name, fields)
+    })
+    .map(|value| value.truthy())
+}
+
+fn value_matches_any(value: &FilterValue, values: &HashSet<String>) -> bool {
+    match value {
+        FilterValue::Missing => values.contains("."),
+        FilterValue::Bool(value) => values.contains(if *value { "true" } else { "false" }),
+        FilterValue::Number(value) => {
+            if value.fract() == 0.0 {
+                values.contains(&format!("{value:.0}"))
+            } else {
+                values.contains(&value.to_string())
+            }
+        }
+        FilterValue::String(value) => values.contains(value),
+        FilterValue::List(list) => list.iter().any(|value| value_matches_any(value, values)),
+    }
 }
 
 fn normalize_duplicate_record(fields: &mut [String], reference: &FastaReference) -> io::Result<()> {
@@ -557,7 +673,7 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
 1\t2\t.\tA\tC\t.\t.\t.\n\
 1\t2\t.\tA\tG\t.\t.\t.\n";
-        let out = remove_duplicates(input, DupMode::All, None).unwrap();
+        let out = remove_duplicates(input, DupMode::All, None, None).unwrap();
         assert!(out.contains("1\t2\t.\tA\tC\t.\t.\t."));
         assert!(!out.contains("1\t2\t.\tA\tG\t.\t.\t."));
     }
