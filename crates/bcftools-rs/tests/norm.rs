@@ -201,6 +201,38 @@ fn norm_filter_join_multiallelic_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn norm_join_missing_ploidy_fixture_matches_upstream_text_output() {
+    let input = fixture_path("norm.join-missing-ploidy.vcf");
+    let expected = std::fs::read_to_string(fixture_path("norm.join-missing-ploidy.1.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "norm",
+        "--no-version",
+        "-m",
+        "+both",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "norm -m +both missing ploidy failed: {err}");
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
+fn norm_join_both_keeps_snp_and_indel_groups_separate() {
+    let input = fixture_path("norm.4.vcf");
+    let expected = std::fs::read_to_string(fixture_path("norm.4.1.out")).unwrap();
+
+    let (out, err, code) = run(&[
+        "norm",
+        "--no-version",
+        "-m",
+        "+both",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "norm -m +both fixture failed: {err}");
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
 fn norm_check_ref_swap_matches_upstream_text_output() {
     let input = fixture_path("norm.check-ref.vcf");
     let reference = fixture_path("norm.check-ref.fa");
