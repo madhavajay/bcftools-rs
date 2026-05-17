@@ -69,9 +69,10 @@ enum OutputKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FormatNumber {
+enum VcfNumber {
     A,
     R,
+    G,
     Other,
 }
 
@@ -406,6 +407,8 @@ fn merge_inputs(
     let fileformat = merged_fileformat(inputs);
     let merged_meta = merged_meta(inputs);
     let format_numbers = format_numbers(&merged_meta);
+    let info_numbers = info_numbers(&merged_meta);
+    let ordered_info_numbers = ordered_info_numbers(&merged_meta);
     let mut out = render_meta_with_pass_filter(&merged_meta, info_rules, fileformat.as_deref());
     out.push_str(&first.fixed_header.join("\t"));
     if !sample_names.is_empty() {
@@ -423,7 +426,14 @@ fn merge_inputs(
         }
     }
 
-    let mut sites = collect_sites(inputs, info_rules, merge_mode, &format_numbers)?;
+    let mut sites = collect_sites(
+        inputs,
+        info_rules,
+        merge_mode,
+        &format_numbers,
+        &info_numbers,
+        &ordered_info_numbers,
+    )?;
     let contigs = contig_order(&first.meta);
     sites.sort_by(|a, b| compare_sites(a, b, &contigs, merge_mode));
 
@@ -558,14 +568,38 @@ fn rewrite_info_number(line: &str, number: &str) -> String {
     out
 }
 
-fn format_numbers(meta: &[String]) -> HashMap<String, FormatNumber> {
+fn format_numbers(meta: &[String]) -> HashMap<String, VcfNumber> {
+    meta_numbers(meta, "FORMAT")
+}
+
+fn info_numbers(meta: &[String]) -> HashMap<String, VcfNumber> {
+    meta_numbers(meta, "INFO")
+}
+
+fn meta_numbers(meta: &[String], kind: &str) -> HashMap<String, VcfNumber> {
     meta.iter()
         .filter_map(|line| {
-            let id = meta_id(line, "FORMAT")?;
+            let id = meta_id(line, kind)?;
             let number = meta_attr(line, "Number").map(|raw| match raw {
-                "A" => FormatNumber::A,
-                "R" => FormatNumber::R,
-                _ => FormatNumber::Other,
+                "A" => VcfNumber::A,
+                "R" => VcfNumber::R,
+                "G" => VcfNumber::G,
+                _ => VcfNumber::Other,
+            })?;
+            Some((id, number))
+        })
+        .collect()
+}
+
+fn ordered_info_numbers(meta: &[String]) -> Vec<(String, VcfNumber)> {
+    meta.iter()
+        .filter_map(|line| {
+            let id = meta_id(line, "INFO")?;
+            let number = meta_attr(line, "Number").map(|raw| match raw {
+                "A" => VcfNumber::A,
+                "R" => VcfNumber::R,
+                "G" => VcfNumber::G,
+                _ => VcfNumber::Other,
             })?;
             Some((id, number))
         })
@@ -595,7 +629,9 @@ fn collect_sites(
     inputs: &[VcfInput],
     info_rules: InfoRules,
     merge_mode: MergeMode,
-    format_numbers: &HashMap<String, FormatNumber>,
+    format_numbers: &HashMap<String, VcfNumber>,
+    info_numbers: &HashMap<String, VcfNumber>,
+    ordered_info_numbers: &[(String, VcfNumber)],
 ) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
@@ -632,7 +668,14 @@ fn collect_sites(
                     for site_idx in site_indices {
                         let site: &mut MergedSite = &mut sites[site_idx];
                         if can_merge_sampled_same_position(site, record, merge_mode) {
-                            merge_sampled_same_position(site, record, input_idx, format_numbers)?;
+                            merge_sampled_same_position(
+                                site,
+                                record,
+                                input_idx,
+                                format_numbers,
+                                info_numbers,
+                                ordered_info_numbers,
+                            )?;
                             merged = true;
                             break;
                         }
@@ -812,7 +855,7 @@ fn merge_exact_site(
     record: &RecordLine,
     input_idx: usize,
     info_rules: InfoRules,
-    format_numbers: &HashMap<String, FormatNumber>,
+    format_numbers: &HashMap<String, VcfNumber>,
 ) -> io::Result<()> {
     if site.fixed.len() != record.fixed.len() || site.fixed[..5] != record.fixed[..5] {
         return Err(io::Error::new(
@@ -967,7 +1010,9 @@ fn merge_sampled_same_position(
     site: &mut MergedSite,
     record: &RecordLine,
     input_idx: usize,
-    format_numbers: &HashMap<String, FormatNumber>,
+    format_numbers: &HashMap<String, VcfNumber>,
+    info_numbers: &HashMap<String, VcfNumber>,
+    ordered_info_numbers: &[(String, VcfNumber)],
 ) -> io::Result<()> {
     if site.samples_by_input[input_idx].is_some() {
         return Err(io::Error::new(
@@ -1005,6 +1050,15 @@ fn merge_sampled_same_position(
 
     let old_site_map = allele_map(&normalized_site_alts, &merged_alts);
     let record_map = allele_map(&normalized_record_alts, &merged_alts);
+    let merged_info = merge_sampled_info(
+        &site.fixed[7],
+        &record.fixed[7],
+        &old_site_map,
+        &record_map,
+        merged_alts.len(),
+        info_numbers,
+        ordered_info_numbers,
+    );
     if new_ref != old_ref || merged_alts != old_alts || merged_format != old_format {
         for values in site.samples_by_input.iter_mut().flatten() {
             *values = transform_sample_values(
@@ -1024,6 +1078,7 @@ fn merge_sampled_same_position(
     } else {
         merged_alts.join(",")
     };
+    site.fixed[7] = merged_info;
     site.fixed[8] = merged_format.clone();
     merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
     site.samples_by_input[input_idx] = Some(transform_sample_values(
@@ -1081,7 +1136,7 @@ fn transform_sample_values(
     samples: &[String],
     allele_map: &[Option<usize>],
     alt_count: usize,
-    format_numbers: &HashMap<String, FormatNumber>,
+    format_numbers: &HashMap<String, VcfNumber>,
 ) -> Vec<String> {
     let input_keys = split_format_keys(input_format);
     let output_keys = split_format_keys(output_format);
@@ -1142,19 +1197,16 @@ fn remap_format_value(
     value: &str,
     allele_map: &[Option<usize>],
     alt_count: usize,
-    format_numbers: &HashMap<String, FormatNumber>,
+    format_numbers: &HashMap<String, VcfNumber>,
 ) -> String {
     match key {
         "GT" => remap_gt(value, allele_map),
         "AD" => remap_number_r(value, allele_map, alt_count),
-        _ => match format_numbers
-            .get(key)
-            .copied()
-            .unwrap_or(FormatNumber::Other)
-        {
-            FormatNumber::A => remap_number_a(value, allele_map, alt_count),
-            FormatNumber::R => remap_number_r(value, allele_map, alt_count),
-            FormatNumber::Other => value.to_owned(),
+        _ => match format_numbers.get(key).copied().unwrap_or(VcfNumber::Other) {
+            VcfNumber::A => remap_number_a(value, allele_map, alt_count),
+            VcfNumber::R => remap_number_r(value, allele_map, alt_count),
+            VcfNumber::G => remap_number_g(value, allele_map, alt_count),
+            VcfNumber::Other => value.to_owned(),
         },
     }
 }
@@ -1189,35 +1241,273 @@ fn remap_gt(raw: &str, allele_map: &[Option<usize>]) -> String {
 }
 
 fn remap_number_a(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
-    if raw == "." {
-        return raw.to_owned();
-    }
-    let old_values = raw.split(',').collect::<Vec<_>>();
-    let mut values = vec![".".to_owned(); alt_count];
-    for (old_alt_idx, value) in old_values.iter().enumerate() {
-        if let Some(new_idx) = allele_map.get(old_alt_idx + 1).copied().flatten()
-            && let Some(slot) = values.get_mut(new_idx.saturating_sub(1))
-        {
-            *slot = (*value).to_owned();
-        }
-    }
-    values.join(",")
+    slots_to_string(remap_number_a_slots(raw, allele_map, alt_count), ".")
 }
 
 fn remap_number_r(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    slots_to_string(remap_number_r_slots(raw, allele_map, alt_count), ".")
+}
+
+fn remap_number_g(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+    slots_to_string(remap_number_g_slots(raw, allele_map, alt_count), ".")
+}
+
+fn remap_number_a_slots(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+) -> Vec<Option<String>> {
+    let mut values = vec![None; alt_count];
     if raw == "." {
-        return raw.to_owned();
+        return values;
     }
     let old_values = raw.split(',').collect::<Vec<_>>();
-    let mut values = vec![".".to_owned(); alt_count + 1];
+    for (old_alt_idx, value) in old_values.iter().enumerate() {
+        if let Some(new_idx) = allele_map.get(old_alt_idx + 1).copied().flatten()
+            && let Some(slot) = values.get_mut(new_idx.saturating_sub(1))
+            && *value != "."
+        {
+            *slot = Some((*value).to_owned());
+        }
+    }
+    values
+}
+
+fn remap_number_r_slots(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+) -> Vec<Option<String>> {
+    let mut values = vec![None; alt_count + 1];
+    if raw == "." {
+        return values;
+    }
+    let old_values = raw.split(',').collect::<Vec<_>>();
     for (old_idx, value) in old_values.iter().enumerate() {
         if let Some(new_idx) = allele_map.get(old_idx).copied().flatten()
             && let Some(slot) = values.get_mut(new_idx)
+            && *value != "."
         {
-            *slot = (*value).to_owned();
+            *slot = Some((*value).to_owned());
         }
     }
-    values.join(",")
+    values
+}
+
+fn remap_number_g_slots(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+) -> Vec<Option<String>> {
+    let mut values = vec![None; genotype_count(alt_count)];
+    if raw == "." {
+        return values;
+    }
+    let old_values = raw.split(',').collect::<Vec<_>>();
+    let old_allele_count = allele_map.len();
+    for old_b in 0..old_allele_count {
+        for old_a in 0..=old_b {
+            let old_idx = genotype_index(old_a, old_b);
+            let Some(value) = old_values.get(old_idx) else {
+                continue;
+            };
+            if *value == "." {
+                continue;
+            }
+            let Some(new_a) = allele_map.get(old_a).copied().flatten() else {
+                continue;
+            };
+            let Some(new_b) = allele_map.get(old_b).copied().flatten() else {
+                continue;
+            };
+            let new_idx = genotype_index(new_a, new_b);
+            if let Some(slot) = values.get_mut(new_idx) {
+                *slot = Some((*value).to_owned());
+            }
+        }
+    }
+    values
+}
+
+fn genotype_count(alt_count: usize) -> usize {
+    let allele_count = alt_count + 1;
+    allele_count * (allele_count + 1) / 2
+}
+
+fn genotype_index(a: usize, b: usize) -> usize {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    hi * (hi + 1) / 2 + lo
+}
+
+fn slots_to_string(values: Vec<Option<String>>, missing: &str) -> String {
+    values
+        .into_iter()
+        .map(|value| value.unwrap_or_else(|| missing.to_owned()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn merge_sampled_info(
+    current: &str,
+    next: &str,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+    info_numbers: &HashMap<String, VcfNumber>,
+    ordered_info_numbers: &[(String, VcfNumber)],
+) -> String {
+    let current_has_mergeable = has_mergeable_sampled_info(current, info_numbers);
+    let next_has_mergeable = has_mergeable_sampled_info(next, info_numbers);
+    if !current_has_mergeable && !next_has_mergeable {
+        return current.to_owned();
+    }
+
+    let mut fields = Vec::new();
+    for target_number in [VcfNumber::A, VcfNumber::G, VcfNumber::R] {
+        for (key, number) in ordered_info_numbers {
+            if *number != target_number || key == "AC" || key == "AN" {
+                continue;
+            }
+            let current_value = info_value(current, key);
+            let next_value = info_value(next, key);
+            if current_value.is_none() && next_value.is_none() {
+                continue;
+            }
+            let value = match target_number {
+                VcfNumber::A => {
+                    merge_info_number_a(current_value, next_value, current_map, next_map, alt_count)
+                }
+                VcfNumber::R => {
+                    merge_info_number_r(current_value, next_value, current_map, next_map, alt_count)
+                }
+                VcfNumber::G => {
+                    merge_info_number_g(current_value, next_value, current_map, next_map, alt_count)
+                }
+                VcfNumber::Other => unreachable!(),
+            };
+            fields.push(format!("{key}={value}"));
+        }
+    }
+
+    if info_value(current, "AN").is_some() || info_value(next, "AN").is_some() {
+        let an = info_i64(current, "AN").unwrap_or(0) + info_i64(next, "AN").unwrap_or(0);
+        fields.push(format!("AN={an}"));
+    }
+    if info_value(current, "AC").is_some() || info_value(next, "AC").is_some() {
+        fields.push(format!(
+            "AC={}",
+            merge_info_number_a(
+                info_value(current, "AC"),
+                info_value(next, "AC"),
+                current_map,
+                next_map,
+                alt_count,
+            )
+        ));
+    }
+
+    if fields.is_empty() {
+        ".".to_owned()
+    } else {
+        fields.join(";")
+    }
+}
+
+fn has_mergeable_sampled_info(info: &str, info_numbers: &HashMap<String, VcfNumber>) -> bool {
+    if info_value(info, "AN").is_some() || info_value(info, "AC").is_some() {
+        return true;
+    }
+    info.split(';').any(|field| {
+        let key = field.split_once('=').map(|(key, _)| key).unwrap_or(field);
+        matches!(
+            info_numbers.get(key),
+            Some(VcfNumber::A | VcfNumber::R | VcfNumber::G)
+        )
+    })
+}
+
+fn merge_info_number_a(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_a_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count]);
+    let next = next
+        .map(|value| remap_number_a_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count]);
+    sum_numeric_slots(&current, &next, None)
+}
+
+fn merge_info_number_r(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_r_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count + 1]);
+    let next = next
+        .map(|value| remap_number_r_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; alt_count + 1]);
+    sum_numeric_slots(&current, &next, None)
+}
+
+fn merge_info_number_g(
+    current: Option<&str>,
+    next: Option<&str>,
+    current_map: &[Option<usize>],
+    next_map: &[Option<usize>],
+    alt_count: usize,
+) -> String {
+    let current = current
+        .map(|value| remap_number_g_slots(value, current_map, alt_count))
+        .unwrap_or_else(|| vec![None; genotype_count(alt_count)]);
+    let next = next
+        .map(|value| remap_number_g_slots(value, next_map, alt_count))
+        .unwrap_or_else(|| vec![None; genotype_count(alt_count)]);
+    sum_numeric_slots(&current, &next, Some("0"))
+}
+
+fn sum_numeric_slots(
+    current: &[Option<String>],
+    next: &[Option<String>],
+    missing_when_both_absent: Option<&str>,
+) -> String {
+    current
+        .iter()
+        .zip(next)
+        .map(|(a, b)| match (a.as_deref(), b.as_deref()) {
+            (Some(a), Some(b)) => sum_numeric_values(a, b),
+            (Some(a), None) => a.to_owned(),
+            (None, Some(b)) => b.to_owned(),
+            (None, None) => missing_when_both_absent.unwrap_or(".").to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn sum_numeric_values(a: &str, b: &str) -> String {
+    if let (Ok(a), Ok(b)) = (a.parse::<i64>(), b.parse::<i64>()) {
+        return (a + b).to_string();
+    }
+    match (a.parse::<f64>(), b.parse::<f64>()) {
+        (Ok(a), Ok(b)) => format_float(a + b),
+        _ => b.to_owned(),
+    }
+}
+
+fn format_float(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_rules: InfoRules) {
