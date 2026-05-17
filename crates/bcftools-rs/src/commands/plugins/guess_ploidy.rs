@@ -18,6 +18,7 @@ use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::variant::{VariantType, classify_variant};
 
+use crate::filter::{self as bcffilter, EvalContext};
 use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -89,10 +90,23 @@ impl<'a> RegionSpec<'a> {
 }
 
 #[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
+}
+
+#[derive(Clone, Copy)]
 pub struct Options<'a> {
     pub tag: Tag,
     pub region: Option<&'a str>,
     pub af_tag: Option<&'a str>,
+    pub filter: Option<FilterSpec<'a>>,
     pub gt_err_prob: f64,
     pub af_dflt: f64,
     pub include_indels: bool,
@@ -169,6 +183,11 @@ fn compute(text: &str, opts: Options<'_>) -> Result<String, String> {
         }
         if let Some(r) = &region
             && !r.matches(f[0], f[1])
+        {
+            continue;
+        }
+        if let Some(filter) = opts.filter
+            && !record_passes_filter(&f, filter)?
         {
             continue;
         }
@@ -401,6 +420,23 @@ fn compute(text: &str, opts: Options<'_>) -> Result<String, String> {
     Ok(out)
 }
 
+fn record_passes_filter(fields: &[&str], filter: FilterSpec<'_>) -> Result<bool, String> {
+    let fields: Vec<String> = fields.iter().map(|field| (*field).to_owned()).collect();
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, &fields)
+        })
+        .map_err(|e| e.to_string())?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
 fn info_header_has_id(line: &str, tag: &str) -> bool {
     line.strip_prefix("##INFO=<ID=")
         .and_then(|rest| rest.split([',', '>']).next())
@@ -475,6 +511,7 @@ mod tests {
             tag: Tag::Pl,
             region,
             af_tag,
+            filter: None,
             gt_err_prob: 1e-3,
             af_dflt: 0.5,
             include_indels: false,
@@ -575,5 +612,32 @@ X\t200\t.\tA\tC\t.\t.\tAF=0.01\tPL\t0,10,100\n";
         assert_eq!(parse_info_float_first("AN=2;AF=.", "AF"), None);
         assert_eq!(parse_info_float_first("AN=2", "AF"), None);
         assert_eq!(parse_info_float_first(".", "AF"), None);
+    }
+
+    #[test]
+    fn include_exclude_filters_records_before_likelihoods() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+X\t100\t.\tA\tC\t20\t.\t.\tPL\t0,5,10\n\
+X\t200\t.\tA\tC\t5\t.\t.\tPL\t0,5,10\n";
+
+        let mut include_opts = opts(Some("X"), None);
+        include_opts.filter = Some(FilterSpec {
+            mode: FilterMode::Include,
+            expr: "QUAL>10",
+        });
+        let include = compute(vcf, include_opts).unwrap();
+        let include_line = include.lines().find(|l| l.starts_with("SEX\tS1")).unwrap();
+        assert_eq!(include_line.split('\t').nth(5).unwrap(), "1");
+
+        let mut exclude_opts = opts(Some("X"), None);
+        exclude_opts.filter = Some(FilterSpec {
+            mode: FilterMode::Exclude,
+            expr: "QUAL>10",
+        });
+        let exclude = compute(vcf, exclude_opts).unwrap();
+        let exclude_line = exclude.lines().find(|l| l.starts_with("SEX\tS1")).unwrap();
+        assert_eq!(exclude_line.split('\t').nth(5).unwrap(), "1");
     }
 }

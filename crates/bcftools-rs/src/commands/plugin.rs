@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::commands::plugins::fill_from_fasta::FilterMode as FillFromFastaFilterMode;
+use crate::commands::plugins::guess_ploidy::FilterMode as GuessPloidyFilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
 use crate::diagnostics::fmt_etag;
 
@@ -78,6 +79,20 @@ fn set_fill_from_fasta_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one fill-from-fasta -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_guess_ploidy_filter(
+    target: &mut Option<(GuessPloidyFilterMode, String)>,
+    mode: GuessPloidyFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one guess-ploidy -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -370,6 +385,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // guess-ploidy options.
     let mut gp_region: Option<String> = None;
     let mut gp_af_tag: Option<String> = None;
+    let mut gp_filter: Option<(GuessPloidyFilterMode, String)> = None;
     // check-sparsity options.
     let mut sparsity_min_sites = 1usize;
     let mut sparsity_region: Option<String> = None;
@@ -556,6 +572,61 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 if plugin_name.as_deref() == Some("guess-ploidy") =>
             {
                 gp_region = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                let mode = if raw == "-i" || raw == "--include" {
+                    GuessPloidyFilterMode::Include
+                } else {
+                    GuessPloidyFilterMode::Exclude
+                };
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::other("guess-ploidy requires an expression after -i/-e")
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+                set_guess_ploidy_filter(&mut gp_filter, mode, expr)?;
+            }
+            _ if raw.starts_with("--include=")
+                && plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                set_guess_ploidy_filter(
+                    &mut gp_filter,
+                    GuessPloidyFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=")
+                && plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                set_guess_ploidy_filter(
+                    &mut gp_filter,
+                    GuessPloidyFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                set_guess_ploidy_filter(
+                    &mut gp_filter,
+                    GuessPloidyFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("guess-ploidy") =>
+            {
+                set_guess_ploidy_filter(
+                    &mut gp_filter,
+                    GuessPloidyFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             _ if raw.starts_with("-r")
                 && raw.len() > 2
@@ -1539,6 +1610,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 tag: Tag::Pl, // default; auto-switches PL->GL->GT on header
                 region: gp_region.as_deref(),
                 af_tag: gp_af_tag.as_deref(),
+                filter: gp_filter
+                    .as_ref()
+                    .map(|(mode, expr)| guess_ploidy::FilterSpec { mode: *mode, expr }),
                 gt_err_prob: 1e-3,
                 af_dflt: 0.5,
                 include_indels: false,
