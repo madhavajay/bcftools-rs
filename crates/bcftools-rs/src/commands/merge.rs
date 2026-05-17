@@ -396,7 +396,8 @@ fn merge_inputs(
         }
     }
 
-    let mut out = render_meta_with_pass_filter(&first.meta, info_rules);
+    let fileformat = merged_fileformat(inputs);
+    let mut out = render_meta_with_pass_filter(&first.meta, info_rules, fileformat.as_deref());
     out.push_str(&first.fixed_header.join("\t"));
     if !sample_names.is_empty() {
         out.push('\t');
@@ -446,14 +447,22 @@ fn fixed_headers_compatible(first: &[String], other: &[String]) -> bool {
     first.len() == 9 && other.len() == 8 && first[8] == "FORMAT" && first[..8] == other[..8]
 }
 
-fn render_meta_with_pass_filter(meta: &[String], info_rules: InfoRules) -> String {
+fn render_meta_with_pass_filter(
+    meta: &[String],
+    info_rules: InfoRules,
+    fileformat: Option<&str>,
+) -> String {
     let has_pass = meta
         .iter()
         .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
     let mut out = String::new();
     let mut inserted = false;
     for line in meta {
-        if info_rules.join_af && line.starts_with("##INFO=<ID=AF,") {
+        if let Some(fileformat) = fileformat
+            && line.starts_with("##fileformat=")
+        {
+            out.push_str(fileformat);
+        } else if info_rules.join_af && line.starts_with("##INFO=<ID=AF,") {
             out.push_str(&rewrite_info_number(line, "."));
         } else {
             out.push_str(line);
@@ -468,6 +477,37 @@ fn render_meta_with_pass_filter(meta: &[String], info_rules: InfoRules) -> Strin
         out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
     }
     out
+}
+
+fn merged_fileformat(inputs: &[VcfInput]) -> Option<String> {
+    inputs
+        .iter()
+        .filter_map(|input| {
+            input
+                .meta
+                .iter()
+                .find(|line| line.starts_with("##fileformat="))
+        })
+        .max_by_key(|line| vcf_fileformat_rank(line))
+        .cloned()
+}
+
+fn vcf_fileformat_rank(line: &str) -> (u32, u32) {
+    let Some(version) = line.strip_prefix("##fileformat=VCFv") else {
+        return (0, 0);
+    };
+    let Some((major, minor)) = version.split_once('.') else {
+        return (0, 0);
+    };
+    (
+        major.parse().unwrap_or(0),
+        minor
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0),
+    )
 }
 
 fn rewrite_info_number(line: &str, number: &str) -> String {
