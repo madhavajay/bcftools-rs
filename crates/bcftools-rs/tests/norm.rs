@@ -171,6 +171,36 @@ fn norm_filter_duplicate_removal_fixtures_match_upstream_text_output() {
 }
 
 #[test]
+fn norm_filter_join_multiallelic_fixtures_match_upstream_text_output() {
+    let input = fixture_path("norm.filter.vcf");
+    let filter_file = fixture_path("norm.filter.txt");
+    let expected = std::fs::read_to_string(fixture_path("norm.filter.1.out")).unwrap();
+
+    let membership_expr = format!("ID=@{}", filter_file.display());
+    for include_expr in [membership_expr.as_str(), "ALT!=\"C\""] {
+        let args = [
+            "norm",
+            "--no-version",
+            "-m",
+            "+both",
+            "-i",
+            include_expr,
+            input.to_str().unwrap(),
+        ];
+        let (out, err, code) = run(&args);
+        assert_eq!(
+            code, 0,
+            "norm.filter join fixture failed for -i {include_expr}: {err}"
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm.filter join fixture differed for -i {include_expr}"
+        );
+    }
+}
+
+#[test]
 fn norm_check_ref_swap_matches_upstream_text_output() {
     let input = fixture_path("norm.check-ref.vcf");
     let reference = fixture_path("norm.check-ref.fa");
