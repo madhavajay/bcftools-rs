@@ -1412,7 +1412,9 @@ fn choose_local_alts_from_pl(raw: &str, alt_count: usize, limit: usize) -> Vec<u
         }
     }
 
-    let mut alts = (1..=alt_count).collect::<Vec<_>>();
+    let mut alts = (1..=alt_count)
+        .filter(|allele| allele_probs[*allele] > 0.0)
+        .collect::<Vec<_>>();
     alts.sort_by(|a, b| {
         allele_probs[*b]
             .partial_cmp(&allele_probs[*a])
