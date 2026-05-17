@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #179 (`progress/merge-gvcf9-regions`, merge commit
+  `ed60665`) added narrow FASTA-backed `merge --gvcf REF -r REGION` text
+  parity for upstream `merge.gvcf.9.{1,2,3,4}.out` by splitting reference
+  blocks at region boundaries and filtering the text-backed gVCF merge slice.
 - 2026-05-17: PR #178 (`progress/todo-sync-after-view-trim-unused-alts`,
   merge commit `d3fa105`) synced the TODO docs after PR #177.
 - 2026-05-17: PR #177 (`progress/view-trim-unused-alts`, merge commit
@@ -593,12 +597,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`d3fa105`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`ed60665`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf9-regions` adds narrow
-  FASTA-backed `merge --gvcf REF -r REGION` text parity for upstream
-  `merge.gvcf.9.{1,2,3,4}.out` by splitting reference blocks at region
-  boundaries and filtering the current text-backed gVCF merge slice. Keep the
+- Current code slice in flight: none after PR #179; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
