@@ -1,9 +1,9 @@
 //! Focused `bcftools norm` implementation (upstream `vcfnorm.c`).
 //!
 //! This first local slice supports duplicate-record removal with
-//! `-d/--rm-dup` and a narrow `-c s` reference-swap path. Full left alignment,
-//! atomization, split/join multiallelics, and INFO/FORMAT projection remain
-//! tracked in `TODO.md`.
+//! `-d/--rm-dup`, a narrow `-c s` reference-swap path, and simple
+//! multiallelic splitting. Full left alignment, atomization, join
+//! multiallelics, and INFO/FORMAT projection remain tracked in `TODO.md`.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -30,6 +30,8 @@ Options:\n\
     -c, --check-ref MODE           Reference check mode; this slice supports 's' swap\n\
     -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
     -i, --include EXPR             Include records matching EXPR in duplicate-removal decisions\n\
+    -m, --multiallelics MODE       Split multiallelic records; this slice supports '-'\n\
+    -S, --sort MODE                Sort split records; this slice supports 'lex'\n\
     -o, --output FILE              Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9] u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --no-version               Accepted for command-shape compatibility\n\
@@ -44,6 +46,8 @@ struct Args {
     rm_dup: DupMode,
     include_expr: Option<String>,
     check_ref: Option<CheckRefMode>,
+    split_multiallelic: bool,
+    split_sort: SplitSortMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +70,12 @@ enum DupMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CheckRefMode {
     Swap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SplitSortMode {
+    Input,
+    Lex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,6 +126,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut rm_dup = DupMode::None;
     let mut include_expr = None;
     let mut check_ref = None;
+    let mut split_multiallelic = false;
+    let mut split_sort = SplitSortMode::Input;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -135,6 +147,13 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 fasta_ref = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?));
             }
             "-i" | "--include" => include_expr = Some(next_string(&mut iter, raw.as_ref())?),
+            "-m" | "--multiallelics" => {
+                split_multiallelic =
+                    parse_multiallelic_mode(&next_string(&mut iter, raw.as_ref())?)?
+            }
+            "-S" | "--sort" => {
+                split_sort = parse_split_sort_mode(&next_string(&mut iter, raw.as_ref())?)?
+            }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
@@ -154,6 +173,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--include=") => {
                 include_expr = Some(value_after_equals(&raw).to_owned());
             }
+            _ if raw.starts_with("--multiallelics=") => {
+                split_multiallelic = parse_multiallelic_mode(value_after_equals(&raw))?
+            }
+            _ if raw.starts_with("--sort=") => {
+                split_sort = parse_split_sort_mode(value_after_equals(&raw))?
+            }
             _ if raw.starts_with("-f") && raw.len() > 2 => {
                 fasta_ref = Some(PathBuf::from(&raw[2..]));
             }
@@ -168,9 +193,15 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             _ if raw.starts_with("-d") && raw.len() > 2 => rm_dup = parse_dup_mode(&raw[2..])?,
             _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
+            _ if raw.starts_with("-m") && raw.len() > 2 => {
+                split_multiallelic = parse_multiallelic_mode(&raw[2..])?
+            }
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?
+            }
+            _ if raw.starts_with("-S") && raw.len() > 2 => {
+                split_sort = parse_split_sort_mode(&raw[2..])?
             }
             _ if raw.starts_with('-') => {
                 return Err(ParseOutcome::Error(format!(
@@ -196,6 +227,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         rm_dup,
         include_expr,
         check_ref,
+        split_multiallelic,
+        split_sort,
     })
 }
 
@@ -243,6 +276,24 @@ fn parse_check_ref_mode(raw: &str) -> Result<CheckRefMode, ParseOutcome> {
     }
 }
 
+fn parse_multiallelic_mode(raw: &str) -> Result<bool, ParseOutcome> {
+    match raw {
+        "-" => Ok(true),
+        _ => Err(ParseOutcome::Error(format!(
+            "unsupported multiallelic mode '{raw}' in this local norm slice"
+        ))),
+    }
+}
+
+fn parse_split_sort_mode(raw: &str) -> Result<SplitSortMode, ParseOutcome> {
+    match raw {
+        "lex" => Ok(SplitSortMode::Lex),
+        _ => Err(ParseOutcome::Error(format!(
+            "unsupported split sort mode '{raw}' in this local norm slice"
+        ))),
+    }
+}
+
 fn run(args: &Args) -> io::Result<()> {
     let input = read_vcf_text(&args.input)?;
     let reference = args
@@ -258,6 +309,8 @@ fn run(args: &Args) -> io::Result<()> {
             )
         })?;
         check_reference_swap(&input, reference)?
+    } else if args.split_multiallelic {
+        split_multiallelic_records(&input, args.split_sort)?
     } else {
         let include_filter = args
             .include_expr
@@ -374,6 +427,71 @@ fn remove_duplicates(
         if !is_dup {
             seen.extend(keys);
             out.push_str(&fields.join("\t"));
+            out.push('\n');
+        }
+    }
+
+    Ok(out)
+}
+
+fn split_multiallelic_records(input: &str, sort_mode: SplitSortMode) -> io::Result<String> {
+    let mut out = String::with_capacity(input.len());
+    let filter_header_seen = input
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
+    let mut filter_header_inserted = false;
+
+    for line in input.lines() {
+        if line.starts_with("##fileformat=") {
+            out.push_str(line);
+            out.push('\n');
+            if !filter_header_seen && !filter_header_inserted {
+                out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+                filter_header_inserted = true;
+            }
+            continue;
+        }
+        if line.starts_with("#CHROM") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+        if fields.len() < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid VCF record with fewer than 8 columns: {line}"),
+            ));
+        }
+        let alts: Vec<&str> = fields[4].split(',').collect();
+        if alts.len() <= 1 {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        let mut split_rows: Vec<Vec<String>> = alts
+            .into_iter()
+            .map(|alt| {
+                let mut row = fields.clone();
+                row[4] = alt.to_owned();
+                row
+            })
+            .collect();
+        if sort_mode == SplitSortMode::Lex {
+            split_rows.sort_by(|left, right| left[4].cmp(&right[4]));
+        }
+        for row in split_rows {
+            out.push_str(&row.join("\t"));
             out.push('\n');
         }
     }
