@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #109 (`progress/merge-number-g-info-text-fixture`, merge
+  commit `d838fa2`) added sampled same-position INFO Number=A/R/G remapping
+  and summing in the text-backed `merge` slice, with byte-for-byte
+  `merge.3.out` coverage.
 - 2026-05-17: PR #107 (`progress/merge-format-vector-text-fixture`, merge
   commit `22b9403`) added FORMAT-key union plus Number=A/R vector remapping in
   the text-backed `merge` slice, with byte-for-byte `merge.6.out` coverage.
@@ -429,9 +433,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`22b9403`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`d838fa2`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #107. The next branch should pick one
+- No code slice is in flight after PR #109. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
