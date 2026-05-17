@@ -31,6 +31,7 @@ Options:\n\
     -m, --merge TYPE                Support narrow none/both/snp-ins-del slices; other modes accepted for command-shape compatibility\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
+    -F, --filter-logic x|+          Narrow filter merge logic support for upstream fixtures [+]\n\
     -g, --gvcf -|REF.FA             Narrow reference-backed gVCF block splitting for local fixtures\n\
     -0, --missing-to-ref            Fill absent-input samples as 0/0 in the current text slice\n\
         --force-single              Allow a single input for command-shape compatibility\n\
@@ -57,6 +58,7 @@ struct InfoRules {
     sum_ac: bool,
     sum_an: bool,
     join_af: bool,
+    filter_logic: FilterLogic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +69,13 @@ enum MergeMode {
     SnpInsDel,
     All,
     Id,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FilterLogic {
+    #[default]
+    Add,
+    RemoveIfPass,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +164,10 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-i" | "--info-rules" => {
                 info_rules = parse_info_rules(&next_string(&mut iter, raw.as_ref())?);
             }
+            "-F" | "--filter-logic" => {
+                info_rules.filter_logic =
+                    parse_filter_logic(&next_string(&mut iter, raw.as_ref())?)?;
+            }
             "-m" | "--merge" => {
                 merge_mode = parse_merge_mode(&next_string(&mut iter, raw.as_ref())?);
             }
@@ -184,6 +197,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--info-rules=") => {
                 info_rules = parse_info_rules(value_after_equals(&raw))
             }
+            _ if raw.starts_with("--filter-logic=") => {
+                info_rules.filter_logic = parse_filter_logic(value_after_equals(&raw))?
+            }
             _ if raw.starts_with("--merge=") => {
                 merge_mode = parse_merge_mode(value_after_equals(&raw))
             }
@@ -206,6 +222,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 file_list = Some(PathBuf::from(&raw[2..]))
             }
             _ if raw.starts_with("-i") && raw.len() > 2 => info_rules = parse_info_rules(&raw[2..]),
+            _ if raw.starts_with("-F") && raw.len() > 2 => {
+                info_rules.filter_logic = parse_filter_logic(&raw[2..])?
+            }
             _ if raw.starts_with("-L") && raw.len() > 2 => {
                 local_alleles = Some(parse_local_alleles(&raw[2..])?)
             }
@@ -252,6 +271,16 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         gvcf_ref,
         missing_to_ref,
     })
+}
+
+fn parse_filter_logic(raw: &str) -> Result<FilterLogic, ParseOutcome> {
+    match raw {
+        "+" => Ok(FilterLogic::Add),
+        "x" => Ok(FilterLogic::RemoveIfPass),
+        _ => Err(ParseOutcome::Error(format!(
+            "filter logic not recognised: {raw}"
+        ))),
+    }
 }
 
 fn parse_local_alleles(raw: &str) -> Result<usize, ParseOutcome> {
@@ -621,6 +650,12 @@ fn merge_inputs(
             0
         };
         let mut fixed = site.fixed;
+        if info_rules.filter_logic == FilterLogic::RemoveIfPass
+            && let Some(filter) = fixed.get_mut(6)
+            && is_pass_filter(filter)
+        {
+            *filter = "PASS".to_owned();
+        }
         if absent_alleles > 0 {
             add_missing_reference_alleles_to_an(&mut fixed, absent_alleles);
         }
@@ -938,6 +973,7 @@ fn collect_sites(
                         site,
                         record,
                         input_idx,
+                        info_rules.filter_logic,
                         format_numbers,
                         info_numbers,
                         ordered_info_numbers,
@@ -982,6 +1018,7 @@ fn collect_sites(
                                 site,
                                 record,
                                 input_idx,
+                                info_rules.filter_logic,
                                 format_numbers,
                                 info_numbers,
                                 ordered_info_numbers,
@@ -1257,7 +1294,7 @@ fn merge_exact_site(
     };
 
     let clear_ref_block_end = should_clear_ref_block_end_on_exact_merge(&site.fixed, &record.fixed);
-    merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
+    merge_fixed_shared_fields(&mut site.fixed, &record.fixed, info_rules.filter_logic);
     if clear_ref_block_end {
         site.fixed[7] = ".".to_owned();
     } else {
@@ -1303,7 +1340,11 @@ fn info_has_only_end(info: &str) -> bool {
         .is_some_and(|value| !value.is_empty() && !value.contains(';'))
 }
 
-fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String]) {
+fn merge_fixed_shared_fields(
+    site_fixed: &mut [String],
+    record_fixed: &[String],
+    filter_logic: FilterLogic,
+) {
     if let (Some(site_id), Some(record_id)) = (site_fixed.get_mut(2), record_fixed.get(2)) {
         *site_id = merge_id(site_id, record_id);
     }
@@ -1311,7 +1352,7 @@ fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String])
         *site_qual = merge_qual(site_qual, record_qual);
     }
     if let (Some(site_filter), Some(record_filter)) = (site_fixed.get_mut(6), record_fixed.get(6)) {
-        *site_filter = merge_filter(site_filter, record_filter);
+        *site_filter = merge_filter_with_logic(site_filter, record_filter, filter_logic);
     }
 }
 
@@ -1348,6 +1389,19 @@ fn merge_filter(current: &str, next: &str) -> String {
         }
     }
     filters.join(";")
+}
+
+fn merge_filter_with_logic(current: &str, next: &str, filter_logic: FilterLogic) -> String {
+    if filter_logic == FilterLogic::RemoveIfPass
+        && (is_pass_filter(current) || is_pass_filter(next))
+    {
+        return "PASS".to_owned();
+    }
+    merge_filter(current, next)
+}
+
+fn is_pass_filter(filter: &str) -> bool {
+    filter == "." || filter == "PASS" || filter.is_empty()
 }
 
 fn merge_qual(current: &str, next: &str) -> String {
@@ -1430,6 +1484,7 @@ fn merge_sampled_same_position(
     site: &mut MergedSite,
     record: &RecordLine,
     input_idx: usize,
+    filter_logic: FilterLogic,
     format_numbers: &HashMap<String, VcfNumber>,
     info_numbers: &HashMap<String, VcfNumber>,
     ordered_info_numbers: &[(String, VcfNumber)],
@@ -1505,7 +1560,7 @@ fn merge_sampled_same_position(
     };
     site.fixed[7] = merged_info;
     site.fixed[8] = merged_format.clone();
-    merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
+    merge_fixed_shared_fields(&mut site.fixed, &record.fixed, filter_logic);
     site.samples_by_input[input_idx] = Some(transform_sample_values(
         &record_format,
         &merged_format,
