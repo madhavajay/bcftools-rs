@@ -99,22 +99,57 @@ impl Bins {
 /// Reads the input VCF/BCF and returns the af-dist report text (including
 /// the two `bcftools`-tagged provenance lines the harness strips with
 /// `grep -v bcftools`).
-pub fn run(input: &Path, af_tag: &str, dev_def: &str, prob_def: &str) -> io::Result<String> {
+pub fn run(
+    input: &Path,
+    af_tag: &str,
+    dev_def: &str,
+    prob_def: &str,
+    list_def: Option<&str>,
+) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    compute(&text, af_tag, dev_def, prob_def).map_err(io::Error::other)
+    compute_with_list(&text, af_tag, dev_def, prob_def, list_def).map_err(io::Error::other)
 }
 
+#[cfg(test)]
 fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<String, String> {
+    compute_with_list(text, af_tag, dev_def, prob_def, None)
+}
+
+fn compute_with_list(
+    text: &str,
+    af_tag: &str,
+    dev_def: &str,
+    prob_def: &str,
+    list_def: Option<&str>,
+) -> Result<String, String> {
     let dev_bins = Bins::new(dev_def)?;
     let prob_bins = Bins::new(prob_def)?;
+    let list = list_def.map(parse_list_range).transpose()?;
     let mut dev_dist = vec![0u64; dev_bins.size()];
     let mut prob_dist = vec![0u64; prob_bins.size()];
 
+    let mut out = String::new();
+    // Provenance lines (stripped by the harness `grep -v bcftools`).
+    out.push_str("# This file was produced by: bcftools +af-dist(bcftools-rs+htslib-rs)\n");
+    out.push_str("# The command line was:\tbcftools +af-dist\n#\n");
+    if let Some((min, max)) = list {
+        out.push_str(&format!(
+            "# GT, genotypes with P(AF) in [{:.6},{:.6}]; [2]Chromosome\t[3]Position[4]Sample\t[5]Genotype\t[6]AF-based probability\n",
+            min as f64, max as f64
+        ));
+    }
+
     let mut nsmpl = 0usize;
+    let mut samples_header: Vec<&str> = Vec::new();
     for line in text.lines() {
         if line.starts_with("#CHROM") {
-            let cols = line.split('\t').count();
-            nsmpl = cols.saturating_sub(9);
+            let cols: Vec<&str> = line.split('\t').collect();
+            nsmpl = cols.len().saturating_sub(9);
+            samples_header = if cols.len() > 9 {
+                cols[9..].to_vec()
+            } else {
+                Vec::new()
+            };
             continue;
         }
         if line.starts_with('#') || line.trim().is_empty() {
@@ -135,6 +170,8 @@ fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<St
         let p_aa = af * af;
         let i_ra = prob_bins.idx(p_ra);
         let i_aa = prob_bins.idx(p_aa);
+        let list_ra = list.is_some_and(|(min, max)| p_ra >= min && p_ra <= max);
+        let list_aa = list.is_some_and(|(min, max)| p_aa >= min && p_aa <= max);
 
         let fmt = f[8];
         let gt_slot = fmt.split(':').position(|k| k == "GT");
@@ -159,7 +196,7 @@ fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<St
 
         let mut nals = 0i64;
         let mut nalt = 0i64;
-        for toks in &parsed {
+        for (i, toks) in parsed.iter().enumerate() {
             let mut dosage = 0i64;
             let mut j = 0usize;
             while j < max_ploidy {
@@ -185,8 +222,26 @@ fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<St
             nalt += dosage;
             if dosage == 1 {
                 prob_dist[i_ra] += 1;
+                if list_ra {
+                    out.push_str(&format!(
+                        "GT\t{}\t{}\t{}\t1\t{:.6}\n",
+                        f[0],
+                        f[1],
+                        samples_header.get(i).copied().unwrap_or("."),
+                        p_ra as f64
+                    ));
+                }
             } else if dosage == 2 {
                 prob_dist[i_aa] += 1;
+                if list_aa {
+                    out.push_str(&format!(
+                        "GT\t{}\t{}\t{}\t2\t{:.6}\n",
+                        f[0],
+                        f[1],
+                        samples_header.get(i).copied().unwrap_or("."),
+                        p_aa as f64
+                    ));
+                }
             }
         }
 
@@ -197,11 +252,6 @@ fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<St
             dev_dist[i_af] += 1;
         }
     }
-
-    let mut out = String::new();
-    // Provenance lines (stripped by the harness `grep -v bcftools`).
-    out.push_str("# This file was produced by: bcftools +af-dist(bcftools-rs+htslib-rs)\n");
-    out.push_str("# The command line was:\tbcftools +af-dist\n#\n");
 
     out.push_str("# PROB_DIST, genotype probability distribution, assumes HWE\n");
     for (i, &count) in prob_dist.iter().enumerate().take(prob_bins.size() - 1) {
@@ -224,6 +274,22 @@ fn compute(text: &str, af_tag: &str, dev_def: &str, prob_def: &str) -> Result<St
         ));
     }
     Ok(out)
+}
+
+fn parse_list_range(raw: &str) -> Result<(f32, f32), String> {
+    let (min, max) = raw
+        .split_once(',')
+        .ok_or_else(|| format!("Could not parse: --list {raw}"))?;
+    if max.contains(',') {
+        return Err(format!("Could not parse: --list {raw}"));
+    }
+    let min = min
+        .parse::<f32>()
+        .map_err(|_| format!("Could not parse: --list {raw}"))?;
+    let max = max
+        .parse::<f32>()
+        .map_err(|_| format!("Could not parse: --list {raw}"))?;
+    Ok((min, max))
 }
 
 /// Returns the first value of INFO/`af_tag` as `f32`, or `None` when the tag
@@ -329,5 +395,25 @@ mod tests {
         let out = compute(vcf, "AF", DEFAULT_BINS, DEFAULT_BINS).unwrap();
         assert!(out.contains("PROB_DIST\t0.500000\t0.600000\t2\n"), "{out}");
         assert!(out.contains("DEV_DIST\t0.000000\t0.100000\t1\n"), "{out}");
+    }
+
+    #[test]
+    fn list_range_emits_matching_genotypes_before_histograms() {
+        let vcf = "##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\tC\n\
+20\t326891\t.\tA\tAC\t999\t.\tAN=4;AF=0.5\tGT\t0|1\t1|1\t./.\n";
+        let out =
+            compute_with_list(vcf, "AF", DEFAULT_BINS, DEFAULT_BINS, Some("0.5,0.5")).unwrap();
+        assert!(
+            out.contains("# GT, genotypes with P(AF) in [0.500000,0.500000];"),
+            "{out}"
+        );
+        assert!(out.contains("GT\t20\t326891\tA\t1\t0.500000\n"), "{out}");
+        assert!(!out.contains("GT\t20\t326891\tB\t2\t0.250000\n"), "{out}");
+        assert!(
+            out.find("GT\t20\t326891\tA\t1\t0.500000\n").unwrap()
+                < out.find("# PROB_DIST").unwrap(),
+            "{out}"
+        );
     }
 }

@@ -635,10 +635,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`1cd8b1a`) (301 lib unit tests plus per-command
+  latest merged commit on `main` (`6f59b0f`) (301 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; `main` is synced through PR #191
-  (`1cd8b1a`).
+- Current code slice in flight: `progress/af-dist-list` — add
+  `+af-dist -l` / `--list` debug genotype dump support while staying inside
+  `bcftools-rs`.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1108,11 +1109,13 @@ Current local slice:
   (`|AF - nALT/nALL|`), with all binning arithmetic in `f32` to match
   upstream's `float` edge sensitivity. Skips records with no INFO/AF and
   samples that are not fully called (vector_end/missing). VCF/VCF.gz/BCF
-  and stdin input; `-t`/`--af-tag`, `-d`/`--dev-bins`, `-p`/`--prob-bins`.
+  and stdin input; `-t`/`--af-tag`, `-d`/`--dev-bins`, `-p`/`--prob-bins`,
+  and `-l`/`--list min,max` debug genotype dumps for matching RA/AA
+  probabilities.
   Byte-for-byte parity with `af-dist.out` after the harness
-  `grep -v bcftools`. 1 integration test in
-  `crates/bcftools-rs/tests/plugin_af_dist.rs` + 4 unit tests. Remaining:
-  the `-l`/`--list` debug genotype dump.
+  `grep -v bcftools`. 2 integration tests in
+  `crates/bcftools-rs/tests/plugin_af_dist.rs` + 5 unit tests. Remaining:
+  bin-definition file inputs for `-d`/`-p`.
 - [x] `+smpl-stats` (`crates/bcftools-rs/src/commands/plugins/smpl_stats.rs`,
   default "all" filter): port of `smpl-stats.c` `process_record`/`destroy`.
   Per-sample stats (npass, non-ref, homRR, homAA, het, hemi, SNV, indel,
