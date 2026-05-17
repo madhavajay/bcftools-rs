@@ -2,8 +2,9 @@
 //!
 //! This first local slice supports duplicate-record removal with
 //! `-d/--rm-dup`, a narrow `-c s` reference-swap path, and simple
-//! multiallelic splitting. Full left alignment, atomization, join
-//! multiallelics, and INFO/FORMAT projection remain tracked in `TODO.md`.
+//! multiallelic splitting/joining. Full left alignment, atomization, general
+//! multiallelic handling, and INFO/FORMAT projection remain tracked in
+//! `TODO.md`.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -30,7 +31,7 @@ Options:\n\
     -c, --check-ref MODE           Reference check mode; this slice supports 's' swap\n\
     -f, --fasta-ref FILE           Accepted by the duplicate-removal slice for command compatibility\n\
     -i, --include EXPR             Include records matching EXPR in duplicate-removal decisions\n\
-    -m, --multiallelics MODE       Split multiallelic records; this slice supports '-'\n\
+    -m, --multiallelics MODE       Split/join multiallelic records; this slice supports '-' and '+both'\n\
         --multi-overlaps 0|.       GT value for non-target ALT alleles while splitting [0]\n\
     -S, --sort MODE                Sort split records; this slice supports 'lex'\n\
     -o, --output FILE              Write output to a file [standard output]\n\
@@ -47,7 +48,7 @@ struct Args {
     rm_dup: DupMode,
     include_expr: Option<String>,
     check_ref: Option<CheckRefMode>,
-    split_multiallelic: bool,
+    multiallelic_mode: MultiallelicMode,
     split_sort: SplitSortMode,
     multi_overlaps: MultiOverlapMode,
 }
@@ -75,6 +76,13 @@ enum CheckRefMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MultiallelicMode {
+    None,
+    Split,
+    JoinBoth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SplitSortMode {
     Input,
     Lex,
@@ -98,6 +106,24 @@ struct DupKey {
     chrom: String,
     pos: String,
     rest: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct JoinKey {
+    chrom: String,
+    pos: String,
+    reference: String,
+    qual: String,
+    filter: String,
+    info: String,
+}
+
+#[derive(Debug)]
+struct JoinGroup {
+    key: JoinKey,
+    first_fields: Vec<String>,
+    ids: Vec<String>,
+    alts: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -134,7 +160,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut rm_dup = DupMode::None;
     let mut include_expr = None;
     let mut check_ref = None;
-    let mut split_multiallelic = false;
+    let mut multiallelic_mode = MultiallelicMode::None;
     let mut split_sort = SplitSortMode::Input;
     let mut multi_overlaps = MultiOverlapMode::Reference;
 
@@ -157,8 +183,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             "-i" | "--include" => include_expr = Some(next_string(&mut iter, raw.as_ref())?),
             "-m" | "--multiallelics" => {
-                split_multiallelic =
-                    parse_multiallelic_mode(&next_string(&mut iter, raw.as_ref())?)?
+                multiallelic_mode = parse_multiallelic_mode(&next_string(&mut iter, raw.as_ref())?)?
             }
             "-S" | "--sort" => {
                 split_sort = parse_split_sort_mode(&next_string(&mut iter, raw.as_ref())?)?
@@ -186,7 +211,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 include_expr = Some(value_after_equals(&raw).to_owned());
             }
             _ if raw.starts_with("--multiallelics=") => {
-                split_multiallelic = parse_multiallelic_mode(value_after_equals(&raw))?
+                multiallelic_mode = parse_multiallelic_mode(value_after_equals(&raw))?
             }
             _ if raw.starts_with("--sort=") => {
                 split_sort = parse_split_sort_mode(value_after_equals(&raw))?
@@ -209,7 +234,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-d") && raw.len() > 2 => rm_dup = parse_dup_mode(&raw[2..])?,
             _ if raw.starts_with("-i") && raw.len() > 2 => include_expr = Some(raw[2..].to_owned()),
             _ if raw.starts_with("-m") && raw.len() > 2 => {
-                split_multiallelic = parse_multiallelic_mode(&raw[2..])?
+                multiallelic_mode = parse_multiallelic_mode(&raw[2..])?
             }
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
@@ -242,7 +267,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         rm_dup,
         include_expr,
         check_ref,
-        split_multiallelic,
+        multiallelic_mode,
         split_sort,
         multi_overlaps,
     })
@@ -292,9 +317,10 @@ fn parse_check_ref_mode(raw: &str) -> Result<CheckRefMode, ParseOutcome> {
     }
 }
 
-fn parse_multiallelic_mode(raw: &str) -> Result<bool, ParseOutcome> {
+fn parse_multiallelic_mode(raw: &str) -> Result<MultiallelicMode, ParseOutcome> {
     match raw {
-        "-" => Ok(true),
+        "-" => Ok(MultiallelicMode::Split),
+        "+both" => Ok(MultiallelicMode::JoinBoth),
         _ => Err(ParseOutcome::Error(format!(
             "unsupported multiallelic mode '{raw}' in this local norm slice"
         ))),
@@ -335,8 +361,15 @@ fn run(args: &Args) -> io::Result<()> {
             )
         })?;
         check_reference_swap(&input, reference)?
-    } else if args.split_multiallelic {
+    } else if args.multiallelic_mode == MultiallelicMode::Split {
         split_multiallelic_records(&input, args.split_sort, args.multi_overlaps)?
+    } else if args.multiallelic_mode == MultiallelicMode::JoinBoth {
+        let include_filter = args
+            .include_expr
+            .as_deref()
+            .map(IncludeFilter::from_expr)
+            .transpose()?;
+        join_filtered_multiallelic_records(&input, include_filter.as_ref())?
     } else {
         let include_filter = args
             .include_expr
@@ -526,6 +559,90 @@ fn split_multiallelic_records(
             out.push_str(&row.join("\t"));
             out.push('\n');
         }
+    }
+
+    Ok(out)
+}
+
+fn join_filtered_multiallelic_records(
+    input: &str,
+    include_filter: Option<&IncludeFilter>,
+) -> io::Result<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut groups = Vec::<JoinGroup>::new();
+    let filter_header_seen = input
+        .lines()
+        .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
+    let mut filter_header_inserted = false;
+
+    for line in input.lines() {
+        if line.starts_with("##fileformat=") {
+            out.push_str(line);
+            out.push('\n');
+            if !filter_header_seen && !filter_header_inserted {
+                out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+                filter_header_inserted = true;
+            }
+            continue;
+        }
+        if line.starts_with("#CHROM") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+        if fields.len() < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid VCF record with fewer than 8 columns: {line}"),
+            ));
+        }
+        if include_filter
+            .map(|filter| filter.matches(&fields))
+            .transpose()?
+            == Some(false)
+        {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        let key = JoinKey {
+            chrom: fields[0].clone(),
+            pos: fields[1].clone(),
+            reference: fields[3].clone(),
+            qual: fields[5].clone(),
+            filter: fields[6].clone(),
+            info: fields[7].clone(),
+        };
+        if let Some(group) = groups.iter_mut().find(|group| group.key == key) {
+            group.ids.push(fields[2].clone());
+            group.alts.extend(fields[4].split(',').map(str::to_owned));
+        } else {
+            groups.push(JoinGroup {
+                key,
+                first_fields: fields.clone(),
+                ids: vec![fields[2].clone()],
+                alts: fields[4].split(',').map(str::to_owned).collect(),
+            });
+        }
+    }
+
+    for group in groups {
+        let mut fields = group.first_fields;
+        fields[2] = group.ids.join(";");
+        fields[4] = group.alts.join(",");
+        out.push_str(&fields.join("\t"));
+        out.push('\n');
     }
 
     Ok(out)
