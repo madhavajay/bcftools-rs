@@ -32,7 +32,7 @@ Options:\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
     -F, --filter-logic x|+          Narrow filter merge logic support for upstream fixtures [+]\n\
-    -g, --gvcf -|REF.FA             Narrow reference-backed gVCF block splitting for local fixtures\n\
+    -g, --gvcf -|REF.FA             Narrow gVCF block splitting for local fixtures\n\
     -0, --missing-to-ref            Fill absent-input samples as 0/0 in the current text slice\n\
         --force-single              Allow a single input for command-shape compatibility\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
@@ -50,6 +50,7 @@ struct Args {
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
     gvcf_ref: Option<PathBuf>,
+    gvcf_no_ref: bool,
     missing_to_ref: bool,
 }
 
@@ -151,6 +152,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut merge_mode = MergeMode::Default;
     let mut local_alleles = None;
     let mut gvcf_ref = None;
+    let mut gvcf_no_ref = false;
     let mut missing_to_ref = false;
 
     let mut iter = argv.iter().skip(1).peekable();
@@ -178,6 +180,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 let path = next_string(&mut iter, raw.as_ref())?;
                 if path != "-" {
                     gvcf_ref = Some(PathBuf::from(path));
+                } else {
+                    gvcf_no_ref = true;
                 }
             }
             "-0" | "--missing-to-ref" => missing_to_ref = true,
@@ -210,6 +214,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 let path = value_after_equals(&raw);
                 if path != "-" {
                     gvcf_ref = Some(PathBuf::from(path));
+                } else {
+                    gvcf_no_ref = true;
                 }
             }
             _ if raw.starts_with("--output=") => {
@@ -232,6 +238,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 let path = &raw[2..];
                 if path != "-" {
                     gvcf_ref = Some(PathBuf::from(path));
+                } else {
+                    gvcf_no_ref = true;
                 }
             }
             _ if raw.starts_with("-m") && raw.len() > 2 => merge_mode = parse_merge_mode(&raw[2..]),
@@ -269,6 +277,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         merge_mode,
         local_alleles,
         gvcf_ref,
+        gvcf_no_ref,
         missing_to_ref,
     })
 }
@@ -362,6 +371,8 @@ fn run(args: &Args) -> io::Result<()> {
     }
     if let Some(path) = &args.gvcf_ref {
         split_gvcf_reference_blocks(&mut inputs, path)?;
+    } else if args.gvcf_no_ref {
+        split_gvcf_reference_blocks_without_reference(&mut inputs);
     }
     let merged = merge_inputs(
         &inputs,
@@ -497,7 +508,7 @@ fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -
                             if other_end < end {
                                 breaks.push(other_end + 1);
                             }
-                        } else if !is_single_ref_symbolic_alt(&split_alt(&other.fixed[4])) {
+                        } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
                             let other_ref_len = other.fixed[3].len().max(1) as u64;
                             breaks.push((start + other_ref_len).min(end + 1));
                         }
@@ -522,13 +533,104 @@ fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -
     Ok(())
 }
 
+fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
+    let records_by_input = inputs
+        .iter()
+        .map(|input| input.records.clone())
+        .collect::<Vec<_>>();
+    let ref_hints = reference_block_ref_hints(&records_by_input);
+
+    for (input_idx, input) in inputs.iter_mut().enumerate() {
+        let mut split_records = Vec::new();
+        for record in &records_by_input[input_idx] {
+            let Some((start, end)) = reference_block_span(record) else {
+                split_records.push(record.clone());
+                continue;
+            };
+            let mut breaks = vec![start, end + 1];
+            let mut skip_positions = HashSet::new();
+            for (other_idx, other_records) in records_by_input.iter().enumerate() {
+                if other_idx == input_idx {
+                    continue;
+                }
+                for other in other_records {
+                    if other.fixed.first() != record.fixed.first() {
+                        continue;
+                    }
+                    let Some(other_start) = record_pos(other) else {
+                        continue;
+                    };
+                    if other_start < start || other_start > end {
+                        continue;
+                    }
+                    if let Some((_, other_end)) = reference_block_span(other) {
+                        if other_start > start {
+                            breaks.push(other_start);
+                        }
+                        if other_end < end {
+                            breaks.push(other_end + 1);
+                        }
+                    } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
+                        breaks.push(other_start);
+                        breaks.push((other_start + 1).min(end + 1));
+                        skip_positions.insert(other_start);
+                        let other_ref_len = other.fixed[3].len().max(1) as u64;
+                        if other_ref_len > 1 {
+                            breaks.push((other_start + other_ref_len).min(end + 1));
+                        }
+                    }
+                }
+            }
+            breaks.sort_unstable();
+            breaks.dedup();
+            for window in breaks.windows(2) {
+                let seg_start = window[0];
+                let seg_end = window[1] - 1;
+                if seg_start > seg_end
+                    || (seg_start == seg_end && skip_positions.contains(&seg_start))
+                {
+                    continue;
+                }
+                split_records.push(split_reference_block_segment_without_reference(
+                    record, seg_start, seg_end, &ref_hints,
+                ));
+            }
+        }
+        input.records = split_records;
+    }
+}
+
+fn reference_block_ref_hints(
+    records_by_input: &[Vec<RecordLine>],
+) -> HashMap<(String, u64), String> {
+    let mut hints = HashMap::new();
+    for record in records_by_input.iter().flatten() {
+        if reference_block_span(record).is_some()
+            && let (Some(chrom), Some(pos), Some(reference)) = (
+                record.fixed.first(),
+                record_pos(record),
+                record.fixed.get(3),
+            )
+        {
+            hints
+                .entry((chrom.clone(), pos))
+                .or_insert_with(|| reference.clone());
+        }
+    }
+    hints
+}
+
 fn reference_block_span(record: &RecordLine) -> Option<(u64, u64)> {
-    if record.fixed.len() < 8 || !is_single_ref_symbolic_alt(&split_alt(&record.fixed[4])) {
+    if record.fixed.len() < 8 || !is_reference_block_alt(&split_alt(&record.fixed[4])) {
         return None;
     }
     let start = record_pos(record)?;
     let end = info_u64(&record.fixed[7], "END")?;
     (end >= start).then_some((start, end))
+}
+
+fn is_reference_block_alt(alts: &[String]) -> bool {
+    alts.is_empty() || is_single_ref_symbolic_alt(alts)
 }
 
 fn record_pos(record: &RecordLine) -> Option<u64> {
@@ -550,6 +652,28 @@ fn split_reference_block_segment(
         remove_info_value(&segment.fixed[7], "END")
     };
     Ok(segment)
+}
+
+fn split_reference_block_segment_without_reference(
+    record: &RecordLine,
+    start: u64,
+    end: u64,
+    ref_hints: &HashMap<(String, u64), String>,
+) -> RecordLine {
+    let mut segment = record.clone();
+    segment.fixed[1] = start.to_string();
+    if record_pos(record) != Some(start) {
+        segment.fixed[3] = ref_hints
+            .get(&(segment.fixed[0].clone(), start))
+            .cloned()
+            .unwrap_or_else(|| "N".to_owned());
+    }
+    segment.fixed[7] = if end > start {
+        set_info_value(&segment.fixed[7], "END", &end.to_string())
+    } else {
+        remove_info_value(&segment.fixed[7], "END")
+    };
+    segment
 }
 
 fn fetch_reference_base(reference: &FastaReference, chrom: &str, pos: u64) -> io::Result<String> {
