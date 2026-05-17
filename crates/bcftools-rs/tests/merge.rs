@@ -316,6 +316,20 @@ fn merge_phased_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_broken_gvcf_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "../../bcftools/test/merge.broken-gvcf.a.vcf",
+        "../../bcftools/test/merge.broken-gvcf.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.broken-gvcf fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.broken-gvcf.1.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_sites_only_alt_union_matches_upstream_fixture() {
     for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
         let mut args = vec![

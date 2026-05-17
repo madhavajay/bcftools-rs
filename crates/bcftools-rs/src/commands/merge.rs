@@ -1042,13 +1042,38 @@ fn merge_exact_site(
         record.samples.clone()
     };
 
+    let clear_ref_block_end = should_clear_ref_block_end_on_exact_merge(&site.fixed, &record.fixed);
     merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
-    merge_exact_ac_an(&mut site.fixed, &record.fixed);
+    if clear_ref_block_end {
+        site.fixed[7] = ".".to_owned();
+    } else {
+        merge_exact_ac_an(&mut site.fixed, &record.fixed);
+    }
     if info_rules.join_af {
         site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "AF");
     }
     site.samples_by_input[input_idx] = Some(transformed_samples);
     Ok(())
+}
+
+fn should_clear_ref_block_end_on_exact_merge(
+    site_fixed: &[String],
+    record_fixed: &[String],
+) -> bool {
+    site_fixed.get(4).is_some_and(|alt| alt == ".")
+        && record_fixed.get(4).is_some_and(|alt| alt == ".")
+        && site_fixed
+            .get(7)
+            .is_some_and(|info| info_has_only_end(info))
+        && record_fixed
+            .get(7)
+            .is_some_and(|info| info_has_only_end(info))
+        && site_fixed.get(5) != record_fixed.get(5)
+}
+
+fn info_has_only_end(info: &str) -> bool {
+    info.strip_prefix("END=")
+        .is_some_and(|value| !value.is_empty() && !value.contains(';'))
 }
 
 fn merge_fixed_shared_fields(site_fixed: &mut [String], record_fixed: &[String]) {
