@@ -587,6 +587,75 @@ fn merge_gvcf4_reference_block_overlap_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf9_region_fixtures_match_upstream() {
+    let cases = [
+        (
+            vec![
+                "../../bcftools/test/merge.gvcf.9a.vcf",
+                "../../bcftools/test/merge.gvcf.9b.vcf",
+                "../../bcftools/test/merge.gvcf.9c.vcf",
+                "../../bcftools/test/merge.gvcf.9d.vcf",
+            ],
+            vec![],
+            "../../bcftools/test/merge.gvcf.9.1.out",
+        ),
+        (
+            vec![
+                "../../bcftools/test/merge.gvcf.9a.vcf",
+                "../../bcftools/test/merge.gvcf.9b.vcf",
+                "../../bcftools/test/merge.gvcf.9c.vcf",
+                "../../bcftools/test/merge.gvcf.9d.vcf",
+            ],
+            vec!["-r", "22:21-23"],
+            "../../bcftools/test/merge.gvcf.9.2.out",
+        ),
+        (
+            vec![
+                "../../bcftools/test/merge.gvcf.9a.vcf",
+                "../../bcftools/test/merge.gvcf.9b.vcf",
+                "../../bcftools/test/merge.gvcf.9c.vcf",
+                "../../bcftools/test/merge.gvcf.9d.vcf",
+                "../../bcftools/test/merge.gvcf.9e.vcf",
+            ],
+            vec![],
+            "../../bcftools/test/merge.gvcf.9.3.out",
+        ),
+        (
+            vec![
+                "../../bcftools/test/merge.gvcf.9a.vcf",
+                "../../bcftools/test/merge.gvcf.9b.vcf",
+                "../../bcftools/test/merge.gvcf.9c.vcf",
+                "../../bcftools/test/merge.gvcf.9d.vcf",
+                "../../bcftools/test/merge.gvcf.9e.vcf",
+            ],
+            vec!["-r", "22:21-23"],
+            "../../bcftools/test/merge.gvcf.9.4.out",
+        ),
+    ];
+
+    for (inputs, extra_args, expected_path) in cases {
+        let mut args = vec![
+            "merge",
+            "--no-version",
+            "--gvcf",
+            "../../bcftools/test/gvcf.fa",
+        ];
+        args.extend(extra_args);
+        args.extend(inputs);
+        let (out, err, code) = run(&args);
+        assert_eq!(
+            code, 0,
+            "merge.gvcf.9 fixture failed for {expected_path}: {err}"
+        );
+        let expected = std::fs::read_to_string(expected_path).unwrap();
+        assert_eq!(
+            out, expected,
+            "merge.gvcf.9 fixture differed for {expected_path}"
+        );
+    }
+}
+
+#[test]
 fn merge_sites_only_alt_union_matches_upstream_fixture() {
     for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
         let mut args = vec![
