@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #216
+  (`progress/todo-sync-after-parental-origin-common-filter`, merge commit
+  `b0738f0`) synced the TODO docs after PR #215.
 - 2026-05-18: PR #215 (`progress/parental-origin-common-filter`, merge commit
   `bc5eb24`) added common `+parental-origin -i` / `-e` record filtering
   through the shared text filter engine before CNV parental-origin likelihood
@@ -710,10 +713,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`bc5eb24`) (320 lib unit tests plus
+  latest merged commit on `main` (`b0738f0`) (320 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/mendelian2-common-filter`, adding
+  common `+mendelian2 -i/-e` record filtering through the shared text filter
+  engine before Mendelian consistency collection.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1360,12 +1364,13 @@ Current local slice:
   bitmasks; the haploid-kid branch (compare against the single
   inheriting parent, `ngood_alt` unless both ref), the diploid
   consistency branch (phase-consistent GOOD, parent-missing guards,
-  else MERR), and the `c`/`a`/`d`/`e`/`g`/`m`/`E`/`M`/`S` modes +
-  summary/per-trio count table. Byte-for-byte parity with
-  `mendelian.{1,3,4,6,7,8}.out`. 6 integration tests in
-  `crates/bcftools-rs/tests/plugin_mendelian2.rs` + 4 unit tests.
+  else MERR), common `-i`/`-e` record filtering through the shared text
+  filter engine with upstream-style `sites_fail` accounting, and the
+  `c`/`a`/`d`/`e`/`g`/`m`/`E`/`M`/`S` modes + summary/per-trio count table.
+  Byte-for-byte parity with `mendelian.{1,3,4,6,7,8}.out`. 7 integration
+  tests in `crates/bcftools-rs/tests/plugin_mendelian2.rs` + 5 unit tests.
   Remaining: explicit `--rules`/`--rules-file` (other assemblies /
-  custom ploidy) and `-i`/`-e` filtering (filter engine).
+  custom ploidy).
 - [x] `+parental-origin` (`crates/bcftools-rs/src/commands/plugins/parental_origin.rs`):
   port of `parental-origin.c`. `-p P,F,M` trio, `-r REGION`,
   `-t del|dup`. Per-SNP FORMAT/PL→normalized GL, FORMAT/GT ALT dosage,

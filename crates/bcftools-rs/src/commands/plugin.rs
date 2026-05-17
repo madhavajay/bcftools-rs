@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use crate::commands::plugins::contrast::FilterMode as ContrastFilterMode;
 use crate::commands::plugins::fill_from_fasta::FilterMode as FillFromFastaFilterMode;
 use crate::commands::plugins::guess_ploidy::FilterMode as GuessPloidyFilterMode;
+use crate::commands::plugins::mendelian2::FilterMode as Mendelian2FilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
 use crate::commands::plugins::parental_origin::FilterMode as ParentalOriginFilterMode;
 use crate::diagnostics::fmt_etag;
@@ -123,6 +124,20 @@ fn set_parental_origin_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one parental-origin -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_mendelian2_filter(
+    target: &mut Option<(Mendelian2FilterMode, String)>,
+    mode: Mendelian2FilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one mendelian2 -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -381,6 +396,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut trio_stats_alt: Option<i32> = None;
     let mut trio_stats_debug: Option<String> = None;
     let mut mendelian_mode: Option<String> = None;
+    let mut mendelian_filter: Option<(Mendelian2FilterMode, String)> = None;
     // fixploidy options.
     let mut fp_default_ploidy: i32 = 2;
     let mut fp_force_ploidy: Option<i32> = None;
@@ -766,7 +782,57 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-i" | "--include" | "-e" | "--exclude"
                 if !matches!(plugin_name.as_deref(), Some("missing2ref" | "contrast")) =>
             {
-                let _ = iter.next();
+                if plugin_name.as_deref() == Some("mendelian2") {
+                    let mode = if raw == "-i" || raw == "--include" {
+                        Mendelian2FilterMode::Include
+                    } else {
+                        Mendelian2FilterMode::Exclude
+                    };
+                    let expr = iter
+                        .next()
+                        .ok_or_else(|| {
+                            io::Error::other("mendelian2 requires an expression after -i/-e")
+                        })?
+                        .to_string_lossy()
+                        .into_owned();
+                    set_mendelian2_filter(&mut mendelian_filter, mode, expr)?;
+                } else {
+                    let _ = iter.next();
+                }
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("mendelian2") => {
+                set_mendelian2_filter(
+                    &mut mendelian_filter,
+                    Mendelian2FilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("mendelian2") => {
+                set_mendelian2_filter(
+                    &mut mendelian_filter,
+                    Mendelian2FilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("mendelian2") =>
+            {
+                set_mendelian2_filter(
+                    &mut mendelian_filter,
+                    Mendelian2FilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("mendelian2") =>
+            {
+                set_mendelian2_filter(
+                    &mut mendelian_filter,
+                    Mendelian2FilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             "--regions" | "-R" | "--regions-file" | "--targets" | "-T" | "--targets-file"
             | "--regions-overlap" | "--targets-overlap" | "--threads" => {
@@ -1343,7 +1409,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         };
         let mode = mendelian2::parse_mode(mendelian_mode.as_deref().unwrap_or(""))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let report = mendelian2::run(Path::new(&input), pfm, mode)?;
+        let report = mendelian2::run(
+            Path::new(&input),
+            pfm,
+            mode,
+            mendelian_filter
+                .as_ref()
+                .map(|(mode, expr)| mendelian2::FilterSpec { mode: *mode, expr }),
+        )?;
         write_plugin_output(report.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }

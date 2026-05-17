@@ -7,8 +7,9 @@
 //! both parents (MF, ploidy 2). Modes: `c` count (default), `a` annotate
 //! INFO/MERR, `d` delete inconsistent trio GTs, `e`/`g`/`m` list
 //! error/good/missing sites (`E`/`M`/`S` drop variants). The explicit
-//! `--rules`/`--rules-file` engine and `-i`/`-e` filtering need
-//! infrastructure tracked in `TODO.md`.
+//! `--rules`/`--rules-file` engine is still tracked in `TODO.md`. Common
+//! `-i`/`-e` filters route through the shared text filter engine before
+//! Mendelian consistency collection and update `sites_fail` like upstream.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -19,6 +20,7 @@ use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 use htslib_rs::variant::{VariantType, classify_variant};
 
+use crate::filter::{self as bcffilter, EvalContext};
 use crate::vcf_compat::normalize_vcf_text;
 
 const MODE_ANNOTATE: u32 = 1 << 0;
@@ -122,6 +124,18 @@ struct SiteStats {
     ngood: u32,
 }
 
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
+}
+
 /// `-p [1X:|2X:]P,F,M` → `(proband, father, mother, sex_id)` sample
 /// names. Mirrors upstream `init_data`: no prefix leaves `sex_id` at the
 /// `calloc` default `0` (str2sex `1X`, male chrX pattern); `1X:` sets it
@@ -148,9 +162,14 @@ fn parse_pfm(spec: &str) -> Result<(String, String, String, usize), String> {
 
 /// Reads the input and returns the mendelian2 output (VCF for the
 /// list/annotate/delete modes, the stats table for count mode).
-pub fn run(input: &Path, pfm: &str, mode: u32) -> io::Result<String> {
+pub fn run(
+    input: &Path,
+    pfm: &str,
+    mode: u32,
+    filter: Option<FilterSpec<'_>>,
+) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    compute(&text, pfm, mode).map_err(io::Error::other)
+    compute(&text, pfm, mode, filter).map_err(io::Error::other)
 }
 
 /// Allele bitmask parse mirroring upstream `parse_gt`: returns
@@ -191,7 +210,12 @@ struct Trio {
     sex_id: usize,
 }
 
-fn compute(text: &str, pfm: &str, mode: u32) -> Result<String, String> {
+fn compute(
+    text: &str,
+    pfm: &str,
+    mode: u32,
+    filter: Option<FilterSpec<'_>>,
+) -> Result<String, String> {
     let (p, fa, mo, sex_id) = parse_pfm(pfm)?;
     let lines: Vec<&str> = text.lines().collect();
     let samples: Vec<&str> = lines
@@ -271,6 +295,16 @@ fn compute(text: &str, pfm: &str, mode: u32) -> Result<String, String> {
             skip = true;
         }
         if skip {
+            if mode & MODE_DROP_SKIP != 0 && vcf_out {
+                out.push_str(&f.join("\t"));
+                out.push('\n');
+            }
+            continue;
+        }
+        if let Some(filter) = filter
+            && !record_passes_filter(&f, filter)?
+        {
+            site.nfail += 1;
             if mode & MODE_DROP_SKIP != 0 && vcf_out {
                 out.push_str(&f.join("\t"));
                 out.push('\n');
@@ -494,6 +528,22 @@ fn compute(text: &str, pfm: &str, mode: u32) -> Result<String, String> {
     Ok(out)
 }
 
+fn record_passes_filter(fields: &[String], filter: FilterSpec<'_>) -> Result<bool, String> {
+    let matched =
+        bcffilter::eval_expression_with(filter.expr, &EvalContext::new(), |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, fields)
+        })
+        .map_err(|e| e.to_string())?
+        .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
 /// Set every allele in a GT to missing, preserving separators (e.g.
 /// `0/1`→`./.`, `0|1`→`.|.`, `.`→`.`).
 fn delete_gt(gt: &str) -> String {
@@ -586,5 +636,52 @@ mod tests {
         assert_eq!(parse_mode("").unwrap(), MODE_COUNT);
         assert_eq!(parse_mode("d").unwrap(), MODE_DELETE);
         assert_eq!(parse_mode("e").unwrap(), MODE_LIST_ERR);
+    }
+
+    #[test]
+    fn include_exclude_filters_update_failed_site_counts() {
+        let vcf = "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tmom1\tdad1\tchild1\n\
+1\t100\t.\tA\tG\t100\tPASS\t.\tGT\t0/0\t0/0\t0/0\n\
+1\t101\t.\tA\tG\t100\tPASS\t.\tGT\t0/0\t0/0\t0/1\n\
+1\t102\t.\tA\tG\t100\tPASS\t.\tGT\t0/0\t0/0\t1/1\n";
+        let value = |report: &str, key: &str| {
+            report
+                .lines()
+                .find_map(|line| line.strip_prefix(key))
+                .and_then(|rest| rest.strip_prefix('\t'))
+                .and_then(|rest| rest.split('\t').next())
+                .unwrap()
+                .to_owned()
+        };
+
+        let include = compute(
+            vcf,
+            "child1,dad1,mom1",
+            MODE_COUNT,
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: "POS=100",
+            }),
+        )
+        .unwrap();
+        assert_eq!(value(&include, "sites_fail"), "2");
+        assert_eq!(value(&include, "sites_good"), "1");
+        assert_eq!(value(&include, "sites_merr"), "0");
+
+        let exclude = compute(
+            vcf,
+            "child1,dad1,mom1",
+            MODE_COUNT,
+            Some(FilterSpec {
+                mode: FilterMode::Exclude,
+                expr: "POS=100",
+            }),
+        )
+        .unwrap();
+        assert_eq!(value(&exclude, "sites_fail"), "1");
+        assert_eq!(value(&exclude, "sites_good"), "0");
+        assert_eq!(value(&exclude, "sites_merr"), "2");
     }
 }
