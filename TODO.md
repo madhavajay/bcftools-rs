@@ -201,8 +201,8 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/merge-abc-force-samples` adds
-  byte-for-byte text parity for upstream `merge.abc.out`
+- 2026-05-17: PR #131 (`progress/merge-abc-force-samples`, merge commit
+  `dfbb343`) added byte-for-byte text parity for upstream `merge.abc.out`
   (`merge --force-samples` over `merge.{a,b,c}.vcf`).
 - 2026-05-17: PR #129 (`progress/merge-missing-to-ref-slice`, merge commit
   `4fe7577`) added a narrow text-backed `merge -0` / `--missing-to-ref`
@@ -473,10 +473,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`f2e521f`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`dfbb343`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-abc-force-samples` is adding
-  byte-for-byte text parity for upstream `merge.abc.out`. Keep the
+- Current code slice in flight: none after PR #131; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
