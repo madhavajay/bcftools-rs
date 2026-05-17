@@ -134,3 +134,44 @@ fn missing2ref_reads_stdin() {
     assert!(out.status.success(), "+missing2ref - failed: {stderr}");
     assert_eq!(String::from_utf8(out.stdout).unwrap(), expected);
 }
+
+#[test]
+fn missing2ref_phased_and_major_modes() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("major.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\tC\tD\n\
+1\t10\t.\tC\tT,G\t.\tPASS\t.\tGT\t1/1\t0/1\t./.\t2/.\n",
+    )
+    .unwrap();
+
+    let (out, err, code) = run(&[
+        "+missing2ref",
+        "--no-version",
+        input.to_str().unwrap(),
+        "--",
+        "-m",
+    ]);
+    assert_eq!(code, 0, "+missing2ref -m failed: {err}");
+    assert!(
+        out.contains("\tGT\t1/1\t0/1\t1/1\t2/1\n"),
+        "major allele should fill missing allele tokens: {out}"
+    );
+
+    let (out, err, code) = run(&[
+        "+missing2ref",
+        "--no-version",
+        input.to_str().unwrap(),
+        "--",
+        "-p",
+        "-m",
+    ]);
+    assert_eq!(code, 0, "+missing2ref -p -m failed: {err}");
+    assert!(
+        out.contains("\tGT\t1/1\t0/1\t1|1\t2|1\n"),
+        "phased major allele should phase only replaced alleles: {out}"
+    );
+}

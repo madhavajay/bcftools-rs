@@ -638,10 +638,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`7a6a396`) (302 lib unit tests plus per-command
+  latest merged commit on `main` (`2676cfd`) (302 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; `main` is synced through PR #193
-  (`7a6a396`).
+- Current code slice in flight: `progress/missing2ref-major-phased` — add
+  `+missing2ref -p` / `--phased` and `-m` / `--major` genotype-fill modes.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1061,15 +1061,17 @@ Current local slice:
   `query.nucleotide.vcf` -> `query.allele-length.tsv` fixture. 2 integration
   tests + 3 unit tests.
 - [x] `+missing2ref` (`crates/bcftools-rs/src/commands/plugins/missing2ref.rs`):
-  default missing-genotype-to-ref behavior — every `.` allele token inside the
-  `GT` FORMAT subfield becomes `0` while phase/unphase separators and all other
-  FORMAT subfields are byte-preserved; GT located by FORMAT key index (not
-  position). VCF/VCF.gz/BCF and stdin input; `-o`/`-O u|b|v|z` output via a
-  shared `write_plugin_output` helper in `plugin.rs`. Byte-for-byte parity
-  with the upstream `plugin1.vcf` -> `missing2ref.out` fixture
-  (`test_vcf_plugin` / `+missing2ref --no-version`). 5 integration tests in
-  `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 5 unit tests. Remaining:
-  `-e`/expression-gated and major-allele set modes.
+  default missing-genotype-to-ref behavior, plus `-p`/`--phased` and
+  `-m`/`--major`: every `.` allele token inside the `GT` FORMAT subfield is
+  replaced with either reference allele `0` or the per-record major called
+  allele; phased mode mirrors HTSlib text output by using `|` before replaced
+  missing alleles, while all other FORMAT subfields are byte-preserved; GT
+  located by FORMAT key index (not position). VCF/VCF.gz/BCF and stdin input;
+  `-o`/`-O u|b|v|z` output via a shared `write_plugin_output` helper in
+  `plugin.rs`. Byte-for-byte parity with the upstream `plugin1.vcf` ->
+  `missing2ref.out` fixture (`test_vcf_plugin` / `+missing2ref --no-version`).
+  6 integration tests in `crates/bcftools-rs/tests/plugin_missing2ref.rs` + 7
+  unit tests. Remaining: `-e`/expression-gated mode.
 - [x] `+add-variantkey` (`crates/bcftools-rs/src/commands/plugins/add_variantkey.rs`,
   shared algorithm in `plugins/variantkey.rs`): appends `VKX` (16-hex 64-bit
   VariantKey over CHROM, 0-based POS, REF, first ALT) and `RSX` (8-hex of the
