@@ -659,6 +659,7 @@ fn merge_inputs(
         if absent_alleles > 0 {
             add_missing_reference_alleles_to_an(&mut fixed, absent_alleles);
         }
+        cleanup_single_base_reference_block_end(&mut fixed);
         let mut samples = Vec::new();
         for (input_idx, input) in inputs.iter().enumerate() {
             match &site.samples_by_input[input_idx] {
@@ -2859,6 +2860,18 @@ fn info_value<'a>(info: &'a str, key: &str) -> Option<&'a str> {
         let (name, value) = field.split_once('=')?;
         (name == key).then_some(value)
     })
+}
+
+fn cleanup_single_base_reference_block_end(fixed: &mut [String]) {
+    if fixed.get(4).is_none_or(|alt| alt != ".") {
+        return;
+    }
+    let Some(pos) = fixed.get(1).and_then(|raw| raw.parse::<u64>().ok()) else {
+        return;
+    };
+    if fixed.get(7).and_then(|info| info_u64(info, "END")) == Some(pos) {
+        fixed[7] = remove_info_value(&fixed[7], "END");
+    }
 }
 
 fn add_missing_reference_alleles_to_an(fixed: &mut [String], missing_alleles: usize) {
