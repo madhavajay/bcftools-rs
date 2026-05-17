@@ -190,6 +190,38 @@ fn norm_check_ref_swap_matches_upstream_text_output() {
 }
 
 #[test]
+fn norm_sort_split_multiallelic_fixtures_match_upstream_text_output() {
+    let input = fixture_path("norm.sort.vcf");
+    for (args, fixture) in [
+        (
+            vec!["norm", "--no-version", "-m", "-", input.to_str().unwrap()],
+            "norm.sort.1.out",
+        ),
+        (
+            vec![
+                "norm",
+                "--no-version",
+                "-m",
+                "-",
+                "-S",
+                "lex",
+                input.to_str().unwrap(),
+            ],
+            "norm.sort.2.out",
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let (out, err, code) = run(&args);
+        assert_eq!(code, 0, "norm split fixture {fixture} failed: {err}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm split fixture {fixture} differed"
+        );
+    }
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");
