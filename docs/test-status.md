@@ -34,7 +34,7 @@ Status values:
 | `test_trio_dnm3` | not-yet-ported | Plugin not ported. |
 | `test_usage` | not-yet-ported | Harness requires `IO::Pty`; full command table is not ported. |
 | `test_vcf_64bit` | not-yet-ported | Depends on broader VCF command coverage. |
-| `test_vcf_annotate` | rust-covered | Rust integration coverage includes chromosome renaming, `-x` removal for ID/QUAL/FILTER/INFO/FORMAT tags, FILTER/INFO/FORMAT keep-only removal, byte-for-byte `annotate6.out` and `annotate7.out` fixture coverage, VCF/VCF.gz/BCF input, output formats, and Kestrel reads; annotation transfer, header injection, column mapping, overlap modes, and full upstream parity remain. |
+| `test_vcf_annotate` | rust-covered | Rust integration coverage includes chromosome renaming, `-x` removal for ID/QUAL/FILTER/INFO/FORMAT tags, FILTER/INFO/FORMAT keep-only removal, PASS header injection/preservation for removal slices, `--force` command-shape compatibility, byte-for-byte `annotate6.out`, `annotate7.out`, `annotate25.out`, and `annotate28.out` fixture coverage, VCF/VCF.gz/BCF input, output formats, and Kestrel reads; annotation transfer, header injection, column mapping, overlap modes, and full upstream parity remain. |
 | `test_vcf_call` | not-yet-ported | `call` not ported. |
 | `test_vcf_call_cAls` | not-yet-ported | `call` not ported. |
 | `test_vcf_check` | rust-covered | Rust `stats` has integration coverage for the local stats slice; the upstream check Perl flow is not enabled yet. |
