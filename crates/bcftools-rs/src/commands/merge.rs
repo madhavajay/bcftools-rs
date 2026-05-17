@@ -2,8 +2,8 @@
 //!
 //! This local slice merges records that are present in every input or are
 //! absent from some inputs and have identical site fields. Full synced-reader
-//! merging, allele unification, INFO rules, and gVCF mode remain tracked in
-//! `TODO.md`.
+//! merging, allele unification, full INFO rules, and gVCF mode remain tracked
+//! in `TODO.md`.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -26,7 +26,7 @@ Usage:   bcftools merge [OPTIONS] <A.vcf.gz> <B.vcf.gz> [...]\n\
 \n\
 Options:\n\
     -l, --file-list FILE            Read input file names from FILE\n\
-    -i, --info-rules TAG:METHOD,..  Accepted for command-shape compatibility in this text slice\n\
+    -i, --info-rules TAG:METHOD,..  Apply AC:sum/AN:sum in the current text ALT-union slice\n\
     -m, --merge TYPE                Accepted for command-shape compatibility in this same-site slice\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
@@ -42,6 +42,13 @@ struct Args {
     output: Option<PathBuf>,
     output_kind: OutputKind,
     force_samples: bool,
+    info_rules: InfoRules,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct InfoRules {
+    sum_ac: bool,
+    sum_an: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +112,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut output_kind = OutputKind::VcfText;
     let mut force_single = false;
     let mut force_samples = false;
+    let mut info_rules = InfoRules::default();
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -115,7 +123,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 file_list = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
             "-i" | "--info-rules" => {
-                let _ = next_string(&mut iter, raw.as_ref())?;
+                info_rules = parse_info_rules(&next_string(&mut iter, raw.as_ref())?);
             }
             "-m" | "--merge" => {
                 let _ = next_string(&mut iter, raw.as_ref())?;
@@ -133,7 +141,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--file-list=") => {
                 file_list = Some(PathBuf::from(value_after_equals(&raw)))
             }
-            _ if raw.starts_with("--info-rules=") => {}
+            _ if raw.starts_with("--info-rules=") => {
+                info_rules = parse_info_rules(value_after_equals(&raw))
+            }
             _ if raw.starts_with("--merge=") => {}
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
@@ -144,7 +154,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-l") && raw.len() > 2 => {
                 file_list = Some(PathBuf::from(&raw[2..]))
             }
-            _ if raw.starts_with("-i") && raw.len() > 2 => {}
+            _ if raw.starts_with("-i") && raw.len() > 2 => info_rules = parse_info_rules(&raw[2..]),
             _ if raw.starts_with("-m") && raw.len() > 2 => {}
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
@@ -176,7 +186,26 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         output,
         output_kind,
         force_samples,
+        info_rules,
     })
+}
+
+fn parse_info_rules(raw: &str) -> InfoRules {
+    let mut rules = InfoRules::default();
+    for rule in raw.split(',') {
+        let Some((tag, method)) = rule.split_once(':') else {
+            continue;
+        };
+        if method != "sum" {
+            continue;
+        }
+        match tag {
+            "AC" => rules.sum_ac = true,
+            "AN" => rules.sum_an = true,
+            _ => {}
+        }
+    }
+    rules
 }
 
 fn read_file_list(path: &Path) -> Result<Vec<PathBuf>, ParseOutcome> {
@@ -217,7 +246,7 @@ fn run(args: &Args) -> io::Result<()> {
     for path in &args.inputs {
         inputs.push(parse_vcf_text(&read_vcf_text(path)?)?);
     }
-    let merged = merge_inputs(&inputs, args.force_samples)?;
+    let merged = merge_inputs(&inputs, args.force_samples, args.info_rules)?;
     write_output(merged.as_bytes(), args)
 }
 
@@ -311,7 +340,11 @@ fn parse_vcf_text(text: &str) -> io::Result<VcfInput> {
     })
 }
 
-fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> {
+fn merge_inputs(
+    inputs: &[VcfInput],
+    force_samples: bool,
+    info_rules: InfoRules,
+) -> io::Result<String> {
     let first = inputs
         .first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no inputs"))?;
@@ -351,7 +384,7 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
         }
     }
 
-    let mut sites = collect_sites(inputs)?;
+    let mut sites = collect_sites(inputs, info_rules)?;
     let contigs = contig_order(&first.meta);
     sites.sort_by(|a, b| compare_sites(a, b, &contigs));
 
@@ -404,7 +437,7 @@ fn render_meta_with_pass_filter(meta: &[String]) -> String {
     out
 }
 
-fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
+fn collect_sites(inputs: &[VcfInput], info_rules: InfoRules) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
     let mut by_locus = HashMap::new();
@@ -436,7 +469,7 @@ fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
             } else if let Some(site_idx) = by_locus.get(&locus_key(record)).copied() {
                 let site: &mut MergedSite = &mut sites[site_idx];
                 if can_merge_same_locus_alt_union(site, record) {
-                    merge_sites_only_alt_union(site, record);
+                    merge_sites_only_alt_union(site, record, info_rules);
                     site.samples_by_input[input_idx] = Some(record.samples.clone());
                 } else {
                     let existing = &site.fixed;
@@ -492,7 +525,7 @@ fn can_merge_same_locus_alt_union(site: &MergedSite, record: &RecordLine) -> boo
         && site.fixed[..4] == record.fixed[..4]
 }
 
-fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
+fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_rules: InfoRules) {
     let mut alts = split_alt(&site.fixed[4]);
     let next_alts = split_alt(&record.fixed[4]);
     for alt in &next_alts {
@@ -504,11 +537,11 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
     let site_has_no_sample_values = site_has_no_sample_values(site);
     let mut ac_by_alt = HashMap::new();
     add_ac_by_alt(&mut ac_by_alt, &site.fixed[4], &site.fixed[7]);
-    if site_has_no_sample_values {
+    if site_has_no_sample_values || info_rules.sum_ac {
         add_ac_by_alt(&mut ac_by_alt, &record.fixed[4], &record.fixed[7]);
     }
     let an = info_i64(&site.fixed[7], "AN").unwrap_or(0)
-        + if site_has_no_sample_values {
+        + if site_has_no_sample_values || info_rules.sum_an {
             info_i64(&record.fixed[7], "AN").unwrap_or(0)
         } else {
             0
@@ -520,7 +553,7 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
         .join(",");
 
     site.fixed[4] = alts.join(",");
-    site.fixed[7] = if site_has_no_sample_values {
+    site.fixed[7] = if site_has_no_sample_values || info_rules.sum_ac || info_rules.sum_an {
         format!("AC={ac_values};AN={an}")
     } else {
         format!("AN={an};AC={ac_values}")
@@ -676,7 +709,7 @@ mod tests {
 1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t1/1\n",
         )
         .unwrap();
-        let merged = merge_inputs(&[a, b], false).unwrap();
+        let merged = merge_inputs(&[a, b], false, InfoRules::default()).unwrap();
         assert!(merged.contains("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB"));
         assert!(merged.contains("1\t2\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\t1/1"));
     }
