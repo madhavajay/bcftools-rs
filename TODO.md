@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #197 (`progress/af-dist-bin-files`, merge commit
+  `84e1fac`) added `+af-dist -d` / `--dev-bins` and `-p` / `--prob-bins`
+  file inputs, matching upstream `bin_init` one-boundary-per-line file
+  behavior while preserving comma-list bin definitions.
 - 2026-05-17: PR #196
   (`progress/todo-sync-after-missing2ref-major-phased`, merge commit
   `df15fa7`) synced the TODO docs after PR #195.
@@ -645,11 +649,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`df15fa7`) (304 lib unit tests plus per-command
+  latest merged commit on `main` (`84e1fac`) (305 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/af-dist-bin-files` — add
-  `+af-dist -d` / `--dev-bins` and `-p` / `--prob-bins` bin-definition file
-  inputs.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
