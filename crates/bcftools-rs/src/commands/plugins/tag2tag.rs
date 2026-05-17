@@ -6,6 +6,8 @@
 //!   upstream `float` arithmetic and `%g`-style formatting.
 //! - `--gp-to-gt`: hard-call `GT` from normalized `GP` with `-t`/`--threshold`
 //!   (call iff max posterior >= 1 - threshold).
+//! - `--LXX-to-XX`: expand localized `LAD`/`LPL` vectors to `AD`/`PL` through
+//!   per-sample `LAA` maps.
 //!
 //! `-r`/`--replace` drops the source FORMAT tag (and its header line) and
 //! adds the destination tag's header line as the last `##` line, mirroring
@@ -28,6 +30,7 @@ pub enum Conversion {
     GlToPl,
     GlToGp,
     GpToGt,
+    LxxToXx,
 }
 
 const PL_HEADER: &str =
@@ -35,6 +38,57 @@ const PL_HEADER: &str =
 const GP_HEADER: &str =
     "##FORMAT=<ID=GP,Number=G,Type=Float,Description=\"Genotype probabilities\">";
 const GT_HEADER: &str = "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">";
+const AD_HEADER: &str = "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">";
+const PASS_HEADER: &str = "##FILTER=<ID=PASS,Description=\"All filters passed\">";
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LocalizedOptions {
+    default_ad: Option<i32>,
+    default_pl: Option<i32>,
+    skip_nalt: usize,
+}
+
+impl LocalizedOptions {
+    pub fn from_defaults(defaults: Option<&str>, skip_nalt: usize) -> io::Result<Self> {
+        let mut opts = Self {
+            default_ad: None,
+            default_pl: None,
+            skip_nalt,
+        };
+        let Some(defaults) = defaults else {
+            return Ok(opts);
+        };
+        for part in defaults.split(',').filter(|p| !p.is_empty()) {
+            let Some((tag, value)) = part.split_once(':') else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Could not parse: --defaults {defaults}"),
+                ));
+            };
+            let parsed = if value == "." {
+                None
+            } else {
+                Some(value.parse::<i32>().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Could not parse: --defaults {defaults}"),
+                    )
+                })?)
+            };
+            match tag {
+                "AD" => opts.default_ad = parsed,
+                "PL" => opts.default_pl = parsed,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Could not parse: --defaults {defaults}"),
+                    ));
+                }
+            }
+        }
+        Ok(opts)
+    }
+}
 
 struct Plan {
     src: &'static str,
@@ -59,16 +113,44 @@ fn plan(conv: Conversion) -> Plan {
             dst: "GT",
             dst_header: GT_HEADER,
         },
+        Conversion::LxxToXx => Plan {
+            src: "LXX",
+            dst: "XX",
+            dst_header: "",
+        },
     }
 }
 
 /// Reads the input VCF/BCF and returns the converted VCF text.
-pub fn run(input: &Path, conv: Conversion, replace: bool, threshold: f64) -> io::Result<String> {
+pub fn run(
+    input: &Path,
+    conv: Conversion,
+    replace: bool,
+    threshold: f64,
+    localized: LocalizedOptions,
+) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    Ok(convert(&text, conv, replace, threshold))
+    Ok(convert_with_options(
+        &text, conv, replace, threshold, localized,
+    ))
 }
 
+#[cfg(test)]
 fn convert(text: &str, conv: Conversion, replace: bool, threshold: f64) -> String {
+    convert_with_options(text, conv, replace, threshold, LocalizedOptions::default())
+}
+
+fn convert_with_options(
+    text: &str,
+    conv: Conversion,
+    replace: bool,
+    threshold: f64,
+    localized: LocalizedOptions,
+) -> String {
+    if conv == Conversion::LxxToXx {
+        return convert_lxx_to_xx(text, replace, localized);
+    }
+
     let p = plan(conv);
     let lines: Vec<&str> = text.lines().collect();
     let src_hdr_prefix = format!("##FORMAT=<ID={},", p.src);
@@ -101,6 +183,49 @@ fn convert(text: &str, conv: Conversion, replace: bool, threshold: f64) -> Strin
     out
 }
 
+fn convert_lxx_to_xx(text: &str, replace: bool, opts: LocalizedOptions) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let chrom_idx = lines.iter().position(|l| l.starts_with("#CHROM"));
+    let has_pass = lines.iter().any(|l| l.starts_with("##FILTER=<ID=PASS,"));
+    let remove_src_headers = replace && opts.skip_nalt == 0;
+
+    let mut out = String::with_capacity(text.len() + 128);
+    for (idx, line) in lines.iter().enumerate() {
+        if line.starts_with('#') {
+            if remove_src_headers
+                && (line.starts_with("##FORMAT=<ID=LAD,")
+                    || line.starts_with("##FORMAT=<ID=LPL,")
+                    || line.starts_with("##FORMAT=<ID=LAA,"))
+            {
+                continue;
+            }
+            if Some(idx) == chrom_idx {
+                out.push_str(PL_HEADER);
+                out.push('\n');
+                out.push_str(AD_HEADER);
+                out.push('\n');
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+            if !has_pass && line.starts_with("##fileformat=") {
+                out.push_str(PASS_HEADER);
+                out.push('\n');
+            }
+            continue;
+        }
+        if line.trim().is_empty() {
+            out.push('\n');
+            continue;
+        }
+        out.push_str(&convert_lxx_record(line, replace, opts));
+        out.push('\n');
+    }
+    out
+}
+
 fn convert_record(line: &str, conv: Conversion, replace: bool, threshold: f64) -> String {
     let p = plan(conv);
     let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
@@ -121,6 +246,7 @@ fn convert_record(line: &str, conv: Conversion, replace: bool, threshold: f64) -
                 Conversion::GlToPl => gl_to_pl(src_val),
                 Conversion::GlToGp => gl_to_gp(src_val),
                 Conversion::GpToGt => gp_to_gt(src_val, threshold),
+                Conversion::LxxToXx => unreachable!("handled by convert_with_options"),
             };
             if replace {
                 let mut out: Vec<String> = Vec::with_capacity(parts.len());
@@ -156,6 +282,183 @@ fn convert_record(line: &str, conv: Conversion, replace: bool, threshold: f64) -
         fields[9 + i] = s;
     }
     fields.join("\t")
+}
+
+fn convert_lxx_record(line: &str, replace: bool, opts: LocalizedOptions) -> String {
+    let mut fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+    if fields.len() < 10 {
+        return line.to_owned();
+    }
+    let nals = allele_count(&fields[3], &fields[4]);
+    if opts.skip_nalt != 0 && nals > opts.skip_nalt {
+        return line.to_owned();
+    }
+
+    let fmt_keys: Vec<&str> = fields[8].split(':').collect();
+    let Some(laa_idx) = fmt_keys.iter().position(|k| *k == "LAA") else {
+        return line.to_owned();
+    };
+    let lad_idx = fmt_keys.iter().position(|k| *k == "LAD");
+    let lpl_idx = fmt_keys.iter().position(|k| *k == "LPL");
+    if lad_idx.is_none() && lpl_idx.is_none() {
+        return line.to_owned();
+    }
+
+    let new_samples: Vec<String> = fields[9..]
+        .iter()
+        .map(|sample| {
+            let parts: Vec<&str> = sample.split(':').collect();
+            let laa = parse_int_list(parts.get(laa_idx).copied().unwrap_or("."));
+            let ad = lad_idx.and_then(|idx| {
+                parts
+                    .get(idx)
+                    .map(|value| expand_lad(value, &laa, nals, opts.default_ad))
+            });
+            let pl = lpl_idx.and_then(|idx| {
+                parts
+                    .get(idx)
+                    .map(|value| expand_lpl(value, &laa, nals, opts.default_pl))
+            });
+
+            if replace {
+                let mut out = Vec::with_capacity(parts.len());
+                for (i, val) in parts.iter().enumerate() {
+                    if Some(i) == lad_idx || Some(i) == lpl_idx || i == laa_idx {
+                        continue;
+                    }
+                    out.push((*val).to_owned());
+                }
+                if let Some(ad) = ad {
+                    out.push(ad);
+                }
+                if let Some(pl) = pl {
+                    out.push(pl);
+                }
+                out.join(":")
+            } else {
+                let mut out: Vec<String> = parts.iter().map(|v| (*v).to_owned()).collect();
+                if let Some(ad) = ad {
+                    out.push(ad);
+                }
+                if let Some(pl) = pl {
+                    out.push(pl);
+                }
+                out.join(":")
+            }
+        })
+        .collect();
+
+    let new_format = if replace {
+        let mut keys = Vec::with_capacity(fmt_keys.len());
+        for (i, key) in fmt_keys.iter().enumerate() {
+            if Some(i) == lad_idx || Some(i) == lpl_idx || i == laa_idx {
+                continue;
+            }
+            keys.push((*key).to_owned());
+        }
+        if lad_idx.is_some() {
+            keys.push("AD".to_owned());
+        }
+        if lpl_idx.is_some() {
+            keys.push("PL".to_owned());
+        }
+        keys.join(":")
+    } else {
+        let mut keys = fields[8].clone();
+        if lad_idx.is_some() {
+            keys.push_str(":AD");
+        }
+        if lpl_idx.is_some() {
+            keys.push_str(":PL");
+        }
+        keys
+    };
+
+    fields[8] = new_format;
+    for (i, sample) in new_samples.into_iter().enumerate() {
+        fields[9 + i] = sample;
+    }
+    fields.join("\t")
+}
+
+fn allele_count(_ref_allele: &str, alt: &str) -> usize {
+    if alt == "." || alt.is_empty() {
+        1
+    } else {
+        1 + alt.split(',').count()
+    }
+}
+
+fn parse_int_list(value: &str) -> Vec<i32> {
+    if value == "." || value.is_empty() {
+        return Vec::new();
+    }
+    value
+        .split(',')
+        .filter_map(|v| v.parse::<i32>().ok())
+        .collect()
+}
+
+fn format_int_list(values: &[Option<i32>]) -> String {
+    values
+        .iter()
+        .map(|v| v.map_or_else(|| ".".to_owned(), |n| n.to_string()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn expand_lad(lad: &str, laa: &[i32], nals: usize, default: Option<i32>) -> String {
+    let src = parse_int_list(lad);
+    if src.is_empty() {
+        return format_int_list(&vec![default; nals]);
+    }
+    let mut dst = vec![default; nals];
+    dst[0] = Some(src[0]);
+    for (src_idx, allele) in laa.iter().enumerate() {
+        let src_pos = src_idx + 1;
+        if src_pos >= src.len() {
+            break;
+        }
+        if *allele >= 0 {
+            let allele = *allele as usize;
+            if allele < nals {
+                dst[allele] = Some(src[src_pos]);
+            }
+        }
+    }
+    format_int_list(&dst)
+}
+
+fn expand_lpl(lpl: &str, laa: &[i32], nals: usize, default: Option<i32>) -> String {
+    let src = parse_int_list(lpl);
+    let ndst = nals * (nals + 1) / 2;
+    let mut dst = vec![default; ndst];
+    let mut localized = Vec::with_capacity(laa.len() + 1);
+    localized.push(0);
+    localized.extend_from_slice(laa);
+
+    let mut src_idx = 0usize;
+    for j in 0..localized.len() {
+        let aj = localized[j];
+        if aj < 0 || aj as usize >= nals {
+            break;
+        }
+        for ak in localized.iter().take(j + 1) {
+            if src_idx >= src.len() {
+                break;
+            }
+            if *ak < 0 {
+                src_idx += 1;
+                continue;
+            }
+            let idx = aj as usize * (aj as usize + 1) / 2 + *ak as usize;
+            if idx < dst.len() {
+                dst[idx] = Some(src[src_idx]);
+            }
+            src_idx += 1;
+        }
+    }
+    format_int_list(&dst)
 }
 
 fn gl_to_pl(gl: &str) -> String {
@@ -372,6 +675,22 @@ mod tests {
         assert_eq!(gp_to_gt("1,0,0", 0.2), "0/0");
         assert_eq!(gp_to_gt("0,0.443,0.557", 0.2), "./."); // max 0.557 < 0.8
         assert_eq!(gp_to_gt(".", 0.2), "./.");
+    }
+
+    #[test]
+    fn localized_expansion_uses_laa_mapping() {
+        assert_eq!(expand_lad("13,12", &[2], 3, None), "13,.,12");
+        assert_eq!(expand_lpl("82,0,55", &[2], 3, None), "82,.,.,0,.,55");
+        assert_eq!(
+            expand_lpl("305,339,82,220,0,61", &[5, 2], 8, None),
+            "305,.,.,220,.,61,.,.,0,.,.,.,.,.,.,339,.,.,.,.,82,.,.,.,.,.,.,.,.,.,.,.,.,.,.,."
+        );
+    }
+
+    #[test]
+    fn localized_defaults_fill_missing_slots() {
+        assert_eq!(expand_lad("31", &[], 3, Some(0)), "31,0,0");
+        assert_eq!(expand_lpl("0", &[], 3, Some(255)), "0,255,255,255,255,255");
     }
 
     #[test]
