@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #191 (`progress/tag2tag-lxx-to-xx`, merge commit
+  `1cd8b1a`) added byte-for-byte `+tag2tag --LXX-to-XX` parity for upstream
+  `tag2tag.LPL.1.{1,2,3}.vcf` by expanding per-sample localized `LAD`/`LPL`
+  vectors through `LAA` maps with `-r`, `-d`, and `-s` behavior.
 - 2026-05-17: PR #190 (`progress/todo-sync-after-tag2tag-gl-to-gp`, merge
   commit `b437584`) synced the TODO docs after PR #189.
 - 2026-05-17: PR #189 (`progress/tag2tag-gl-to-gp`, merge commit
@@ -631,11 +635,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`b437584`) (299 lib unit tests plus per-command
+  latest merged commit on `main` (`1cd8b1a`) (301 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/tag2tag-lxx-to-xx` — add
-  `+tag2tag --LXX-to-XX` byte-for-byte parity for upstream
-  `tag2tag.LPL.1.{1,2,3}.vcf`.
+- Current code slice in flight: none; `main` is synced through PR #191
+  (`1cd8b1a`).
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
