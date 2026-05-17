@@ -201,11 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/annotate-force-pass-header` adds
-  byte-for-byte text parity for upstream `annotate25.out` and `annotate28.out`
-  by accepting `--force` in the local `-x` removal slice, honoring
-  `--no-version` for existing `##bcftools_*` headers, and injecting the PASS
-  FILTER header when `-x FILTER` needs it.
+- 2026-05-17: PR #149 (`progress/annotate-force-pass-header`, merge commit
+  `ed81235`) added byte-for-byte text parity for upstream `annotate25.out` and
+  `annotate28.out` by accepting `--force` in the local `-x` removal slice,
+  honoring `--no-version` for existing `##bcftools_*` headers, and injecting
+  the PASS FILTER header when `-x FILTER` needs it.
 - 2026-05-17: PR #147 (`progress/annotate-format-remove-keep`, merge commit
   `6165dad`) added byte-for-byte text parity for upstream `annotate6.out` and
   `annotate7.out` by supporting `FORMAT`/`FORMAT/<ID>` removal plus the `^`
@@ -507,9 +507,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`6165dad`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`ed81235`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/annotate-force-pass-header`; keep the
+- Current code slice in flight: none after PR #149; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
