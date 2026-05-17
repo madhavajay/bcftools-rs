@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #209 (`progress/fill-from-fasta-plugin-filter`, merge
+  commit `0a2dd91`) added plugin-specific `+fill-from-fasta -- -i/-e`
+  filters through the shared text filter engine, preserving upstream
+  annotate-only semantics where non-matching records are emitted unchanged.
 - 2026-05-18: PR #208
   (`progress/todo-sync-after-missing2ref-common-filter`, merge commit
   `1bc951b`) synced the TODO docs after PR #207.
@@ -686,12 +690,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`1bc951b`) (316 lib unit tests plus
+  latest merged commit on `main` (`0a2dd91`) (317 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/fill-from-fasta-plugin-filter`,
-  adding plugin-specific `+fill-from-fasta -- -i/-e` filters through the
-  shared text filter engine while preserving upstream annotate-only behavior:
-  records that do not pass the plugin filter are still emitted unchanged.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
