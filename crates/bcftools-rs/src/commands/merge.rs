@@ -343,7 +343,7 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
     out.push('\n');
 
     for input in &inputs[1..] {
-        if input.fixed_header[..input.fixed_header.len().min(9)] != first.fixed_header {
+        if !fixed_headers_compatible(&first.fixed_header, &input.fixed_header) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "inputs must have compatible fixed VCF columns",
@@ -375,6 +375,13 @@ fn merge_inputs(inputs: &[VcfInput], force_samples: bool) -> io::Result<String> 
     }
 
     Ok(out)
+}
+
+fn fixed_headers_compatible(first: &[String], other: &[String]) -> bool {
+    if other == first {
+        return true;
+    }
+    first.len() == 9 && other.len() == 8 && first[8] == "FORMAT" && first[..8] == other[..8]
 }
 
 fn render_meta_with_pass_filter(meta: &[String]) -> String {
@@ -428,7 +435,7 @@ fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
                 site.samples_by_input[input_idx] = Some(record.samples.clone());
             } else if let Some(site_idx) = by_locus.get(&locus_key(record)).copied() {
                 let site: &mut MergedSite = &mut sites[site_idx];
-                if can_merge_sites_only_alt_union(site, record) {
+                if can_merge_same_locus_alt_union(site, record) {
                     merge_sites_only_alt_union(site, record);
                     site.samples_by_input[input_idx] = Some(record.samples.clone());
                 } else {
@@ -478,13 +485,9 @@ fn locus_key(record: &RecordLine) -> String {
         .join("\t")
 }
 
-fn can_merge_sites_only_alt_union(site: &MergedSite, record: &RecordLine) -> bool {
-    site.fixed.len() == 8
+fn can_merge_same_locus_alt_union(site: &MergedSite, record: &RecordLine) -> bool {
+    (site.fixed.len() == 8 || site.fixed.len() == 9)
         && record.fixed.len() == 8
-        && site
-            .samples_by_input
-            .iter()
-            .all(|samples| samples.as_ref().is_none_or(|values| values.is_empty()))
         && record.samples.is_empty()
         && site.fixed[..4] == record.fixed[..4]
 }
@@ -498,14 +501,18 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
         }
     }
 
-    let ac_by_alt = merge_ac_by_alt(
-        &site.fixed[4],
-        &site.fixed[7],
-        &record.fixed[4],
-        &record.fixed[7],
-    );
-    let an =
-        info_i64(&site.fixed[7], "AN").unwrap_or(0) + info_i64(&record.fixed[7], "AN").unwrap_or(0);
+    let site_has_no_sample_values = site_has_no_sample_values(site);
+    let mut ac_by_alt = HashMap::new();
+    add_ac_by_alt(&mut ac_by_alt, &site.fixed[4], &site.fixed[7]);
+    if site_has_no_sample_values {
+        add_ac_by_alt(&mut ac_by_alt, &record.fixed[4], &record.fixed[7]);
+    }
+    let an = info_i64(&site.fixed[7], "AN").unwrap_or(0)
+        + if site_has_no_sample_values {
+            info_i64(&record.fixed[7], "AN").unwrap_or(0)
+        } else {
+            0
+        };
     let ac_values = alts
         .iter()
         .map(|alt| ac_by_alt.get(alt).copied().unwrap_or(0).to_string())
@@ -513,7 +520,17 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
         .join(",");
 
     site.fixed[4] = alts.join(",");
-    site.fixed[7] = format!("AC={ac_values};AN={an}");
+    site.fixed[7] = if site_has_no_sample_values {
+        format!("AC={ac_values};AN={an}")
+    } else {
+        format!("AN={an};AC={ac_values}")
+    };
+}
+
+fn site_has_no_sample_values(site: &MergedSite) -> bool {
+    site.samples_by_input
+        .iter()
+        .all(|samples| samples.as_ref().is_none_or(|values| values.is_empty()))
 }
 
 fn split_alt(raw: &str) -> Vec<String> {
@@ -522,18 +539,6 @@ fn split_alt(raw: &str) -> Vec<String> {
     } else {
         raw.split(',').map(str::to_owned).collect()
     }
-}
-
-fn merge_ac_by_alt(
-    left_alt: &str,
-    left_info: &str,
-    right_alt: &str,
-    right_info: &str,
-) -> HashMap<String, i64> {
-    let mut out = HashMap::new();
-    add_ac_by_alt(&mut out, left_alt, left_info);
-    add_ac_by_alt(&mut out, right_alt, right_info);
-    out
 }
 
 fn add_ac_by_alt(out: &mut HashMap<String, i64>, alt: &str, info: &str) {
