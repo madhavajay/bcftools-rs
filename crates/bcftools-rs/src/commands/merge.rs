@@ -131,7 +131,9 @@ impl MissingRules {
                         .or_else(|| max_numeric_token(value))
                         .unwrap_or_else(|| ".".to_owned())
                 }
-                "PL" => max_numeric_token(value).unwrap_or_else(|| ".".to_owned()),
+                "PL" => non_ref_diploid_value(value, input_alts)
+                    .or_else(|| max_numeric_token(value))
+                    .unwrap_or_else(|| ".".to_owned()),
                 _ => ".".to_owned(),
             }
         } else {
@@ -868,6 +870,12 @@ fn is_reference_block_alt(alts: &[String]) -> bool {
     alts.is_empty() || is_single_ref_symbolic_alt(alts)
 }
 
+fn is_reference_block_fixed(fixed: &[String]) -> bool {
+    fixed
+        .get(4)
+        .is_some_and(|alt| is_reference_block_alt(&split_alt(alt)))
+}
+
 fn record_pos(record: &RecordLine) -> Option<u64> {
     record.fixed.get(1)?.parse().ok()
 }
@@ -979,9 +987,18 @@ fn merge_inputs(
     }
 
     let mut sites = collect_sites(inputs, info_rules, merge_mode, &context)?;
-    let contigs = contig_order(&first.meta);
-    if info_rules.join_src {
+    if gvcf_mode {
+        coalesce_gvcf_same_position_sites(&mut sites, merge_mode, info_rules, &context)?;
+    }
+    let contigs = if gvcf_mode {
+        input_record_contig_order(first)
+    } else {
+        contig_order(&first.meta)
+    };
+    if info_rules.join_src && !gvcf_mode {
         sites.sort_by_key(|site| site.order);
+    } else if gvcf_mode {
+        sites.sort_by(|a, b| compare_gvcf_sites(a, b, &contigs));
     } else {
         sites.sort_by(|a, b| compare_sites(a, b, &contigs));
     }
@@ -1401,6 +1418,12 @@ fn collect_sites(
                     && supports_sampled_same_position_union(merge_mode)
                     && let Some(site_indices) = by_position.get(&position_key(record)).cloned()
                 {
+                    let mut site_indices = site_indices;
+                    if !is_reference_block_fixed(&record.fixed) {
+                        site_indices.sort_by_key(|site_idx| {
+                            is_reference_block_fixed(&sites[*site_idx].fixed)
+                        });
+                    }
                     for site_idx in site_indices {
                         let site: &mut MergedSite = &mut sites[site_idx];
                         if site.samples_by_input[input_idx].is_some() {
@@ -1439,6 +1462,81 @@ fn collect_sites(
     }
 
     Ok(sites)
+}
+
+fn coalesce_gvcf_same_position_sites(
+    sites: &mut Vec<MergedSite>,
+    merge_mode: MergeMode,
+    info_rules: InfoRules,
+    context: &MergeContext<'_>,
+) -> io::Result<()> {
+    if !supports_sampled_same_position_union(merge_mode) {
+        return Ok(());
+    }
+
+    let mut i = 0;
+    while i < sites.len() {
+        let mut j = i + 1;
+        while j < sites.len() {
+            if sites[i].fixed[..2] != sites[j].fixed[..2] || samples_overlap(&sites[i], &sites[j]) {
+                j += 1;
+                continue;
+            }
+            let probe = RecordLine {
+                fixed: sites[j].fixed.clone(),
+                samples: Vec::new(),
+            };
+            if !can_merge_sampled_same_position(&sites[i], &probe, merge_mode)
+                && !gvcf_ref_symbolic_subset_compatible(&sites[i], &probe)
+            {
+                j += 1;
+                continue;
+            }
+
+            let fixed = sites[j].fixed.clone();
+            let samples_by_input = sites[j].samples_by_input.clone();
+            for (input_idx, samples) in samples_by_input.into_iter().enumerate() {
+                let Some(samples) = samples else {
+                    continue;
+                };
+                let record = RecordLine {
+                    fixed: fixed.clone(),
+                    samples,
+                };
+                merge_sampled_same_position(
+                    &mut sites[i],
+                    &record,
+                    input_idx,
+                    info_rules,
+                    context,
+                )?;
+            }
+            sites.remove(j);
+        }
+        i += 1;
+    }
+
+    Ok(())
+}
+
+fn samples_overlap(left: &MergedSite, right: &MergedSite) -> bool {
+    left.samples_by_input
+        .iter()
+        .zip(&right.samples_by_input)
+        .any(|(left, right)| left.is_some() && right.is_some())
+}
+
+fn gvcf_ref_symbolic_subset_compatible(site: &MergedSite, record: &RecordLine) -> bool {
+    if site.fixed.len() < 9
+        || record.fixed.len() < 9
+        || site.fixed[..2] != record.fixed[..2]
+        || !site.fixed[3].eq_ignore_ascii_case(&record.fixed[3])
+    {
+        return false;
+    }
+    let site_alts = split_alt(&site.fixed[4]);
+    let record_alts = split_alt(&record.fixed[4]);
+    contains_ref_symbolic_alt(&site_alts) && record_alts.iter().all(|alt| site_alts.contains(alt))
 }
 
 fn site_key(record: &RecordLine) -> String {
@@ -1590,6 +1688,10 @@ fn is_single_ref_symbolic_alt(alts: &[String]) -> bool {
 
 fn contains_ref_symbolic_alt(alts: &[String]) -> bool {
     alts.iter().any(|alt| is_ref_symbolic_alt(alt))
+}
+
+fn ref_symbolic_variant_alts(alts: &[String]) -> bool {
+    contains_ref_symbolic_alt(alts) && alts.iter().any(|alt| !is_ref_symbolic_alt(alt))
 }
 
 fn is_ref_symbolic_alt(alt: &str) -> bool {
@@ -1935,6 +2037,12 @@ fn merge_sampled_same_position(
     }
     if info_rules.join_src {
         merged_info = join_info_tag(&merged_info, &record.fixed[7], "SRC");
+    }
+    if context.missing_rules.gvcf_defaults
+        && ref_symbolic_variant_alts(&merged_alts)
+        && info_has_only_end(&merged_info)
+    {
+        merged_info = ".".to_owned();
     }
     if new_ref != old_ref || merged_alts != old_alts || merged_format != old_format {
         for values in site.samples_by_input.iter_mut().flatten() {
@@ -2499,6 +2607,17 @@ fn non_ref_haploid_value(raw: &str, input_alts: &[String]) -> Option<String> {
         .and_then(|value| (!value.is_empty() && value != ".").then(|| value.to_owned()))
 }
 
+fn non_ref_diploid_value(raw: &str, input_alts: &[String]) -> Option<String> {
+    let non_ref_idx = input_alts
+        .iter()
+        .position(|alt| is_ref_symbolic_alt(alt))
+        .map(|idx| idx + 1)?;
+    let value_idx = genotype_index(non_ref_idx, non_ref_idx);
+    raw.split(',')
+        .nth(value_idx)
+        .and_then(|value| (!value.is_empty() && value != ".").then(|| value.to_owned()))
+}
+
 fn max_numeric_token(raw: &str) -> Option<String> {
     let mut best: Option<(f64, &str)> = None;
     for value in raw.split(',') {
@@ -2854,6 +2973,11 @@ fn merge_unstructured_info_fields(
                 {
                     format!("{key}={}", sum_numeric_lists(a, b))
                 }
+                (Some(a), Some(b))
+                    if key == "MinDP" && a.parse::<f64>().is_ok() && b.parse::<f64>().is_ok() =>
+                {
+                    format!("{key}={}", min_numeric_value(a, b))
+                }
                 (Some(a), Some(_)) => format!("{key}={a}"),
                 (Some(a), None) => format!("{key}={a}"),
                 (None, Some(b)) => format!("{key}={b}"),
@@ -2933,6 +3057,16 @@ fn sum_numeric_lists(a: &str, b: &str) -> String {
         .join(",")
 }
 
+fn min_numeric_value(a: &str, b: &str) -> String {
+    let a_value = a.parse::<f64>().unwrap_or(f64::INFINITY);
+    let b_value = b.parse::<f64>().unwrap_or(f64::INFINITY);
+    if b_value < a_value {
+        normalize_scientific_literal(b)
+    } else {
+        normalize_scientific_literal(a)
+    }
+}
+
 fn numeric_list(raw: &str) -> Option<Vec<f64>> {
     if raw.is_empty() || raw == "." {
         return None;
@@ -2969,7 +3103,7 @@ fn merge_sampled_info_field(
         VcfNumber::R if key.starts_with('X') => {
             overlay_info_number_r(current_value, next_value, current_map, next_map, alt_count)
         }
-        VcfNumber::R if current_value == next_value => {
+        VcfNumber::R if key != "QS" && current_value == next_value => {
             overlay_info_number_r(current_value, next_value, current_map, next_map, alt_count)
         }
         VcfNumber::R => {
@@ -3132,9 +3266,21 @@ fn sum_numeric_values(a: &str, b: &str) -> String {
         return (a + b).to_string();
     }
     match (a.parse::<f64>(), b.parse::<f64>()) {
-        (Ok(a), Ok(b)) => format_float(a + b),
+        (Ok(a), Ok(b)) => format_float_sum(a + b),
         _ => b.to_owned(),
     }
+}
+
+fn format_float_sum(value: f64) -> String {
+    let rounded = if value != 0.0 && value.abs() >= 1.0 && value.abs() < 10.0 {
+        format!("{value:.5}")
+    } else {
+        format!("{value:.6}")
+    };
+    rounded
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
 }
 
 fn format_float(value: f64) -> String {
@@ -3378,6 +3524,40 @@ fn contig_order(meta: &[String]) -> HashMap<String, usize> {
     order
 }
 
+fn input_record_contig_order(input: &VcfInput) -> HashMap<String, usize> {
+    let mut order = HashMap::new();
+    for record in &input.records {
+        let Some(chrom) = record.fixed.first() else {
+            continue;
+        };
+        if !order.contains_key(chrom) {
+            order.insert(chrom.clone(), order.len());
+        }
+    }
+    order
+}
+
+fn compare_gvcf_sites(
+    a: &MergedSite,
+    b: &MergedSite,
+    contigs: &HashMap<String, usize>,
+) -> Ordering {
+    let a_chrom = a.fixed.first().map(String::as_str).unwrap_or("");
+    let b_chrom = b.fixed.first().map(String::as_str).unwrap_or("");
+    match (contigs.get(a_chrom).copied(), contigs.get(b_chrom).copied()) {
+        (Some(a_idx), Some(b_idx)) => a_idx.cmp(&b_idx),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a_chrom.cmp(b_chrom),
+    }
+    .then_with(|| record_pos_from_fixed(&a.fixed).cmp(&record_pos_from_fixed(&b.fixed)))
+    .then_with(|| is_reference_block_fixed(&a.fixed).cmp(&is_reference_block_fixed(&b.fixed)))
+    .then_with(|| a.order.cmp(&b.order))
+    .then_with(|| a.fixed.get(2).cmp(&b.fixed.get(2)))
+    .then_with(|| a.fixed.get(3).cmp(&b.fixed.get(3)))
+    .then_with(|| a.fixed.get(4).cmp(&b.fixed.get(4)))
+}
+
 fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize>) -> Ordering {
     let a_chrom = a.fixed.first().map(String::as_str).unwrap_or("");
     let b_chrom = b.fixed.first().map(String::as_str).unwrap_or("");
@@ -3405,6 +3585,13 @@ fn compare_sites(a: &MergedSite, b: &MergedSite, contigs: &HashMap<String, usize
     .then_with(|| a.fixed.get(3).cmp(&b.fixed.get(3)))
     .then_with(|| a.fixed.get(4).cmp(&b.fixed.get(4)))
     .then_with(|| a.order.cmp(&b.order))
+}
+
+fn record_pos_from_fixed(fixed: &[String]) -> u64 {
+    fixed
+        .get(1)
+        .and_then(|pos| pos.parse::<u64>().ok())
+        .unwrap_or(0)
 }
 
 fn missing_sample_value(fixed: &[String], missing_to_ref: bool) -> String {
