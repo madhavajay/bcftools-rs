@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #205 (`progress/contrast-rare-allele-summary`, merge
+  commit `06f76d1`) added `+contrast -f` / `--max-allele-freq`
+  rare-allele enrichment summary output on stderr, including upstream-style
+  processing totals and `-f 0` disabled-summary parity.
 - 2026-05-18: PR #204
   (`progress/todo-sync-after-guess-ploidy-genome-shortcut`, merge commit
   `954f3fa`) synced the TODO docs after PR #203.
@@ -672,12 +676,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`954f3fa`) (311 lib unit tests plus
+  latest merged commit on `main` (`06f76d1`) (315 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/contrast-rare-allele-summary`,
-  adding `+contrast -f` / `--max-allele-freq` rare-allele enrichment
-  summary output without touching `htslib-rs`, `noodles`, or their
-  submodules.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1259,9 +1261,8 @@ Current local slice:
   Byte-for-byte parity with `contrast.out` (PASSOC,FASSOC,
   NOVELAL,NOVELGT; list **and** file `-0`/`-1`), `contrast.1.out`
   (NASSOC, `--force-samples` with an absent case sample), `contrast.1.1.out`
-  (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 5 integration tests
-  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 2 unit tests on
-  `main`; this branch raises coverage to 6 integration tests + 6 unit tests.
+  (NOVELAL,NOVELGT) and `contrast.1.2.out` (NOVELGT). 6 integration tests
+  in `crates/bcftools-rs/tests/plugin_contrast.rs` + 6 unit tests.
   Remaining: `-i`/`-e` filtering (filter engine).
 - [x] `+fixref` (`crates/bcftools-rs/src/commands/plugins/fixref.rs`):
   port of `fixref.c` FASTA-reference strand fixing — `ref-alt` & `swap`
