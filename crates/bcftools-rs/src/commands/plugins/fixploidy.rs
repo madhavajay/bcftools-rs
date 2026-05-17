@@ -30,11 +30,14 @@ struct PloidyRegion {
 struct Ploidy {
     regions: Vec<PloidyRegion>,
     dflt: i32,
+    sex_defaults: HashMap<String, i32>,
 }
 
 impl Ploidy {
     fn from_file(text: &str, dflt: i32) -> Result<Ploidy, String> {
         let mut regions = Vec::new();
+        let mut dflt = dflt;
+        let mut sex_defaults = HashMap::new();
         for line in text.lines() {
             let s = line.trim();
             if s.is_empty() || s.starts_with('#') {
@@ -44,15 +47,17 @@ impl Ploidy {
             if cols.len() < 5 {
                 return Err(format!("Could not parse ploidy line: {line}"));
             }
-            // The upstream `* * *` default-ploidy form is not exercised
-            // by the fixture; a plain region is expected here.
+            let ploidy: i32 = cols[4]
+                .parse()
+                .map_err(|_| format!("Could not parse: {line}"))?;
+            if cols[0] == "*" && cols[1] == "*" && cols[2] == "*" {
+                sex_defaults.insert(cols[3].to_string(), ploidy);
+                continue;
+            }
             let from: u64 = cols[1]
                 .parse()
                 .map_err(|_| format!("Could not parse: {line}"))?;
             let to: u64 = cols[2]
-                .parse()
-                .map_err(|_| format!("Could not parse: {line}"))?;
-            let ploidy: i32 = cols[4]
                 .parse()
                 .map_err(|_| format!("Could not parse: {line}"))?;
             regions.push(PloidyRegion {
@@ -63,7 +68,14 @@ impl Ploidy {
                 ploidy,
             });
         }
-        Ok(Ploidy { regions, dflt })
+        if let Some(star_default) = sex_defaults.get("*") {
+            dflt = *star_default;
+        }
+        Ok(Ploidy {
+            regions,
+            dflt,
+            sex_defaults,
+        })
     }
 
     fn builtin_default(dflt: i32) -> Ploidy {
@@ -98,7 +110,8 @@ impl Ploidy {
             }
         }
         if !overlap {
-            return (self.dflt, self.dflt);
+            let sex_default = self.sex_defaults.get(sex).copied().unwrap_or(self.dflt);
+            return (sex_default, self.dflt);
         }
         let max_ploidy = if max_pl == -1 { self.dflt } else { max_pl };
         (sex_ploidy, max_ploidy)
@@ -356,5 +369,16 @@ mod tests {
         assert_eq!(p.query("1", 100, "Z"), (2, 1));
         // No overlap -> default for both.
         assert_eq!(p.query("1", 200, "X"), (2, 2));
+    }
+
+    #[test]
+    fn ploidy_default_lines_apply_only_without_region_overlap() {
+        let p = Ploidy::from_file("* * * M 1\n* * * F 2\n1 100 100 M 0\n", 2).unwrap();
+        assert_eq!(p.query("1", 200, "M"), (1, 2));
+        assert_eq!(p.query("1", 200, "F"), (2, 2));
+        // Overlapping queries start from the global default, then apply
+        // explicit region rows for matching sexes.
+        assert_eq!(p.query("1", 100, "M"), (0, 0));
+        assert_eq!(p.query("1", 100, "F"), (2, 0));
     }
 }
