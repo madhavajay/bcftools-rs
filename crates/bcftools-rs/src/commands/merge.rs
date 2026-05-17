@@ -26,6 +26,7 @@ Usage:   bcftools merge [OPTIONS] <A.vcf.gz> <B.vcf.gz> [...]\n\
 \n\
 Options:\n\
     -l, --file-list FILE            Read input file names from FILE\n\
+    -i, --info-rules TAG:METHOD,..  Accepted for command-shape compatibility in this text slice\n\
     -m, --merge TYPE                Accepted for command-shape compatibility in this same-site slice\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
@@ -113,6 +114,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-l" | "--file-list" => {
                 file_list = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
             }
+            "-i" | "--info-rules" => {
+                let _ = next_string(&mut iter, raw.as_ref())?;
+            }
             "-m" | "--merge" => {
                 let _ = next_string(&mut iter, raw.as_ref())?;
             }
@@ -129,6 +133,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--file-list=") => {
                 file_list = Some(PathBuf::from(value_after_equals(&raw)))
             }
+            _ if raw.starts_with("--info-rules=") => {}
             _ if raw.starts_with("--merge=") => {}
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
@@ -139,6 +144,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-l") && raw.len() > 2 => {
                 file_list = Some(PathBuf::from(&raw[2..]))
             }
+            _ if raw.starts_with("-i") && raw.len() > 2 => {}
             _ if raw.starts_with("-m") && raw.len() > 2 => {}
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
@@ -394,6 +400,7 @@ fn render_meta_with_pass_filter(meta: &[String]) -> String {
 fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
+    let mut by_locus = HashMap::new();
 
     for (input_idx, input) in inputs.iter().enumerate() {
         for record in &input.records {
@@ -419,10 +426,26 @@ fn collect_sites(inputs: &[VcfInput]) -> io::Result<Vec<MergedSite>> {
                     ));
                 }
                 site.samples_by_input[input_idx] = Some(record.samples.clone());
+            } else if let Some(site_idx) = by_locus.get(&locus_key(record)).copied() {
+                let site: &mut MergedSite = &mut sites[site_idx];
+                if can_merge_sites_only_alt_union(site, record) {
+                    merge_sites_only_alt_union(site, record);
+                    site.samples_by_input[input_idx] = Some(record.samples.clone());
+                } else {
+                    let existing = &site.fixed;
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "conflicting records at {}:{} require full merge semantics",
+                            existing[0], existing[1]
+                        ),
+                    ));
+                }
             } else {
                 let mut samples_by_input = vec![None; inputs.len()];
                 samples_by_input[input_idx] = Some(record.samples.clone());
                 by_key.insert(key, sites.len());
+                by_locus.insert(locus_key(record), sites.len());
                 sites.push(MergedSite {
                     fixed: record.fixed.clone(),
                     samples_by_input,
@@ -443,6 +466,98 @@ fn site_key(record: &RecordLine) -> String {
         .cloned()
         .collect::<Vec<_>>()
         .join("\t")
+}
+
+fn locus_key(record: &RecordLine) -> String {
+    record
+        .fixed
+        .iter()
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
+fn can_merge_sites_only_alt_union(site: &MergedSite, record: &RecordLine) -> bool {
+    site.fixed.len() == 8
+        && record.fixed.len() == 8
+        && site
+            .samples_by_input
+            .iter()
+            .all(|samples| samples.as_ref().is_none_or(|values| values.is_empty()))
+        && record.samples.is_empty()
+        && site.fixed[..4] == record.fixed[..4]
+}
+
+fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine) {
+    let mut alts = split_alt(&site.fixed[4]);
+    let next_alts = split_alt(&record.fixed[4]);
+    for alt in &next_alts {
+        if !alts.contains(alt) {
+            alts.push(alt.clone());
+        }
+    }
+
+    let ac_by_alt = merge_ac_by_alt(
+        &site.fixed[4],
+        &site.fixed[7],
+        &record.fixed[4],
+        &record.fixed[7],
+    );
+    let an =
+        info_i64(&site.fixed[7], "AN").unwrap_or(0) + info_i64(&record.fixed[7], "AN").unwrap_or(0);
+    let ac_values = alts
+        .iter()
+        .map(|alt| ac_by_alt.get(alt).copied().unwrap_or(0).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    site.fixed[4] = alts.join(",");
+    site.fixed[7] = format!("AC={ac_values};AN={an}");
+}
+
+fn split_alt(raw: &str) -> Vec<String> {
+    if raw == "." || raw.is_empty() {
+        Vec::new()
+    } else {
+        raw.split(',').map(str::to_owned).collect()
+    }
+}
+
+fn merge_ac_by_alt(
+    left_alt: &str,
+    left_info: &str,
+    right_alt: &str,
+    right_info: &str,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    add_ac_by_alt(&mut out, left_alt, left_info);
+    add_ac_by_alt(&mut out, right_alt, right_info);
+    out
+}
+
+fn add_ac_by_alt(out: &mut HashMap<String, i64>, alt: &str, info: &str) {
+    let alts = split_alt(alt);
+    let Some(ac_raw) = info_value(info, "AC") else {
+        return;
+    };
+    for (alt, value) in alts.iter().zip(ac_raw.split(',')) {
+        let Ok(value) = value.parse::<i64>() else {
+            continue;
+        };
+        *out.entry(alt.clone()).or_insert(0) += value;
+    }
+}
+
+fn info_i64(info: &str, key: &str) -> Option<i64> {
+    info_value(info, key)?.parse().ok()
+}
+
+fn info_value<'a>(info: &'a str, key: &str) -> Option<&'a str> {
+    info.split(';').find_map(|field| {
+        let (name, value) = field.split_once('=')?;
+        (name == key).then_some(value)
+    })
 }
 
 fn contig_order(meta: &[String]) -> HashMap<String, usize> {
