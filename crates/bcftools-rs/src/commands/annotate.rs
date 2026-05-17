@@ -2,9 +2,9 @@
 //!
 //! Local slice supports chromosome renaming via `--rename-chrs` and tag
 //! removal via `-x`/`--remove` for `ID`, `QUAL`, `FILTER`, `FILTER/<ID>`,
-//! `INFO`, and `INFO/<ID>` targets. Full annotation transfer, FORMAT
-//! removal, header injection, and the `^`-keep-only form remain tracked in
-//! `TODO.md`.
+//! `INFO`, `INFO/<ID>`, `FORMAT`, and `FORMAT/<ID>` targets, including the
+//! upstream `^` keep-only form for FILTER/INFO/FORMAT IDs. Full annotation
+//! transfer and header injection remain tracked in `TODO.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -26,7 +26,7 @@ Usage:   bcftools annotate [OPTIONS] <in.vcf.gz>\n\
 \n\
 Options:\n\
         --rename-chrs FILE           Rename chromosomes according to a two-column map\n\
-    -x, --remove LIST                Remove annotations (LIST = comma-separated ID, QUAL, FILTER[/<ID>], INFO[/<ID>])\n\
+    -x, --remove LIST                Remove annotations (LIST = comma-separated ID, QUAL, FILTER[/<ID>], INFO[/<ID>], FORMAT[/<ID>])\n\
     -o, --output FILE                Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]   u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
         --no-version                 Accepted for command-shape compatibility\n\
@@ -38,8 +38,13 @@ struct RemoveSet {
     qual: bool,
     all_filter: bool,
     all_info: bool,
+    all_format: bool,
     filter_ids: HashSet<String>,
     info_ids: HashSet<String>,
+    format_ids: HashSet<String>,
+    keep_filter_ids: Option<HashSet<String>>,
+    keep_info_ids: Option<HashSet<String>>,
+    keep_format_ids: Option<HashSet<String>>,
 }
 
 impl RemoveSet {
@@ -48,8 +53,13 @@ impl RemoveSet {
             && !self.qual
             && !self.all_filter
             && !self.all_info
+            && !self.all_format
             && self.filter_ids.is_empty()
             && self.info_ids.is_empty()
+            && self.format_ids.is_empty()
+            && self.keep_filter_ids.is_none()
+            && self.keep_info_ids.is_none()
+            && self.keep_format_ids.is_none()
     }
 }
 
@@ -175,32 +185,51 @@ fn parse_remove_list(list: &str, remove: &mut RemoveSet) -> Result<(), ParseOutc
         if entry.is_empty() {
             continue;
         }
-        if entry.starts_with('^') {
-            return Err(ParseOutcome::Error(
-                "'^' keep-only form is not supported in this local annotate slice".into(),
-            ));
-        }
+        let keep_only = entry.starts_with('^');
+        let entry = entry.strip_prefix('^').unwrap_or(entry);
         match entry {
             "ID" => remove.id = true,
             "QUAL" => remove.qual = true,
             "FILTER" => remove.all_filter = true,
             "INFO" => remove.all_info = true,
+            "FORMAT" | "FMT" => remove.all_format = true,
             _ => {
                 if let Some(id) = entry.strip_prefix("FILTER/") {
                     if id.is_empty() {
                         return Err(ParseOutcome::Error(format!("invalid -x entry '{entry}'")));
                     }
-                    remove.filter_ids.insert(id.to_owned());
+                    if keep_only || remove.keep_filter_ids.is_some() {
+                        remove
+                            .keep_filter_ids
+                            .get_or_insert_with(HashSet::new)
+                            .insert(id.to_owned());
+                    } else {
+                        remove.filter_ids.insert(id.to_owned());
+                    }
                 } else if let Some(id) = entry.strip_prefix("INFO/") {
                     if id.is_empty() {
                         return Err(ParseOutcome::Error(format!("invalid -x entry '{entry}'")));
                     }
-                    remove.info_ids.insert(id.to_owned());
-                } else if let Some(id) = entry.strip_prefix("FORMAT/") {
-                    let _ = id;
-                    return Err(ParseOutcome::Error(format!(
-                        "FORMAT removal is not supported in this local annotate slice: '{entry}'"
-                    )));
+                    if keep_only || remove.keep_info_ids.is_some() {
+                        remove
+                            .keep_info_ids
+                            .get_or_insert_with(HashSet::new)
+                            .insert(id.to_owned());
+                    } else {
+                        remove.info_ids.insert(id.to_owned());
+                    }
+                } else if let Some(id) = format_id_entry(entry) {
+                    if id.is_empty() {
+                        return Err(ParseOutcome::Error(format!("invalid -x entry '{entry}'")));
+                    }
+                    if keep_only || remove.keep_format_ids.is_some() {
+                        remove
+                            .keep_format_ids
+                            .get_or_insert_with(HashSet::new)
+                            .insert(id.to_owned());
+                    } else {
+                        remove.format_ids.insert(id.to_owned());
+                    }
                 } else {
                     return Err(ParseOutcome::Error(format!(
                         "unrecognized -x entry '{entry}'"
@@ -210,6 +239,12 @@ fn parse_remove_list(list: &str, remove: &mut RemoveSet) -> Result<(), ParseOutc
         }
     }
     Ok(())
+}
+
+fn format_id_entry(entry: &str) -> Option<&str> {
+    entry
+        .strip_prefix("FORMAT/")
+        .or_else(|| entry.strip_prefix("FMT/"))
 }
 
 fn next_string<'a, I>(iter: &mut std::iter::Peekable<I>, name: &str) -> Result<String, ParseOutcome>
@@ -318,12 +353,36 @@ fn transform_vcf_text(
                 out.push_str(line);
             }
         } else if let Some(id) = header_id_for_kind(line, "##INFO=<") {
-            if remove.all_info || remove.info_ids.contains(id) {
+            if remove.all_info
+                || remove.info_ids.contains(id)
+                || remove
+                    .keep_info_ids
+                    .as_ref()
+                    .is_some_and(|keep| !keep.contains(id))
+            {
                 continue;
             }
             out.push_str(line);
         } else if let Some(id) = header_id_for_kind(line, "##FILTER=<") {
-            if remove.all_filter || remove.filter_ids.contains(id) {
+            if id != "PASS"
+                && (remove.all_filter
+                    || remove.filter_ids.contains(id)
+                    || remove
+                        .keep_filter_ids
+                        .as_ref()
+                        .is_some_and(|keep| !keep.contains(id)))
+            {
+                continue;
+            }
+            out.push_str(line);
+        } else if let Some(id) = header_id_for_kind(line, "##FORMAT=<") {
+            if remove.format_ids.contains(id)
+                || remove
+                    .keep_format_ids
+                    .as_ref()
+                    .is_some_and(|keep| !keep.contains(id))
+                || (remove.all_format && id != "GT")
+            {
                 continue;
             }
             out.push_str(line);
@@ -402,13 +461,20 @@ fn apply_record_removals(line: &str, remove: &RemoveSet) -> String {
     }
     if remove.all_filter {
         fields[6] = ".".to_owned();
+    } else if let Some(keep) = &remove.keep_filter_ids {
+        fields[6] = filter_after_keep(&fields[6], keep);
     } else if !remove.filter_ids.is_empty() {
         fields[6] = filter_after_removal(&fields[6], &remove.filter_ids);
     }
     if remove.all_info {
         fields[7] = ".".to_owned();
+    } else if let Some(keep) = &remove.keep_info_ids {
+        fields[7] = info_after_keep(&fields[7], keep);
     } else if !remove.info_ids.is_empty() {
         fields[7] = info_after_removal(&fields[7], &remove.info_ids);
+    }
+    if fields.len() > 8 {
+        apply_format_removals(&mut fields, remove);
     }
     fields.join("\t")
 }
@@ -423,6 +489,21 @@ fn filter_after_removal(current: &str, drop: &HashSet<String>) -> String {
         .collect();
     if kept.is_empty() {
         "PASS".to_owned()
+    } else {
+        kept.join(";")
+    }
+}
+
+fn filter_after_keep(current: &str, keep: &HashSet<String>) -> String {
+    if current == "." || current == "PASS" {
+        return ".".to_owned();
+    }
+    let kept: Vec<&str> = current
+        .split(';')
+        .filter(|tag| keep.contains(*tag))
+        .collect();
+    if kept.is_empty() {
+        ".".to_owned()
     } else {
         kept.join(";")
     }
@@ -443,6 +524,73 @@ fn info_after_removal(current: &str, drop: &HashSet<String>) -> String {
         ".".to_owned()
     } else {
         kept.join(";")
+    }
+}
+
+fn info_after_keep(current: &str, keep: &HashSet<String>) -> String {
+    if current == "." {
+        return current.to_owned();
+    }
+    let kept: Vec<&str> = current
+        .split(';')
+        .filter(|entry| {
+            let key = entry.split_once('=').map(|(k, _)| k).unwrap_or(entry);
+            keep.contains(key)
+        })
+        .collect();
+    if kept.is_empty() {
+        ".".to_owned()
+    } else {
+        kept.join(";")
+    }
+}
+
+fn apply_format_removals(fields: &mut [String], remove: &RemoveSet) {
+    if !remove.all_format && remove.format_ids.is_empty() && remove.keep_format_ids.is_none() {
+        return;
+    }
+    if fields[8] == "." {
+        return;
+    }
+    let format_keys: Vec<&str> = fields[8].split(':').collect();
+    let kept_indexes: Vec<usize> = format_keys
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, key)| {
+            let keep = if let Some(keep) = &remove.keep_format_ids {
+                keep.contains(*key)
+            } else if remove.all_format {
+                *key == "GT"
+            } else {
+                !remove.format_ids.contains(*key)
+            };
+            keep.then_some(idx)
+        })
+        .collect();
+
+    if kept_indexes.is_empty() {
+        fields[8] = ".".to_owned();
+        for sample in &mut fields[9..] {
+            *sample = ".".to_owned();
+        }
+        return;
+    }
+
+    fields[8] = kept_indexes
+        .iter()
+        .map(|idx| format_keys[*idx])
+        .collect::<Vec<_>>()
+        .join(":");
+    for sample in &mut fields[9..] {
+        if *sample == "." {
+            continue;
+        }
+        let values: Vec<&str> = sample.split(':').collect();
+        *sample = kept_indexes
+            .iter()
+            .map(|idx| values.get(*idx).copied().unwrap_or("."))
+            .collect::<Vec<_>>()
+            .join(":");
     }
 }
 
