@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #89 (`progress/merge-force-samples-prefix-chain`, merge
+  commit `ae51059`) matched upstream repeated duplicate-sample prefixing under
+  `merge --force-samples`, with byte-for-byte `merge.9.out` fixture coverage.
 - 2026-05-17: PR #87 (`progress/merge-info-rules-alt-union`, merge commit
   `b151b0c`) added narrow `AC:sum`/`AN:sum` INFO-rule handling for the
   sampled plus sites-only same-locus ALT-union `merge` slice, with
@@ -394,9 +397,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`b151b0c`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`ae51059`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- No code slice is in flight after PR #87. The next branch should pick one
+- No code slice is in flight after PR #89. The next branch should pick one
   local-only item from the queue below, keep the one-branch rule, run the
   full local gate, and wait for both required GitHub checks before merge.
 - Next local-only queue:
