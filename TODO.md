@@ -201,10 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/annotate-format-remove-keep` adds
-  byte-for-byte text parity for upstream `annotate6.out` and `annotate7.out`
-  by supporting `FORMAT`/`FORMAT/<ID>` removal plus the `^` keep-only `-x`
-  form for FILTER/INFO/FORMAT IDs.
+- 2026-05-17: PR #147 (`progress/annotate-format-remove-keep`, merge commit
+  `6165dad`) added byte-for-byte text parity for upstream `annotate6.out` and
+  `annotate7.out` by supporting `FORMAT`/`FORMAT/<ID>` removal plus the `^`
+  keep-only `-x` form for FILTER/INFO/FORMAT IDs.
 - 2026-05-17: PR #145 (`progress/merge-gvcf3-src-join`, merge commit
   `e0365fe`) added byte-for-byte text parity for upstream `merge.gvcf.3.out`
   by honoring `-i SRC:join` in sampled no-reference gVCF reference-block
@@ -502,9 +502,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`e0365fe`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`6165dad`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/annotate-format-remove-keep`; keep the
+- Current code slice in flight: none after PR #147; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
