@@ -276,6 +276,37 @@ fn annotate_format_remove_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn annotate_force_remove_unknown_tags_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "FILTER/XX,INFO/XX",
+        "--force",
+        "../../bcftools/test/annotate14.vcf",
+    ]);
+    assert_eq!(code, 0, "annotate25 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/annotate25.out").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
+fn annotate_remove_filter_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "annotate",
+        "--no-version",
+        "-x",
+        "FILTER",
+        "../../bcftools/test/annotate16.vcf",
+    ]);
+    assert_eq!(code, 0, "annotate28 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/annotate28.out").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), expected);
+}
+
+#[test]
 fn annotate_keep_only_form_on_local_fixture() {
     let dir = TempDir::new().unwrap();
     let vcf = write_annotated_fixture(&dir);

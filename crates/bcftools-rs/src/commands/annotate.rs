@@ -29,6 +29,7 @@ Options:\n\
     -x, --remove LIST                Remove annotations (LIST = comma-separated ID, QUAL, FILTER[/<ID>], INFO[/<ID>], FORMAT[/<ID>])\n\
     -o, --output FILE                Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]   u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
+        --force                      Accepted for command-shape compatibility\n\
         --no-version                 Accepted for command-shape compatibility\n\
 \n";
 
@@ -70,6 +71,7 @@ struct Args {
     remove: RemoveSet,
     output: Option<PathBuf>,
     output_kind: OutputKind,
+    no_version: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +113,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut remove = RemoveSet::default();
     let mut output = None;
     let mut output_kind = OutputKind::VcfText;
+    let mut no_version = false;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -129,7 +132,8 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             "-O" | "--output-type" => {
                 output_kind = parse_output_kind(&next_string(&mut iter, raw.as_ref())?)?
             }
-            "--no-version" => {}
+            "--force" => {}
+            "--no-version" => no_version = true,
             _ if raw.starts_with("--rename-chrs=") => {
                 rename_chrs = Some(PathBuf::from(value_after_equals(&raw)))
             }
@@ -176,6 +180,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         remove,
         output,
         output_kind,
+        no_version,
     })
 }
 
@@ -275,7 +280,7 @@ fn run(args: &Args) -> io::Result<()> {
         None => None,
     };
     let mut text = read_vcf_text(&args.input)?;
-    transform_vcf_text(&mut text, rename.as_ref(), &args.remove);
+    transform_vcf_text(&mut text, rename.as_ref(), &args.remove, args.no_version);
     write_output(text.as_bytes(), args)
 }
 
@@ -341,12 +346,24 @@ fn transform_vcf_text(
     text: &mut String,
     rename: Option<&HashMap<String, String>>,
     remove: &RemoveSet,
+    no_version: bool,
 ) {
     let empty = HashMap::new();
     let rename = rename.unwrap_or(&empty);
+    let inject_pass_header = remove.all_filter
+        && !text
+            .lines()
+            .any(|line| header_id_for_kind(line, "##FILTER=<") == Some("PASS"));
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
-        if line.starts_with("##contig=<") {
+        if no_version && line.starts_with("##bcftools_") {
+            continue;
+        } else if line.starts_with("##fileformat=") {
+            out.push_str(line);
+            if inject_pass_header {
+                out.push_str("\n##FILTER=<ID=PASS,Description=\"All filters passed\">");
+            }
+        } else if line.starts_with("##contig=<") {
             if !rename.is_empty() {
                 out.push_str(&rename_contig_header(line, rename));
             } else {
@@ -659,7 +676,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("1".to_owned(), "chr1".to_owned());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, Some(&map), &RemoveSet::default());
+        transform_vcf_text(&mut text, Some(&map), &RemoveSet::default(), false);
         assert!(text.contains("##contig=<ID=chr1,length=10>"));
         assert!(text.contains("chr1\t2\trs1\tA\tC\t99\tLowQual;q10\tAC=1;AN=2;DP=12"));
     }
@@ -672,7 +689,7 @@ mod tests {
             ..Default::default()
         };
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove);
+        transform_vcf_text(&mut text, None, &remove, false);
         assert!(text.contains("1\t2\t.\tA\tC\t.\tLowQual;q10\tAC=1;AN=2;DP=12"));
     }
 
@@ -682,7 +699,7 @@ mod tests {
         remove.info_ids.insert("AC".into());
         remove.info_ids.insert("DP".into());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove);
+        transform_vcf_text(&mut text, None, &remove, false);
         assert!(!text.contains("##INFO=<ID=AC,"));
         assert!(!text.contains("##INFO=<ID=DP,"));
         assert!(text.contains("##INFO=<ID=AN,"));
@@ -697,7 +714,7 @@ mod tests {
         remove.filter_ids.insert("LowQual".into());
         remove.filter_ids.insert("q10".into());
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove);
+        transform_vcf_text(&mut text, None, &remove, false);
         assert!(!text.contains("##FILTER=<ID=LowQual,"));
         assert!(!text.contains("##FILTER=<ID=q10,"));
         assert!(text.contains("PASS\tAC=1;AN=2;DP=12"));
@@ -710,7 +727,7 @@ mod tests {
             ..Default::default()
         };
         let mut text = sample_vcf();
-        transform_vcf_text(&mut text, None, &remove);
+        transform_vcf_text(&mut text, None, &remove, false);
         assert!(!text.contains("##INFO="));
         assert!(text.contains("LowQual;q10\t.\n"));
     }
