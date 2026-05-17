@@ -340,6 +340,14 @@ fn merge_gvcf10_fixtures_match_upstream_text_output() {
             vec!["-m", "none"],
             "../../bcftools/test/merge.gvcf.10.2.out",
         ),
+        (
+            vec!["-g", "../../bcftools/test/merge.gvcf.10.fa"],
+            "../../bcftools/test/merge.gvcf.10.3.out",
+        ),
+        (
+            vec!["-g", "../../bcftools/test/merge.gvcf.10.fa", "-m", "none"],
+            "../../bcftools/test/merge.gvcf.10.4.out",
+        ),
     ] {
         let mut args = vec![
             "merge",
