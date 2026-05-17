@@ -373,6 +373,28 @@ fn merge_symbolic_records_use_highest_input_fileformat() {
 }
 
 #[test]
+fn merge_multiallelic_subset_matches_upstream_fixture() {
+    for mode in ["none", "both"] {
+        let (out, err, code) = run(&[
+            "merge",
+            "--no-version",
+            "--merge",
+            mode,
+            "../../bcftools/test/merge.multiallelics.1.a.vcf",
+            "../../bcftools/test/merge.multiallelics.1.b.vcf",
+        ]);
+        assert_eq!(
+            code, 0,
+            "merge.multiallelics.1 --merge {mode} failed: {err}"
+        );
+
+        let expected =
+            std::fs::read_to_string("../../bcftools/test/merge.multiallelics.1.1.out").unwrap();
+        assert_eq!(out, expected, "mode {mode}");
+    }
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
