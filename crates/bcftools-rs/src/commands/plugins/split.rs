@@ -3,8 +3,10 @@
 //! This local slice covers the filter-free upstream fixtures: default
 //! per-sample splitting, `-S/--samples-file`, and `-G/--groups-file`, writing
 //! VCF text files. `-k/--keep-tags` is supported for INFO/FORMAT projection.
-//! `-i`/`-e`, region/target restriction, BCF output, and indexing are deferred
-//! to the shared filter/writer work.
+//! `-i`/`-e` filters route through the shared text filter engine after each
+//! output record is projected, matching upstream's per-output filtering.
+//! Region/target restriction, BCF output, and indexing are deferred to the
+//! shared reader/writer work.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -15,7 +17,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::vcf_compat::normalize_vcf_text;
+
+#[derive(Clone, Copy)]
+pub enum FilterMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterSpec<'a> {
+    pub mode: FilterMode,
+    pub expr: &'a str,
+}
 
 #[derive(Clone, Debug)]
 struct Subset {
@@ -50,7 +65,7 @@ pub fn run(
     groups_file: Option<&Path>,
     keep_tags: Option<&str>,
     compress_vcf: bool,
-    has_filter: bool,
+    filter: Option<FilterSpec<'_>>,
 ) -> io::Result<()> {
     if samples_file.is_some() && groups_file.is_some() {
         return Err(io::Error::new(
@@ -58,15 +73,8 @@ pub fn run(
             "split accepts only one of --samples-file or --groups-file",
         ));
     }
-    if has_filter {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "split -i/-e filtering requires the bcftools filter engine",
-        ));
-    }
-
     let text = read_vcf_text(input)?;
-    let files = compute(&text, samples_file, groups_file, keep_tags)?;
+    let files = compute(&text, samples_file, groups_file, keep_tags, filter)?;
     fs::create_dir_all(output_dir)?;
     for (fname, content) in files {
         let fh = File::create(output_dir.join(with_vcf_suffix(&fname, compress_vcf)))?;
@@ -87,6 +95,7 @@ fn compute(
     samples_file: Option<&Path>,
     groups_file: Option<&Path>,
     keep_tags: Option<&str>,
+    filter: Option<FilterSpec<'_>>,
 ) -> io::Result<Vec<(String, String)>> {
     let parsed = ParsedVcf::new(text)?;
     let keep = KeepTags::parse(keep_tags);
@@ -111,12 +120,79 @@ fn compute(
         }
         buf.push('\n');
         for record in &parsed.records {
-            buf.push_str(&project_record(record, &subset.samples, &keep));
+            let projected = project_record(record, &subset.samples, &keep);
+            if let Some(filter) = filter
+                && !record_passes_filter(&projected, filter)?
+            {
+                continue;
+            }
+            buf.push_str(&projected);
             buf.push('\n');
         }
         out.push((subset.fname, buf));
     }
     Ok(out)
+}
+
+fn record_passes_filter(record: &str, filter: FilterSpec<'_>) -> io::Result<bool> {
+    let fields = record.split('\t').map(str::to_owned).collect::<Vec<_>>();
+    if fields.len() < 8 {
+        return Ok(true);
+    }
+    let context = record_context(&fields);
+    let matched = bcffilter::eval_expression_with(filter.expr, &context, |name, sample_index| {
+        if sample_index.is_some() {
+            return None;
+        }
+        crate::commands::filter::record_lookup(name, &fields)
+    })?
+    .truthy();
+    Ok(match filter.mode {
+        FilterMode::Include => matched,
+        FilterMode::Exclude => !matched,
+    })
+}
+
+fn record_context(fields: &[String]) -> EvalContext {
+    if fields.len() <= 9 {
+        return EvalContext::new();
+    }
+
+    let format_keys: Vec<&str> = fields[8].split(':').collect();
+    fields[9..]
+        .iter()
+        .fold(EvalContext::new(), |context, sample| {
+            context.with_sample(sample_values(&format_keys, sample))
+        })
+}
+
+fn sample_values(format_keys: &[&str], sample: &str) -> Vec<(String, FilterValue)> {
+    let values: Vec<&str> = sample.split(':').collect();
+    format_keys
+        .iter()
+        .enumerate()
+        .map(|(i, key)| {
+            let raw = values.get(i).copied().unwrap_or(".");
+            let value = if key.eq_ignore_ascii_case("GT") {
+                FilterValue::String(raw.to_owned())
+            } else {
+                format_value(raw)
+            };
+            ((*key).to_owned(), value)
+        })
+        .collect()
+}
+
+fn format_value(raw: &str) -> FilterValue {
+    if raw == "." || raw.is_empty() {
+        return FilterValue::Missing;
+    }
+    if raw.contains(',') {
+        return FilterValue::List(raw.split(',').map(format_value).collect());
+    }
+    raw.parse::<f64>()
+        .map(FilterValue::Number)
+        .unwrap_or_else(|_| FilterValue::String(raw.to_owned()))
 }
 
 #[derive(Clone, Debug)]
@@ -569,7 +645,7 @@ mod tests {
     #[test]
     fn default_split_projects_samples() {
         let vcf = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n1\t1\t.\tA\tC\t.\t.\t.\tGT\t0/1\t0/0\n";
-        let out = compute(vcf, None, None, None).unwrap();
+        let out = compute(vcf, None, None, None, None).unwrap();
         assert_eq!(out[0].0, "A");
         assert!(
             out[0]
@@ -591,7 +667,7 @@ mod tests {
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA
 1\t1\t.\tA\tC\t.\t.\tDP=5;AA=T\tGT:AD:GQ\t0/1:2,3:9
 ";
-        let out = compute(vcf, None, None, Some("INFO/DP,FMT/GT,AD")).unwrap();
+        let out = compute(vcf, None, None, Some("INFO/DP,FMT/GT,AD"), None).unwrap();
         assert!(out[0].1.contains("##INFO=<ID=DP,"));
         assert!(!out[0].1.contains("##INFO=<ID=AA,"));
         assert!(out[0].1.contains("##FORMAT=<ID=GT,"));
@@ -602,5 +678,31 @@ mod tests {
                 .1
                 .contains("1\t1\t.\tA\tC\t.\t.\tDP=5\tGT:AD\t0/1:2,3\n")
         );
+    }
+
+    #[test]
+    fn include_filter_is_applied_after_sample_projection() {
+        let vcf = "\
+##fileformat=VCFv4.2
+##contig=<ID=1>
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB
+1\t1\t.\tA\tC\t.\t.\t.\tGT\t0/1\t0/0
+1\t2\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/1
+";
+        let out = compute(
+            vcf,
+            None,
+            None,
+            None,
+            Some(FilterSpec {
+                mode: FilterMode::Include,
+                expr: r#"GT="alt""#,
+            }),
+        )
+        .unwrap();
+        assert!(out[0].1.contains("1\t1\t.\tA\tC"));
+        assert!(!out[0].1.contains("1\t2\t.\tA\tG"));
+        assert!(!out[1].1.contains("1\t1\t.\tA\tC"));
+        assert!(out[1].1.contains("1\t2\t.\tA\tG"));
     }
 }
