@@ -92,6 +92,28 @@ fn norm_rmdup_indels_both_and_all_match_upstream_fixtures() {
 }
 
 #[test]
+fn norm_rmdup2_numbered_fixtures_match_upstream_text_output() {
+    let input = fixture_path("norm.rmdup.2.vcf");
+    for (mode, fixture) in [
+        ("none", "norm.rmdup.2.1.out"),
+        ("exact", "norm.rmdup.2.1.out"),
+        ("indels", "norm.rmdup.2.1.out"),
+        ("any", "norm.rmdup.2.2.out"),
+        ("both", "norm.rmdup.2.2.out"),
+        ("snps", "norm.rmdup.2.2.out"),
+    ] {
+        let expected = std::fs::read_to_string(fixture_path(fixture)).unwrap();
+        let (out, err, code) = run(&["norm", "--no-version", "-d", mode, input.to_str().unwrap()]);
+        assert_eq!(code, 0, "norm.rmdup.2 fixture failed for -d {mode}: {err}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "norm.rmdup.2 fixture differed for -d {mode}"
+        );
+    }
+}
+
+#[test]
 fn norm_rmdup_reads_bcf_and_writes_bcf() {
     let dir = TempDir::new().unwrap();
     let input = fixture_path("norm.rmdup.vcf");
