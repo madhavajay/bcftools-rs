@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn fixture_path(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("..");
@@ -65,4 +67,44 @@ fn guess_ploidy_pl() {
 #[test]
 fn guess_ploidy_gl() {
     check("view.GL.vcf", "guess-ploidy.GL.out");
+}
+
+#[test]
+fn guess_ploidy_accepts_af_tag() {
+    ensure_binary_built();
+    let tmp = TempDir::new().expect("tempdir");
+    let input = tmp.path().join("guess-ploidy-af-tag.vcf");
+    std::fs::write(
+        &input,
+        "##fileformat=VCFv4.2\n\
+##INFO=<ID=CUSTOM_AF,Number=A,Type=Float,Description=\"Custom AF\">\n\
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"PL\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+X\t200\t.\tA\tC\t.\t.\tCUSTOM_AF=0.9\tPL\t0,10,100\n",
+    )
+    .unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+guess-ploidy",
+            input.to_str().unwrap(),
+            "-v",
+            "-rX",
+            "--AF-tag",
+            "CUSTOM_AF",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let sex_line = stdout
+        .lines()
+        .find(|line| line.starts_with("SEX\tS1"))
+        .expect("SEX line");
+    assert_eq!(sex_line.split('\t').nth(5), Some("1"));
 }
