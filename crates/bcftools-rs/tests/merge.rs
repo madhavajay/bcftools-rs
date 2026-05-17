@@ -409,6 +409,20 @@ fn merge_star_allele_ref_extension_matches_upstream_fixture() {
 }
 
 #[test]
+fn merge_format_vector_remap_matches_upstream_fixture() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "../../bcftools/test/merge.6.a.vcf",
+        "../../bcftools/test/merge.6.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.6 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.6.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");
