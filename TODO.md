@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #183 (`progress/merge-mrules-missing-rules`, merge commit
+  `b6a2344`) added byte-for-byte text parity for upstream
+  `merge.mrules.1.2.out` under `merge --gvcf - -M AD:.,PL:.` by parsing
+  narrow FORMAT missing rules and applying explicit AD/PL fills during gVCF
+  remapping when no `<NON_REF>` wildcard supplies the default fill.
 - 2026-05-17: PR #182 (`progress/todo-sync-after-merge-mrules-default`,
   merge commit `c40b46b`) synced the TODO docs after PR #181.
 - 2026-05-17: PR #181 (`progress/merge-next-gvcf-fixture`, merge commit
@@ -606,13 +611,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`c40b46b`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`b6a2344`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-mrules-missing-rules` adds
-  byte-for-byte text parity for upstream `merge.mrules.1.2.out` under
-  `merge --gvcf - -M AD:.,PL:.` by parsing narrow FORMAT missing rules and
-  applying them to AD/PL remapping when no `<NON_REF>` wildcard can supply the
-  upstream default gVCF fill.
+- Current code slice in flight: none after PR #183; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
