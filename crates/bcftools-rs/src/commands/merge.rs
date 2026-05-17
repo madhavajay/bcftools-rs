@@ -33,6 +33,7 @@ Options:\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
     -F, --filter-logic x|+          Narrow filter merge logic support for upstream fixtures [+]\n\
     -g, --gvcf -|REF.FA             Narrow gVCF block splitting for local fixtures\n\
+    -r, --regions REGION            Restrict to a simple REGION in the current text slice\n\
     -0, --missing-to-ref            Fill absent-input samples as 0/0 in the current text slice\n\
         --force-single              Allow a single input for command-shape compatibility\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
@@ -52,6 +53,7 @@ struct Args {
     gvcf_ref: Option<PathBuf>,
     gvcf_no_ref: bool,
     missing_to_ref: bool,
+    regions: Vec<Region>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -109,6 +111,13 @@ struct RecordLine {
     samples: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Region {
+    contig: String,
+    start: Option<u64>,
+    end: Option<u64>,
+}
+
 #[derive(Debug)]
 struct MergedSite {
     fixed: Vec<String>,
@@ -155,6 +164,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut gvcf_ref = None;
     let mut gvcf_no_ref = false;
     let mut missing_to_ref = false;
+    let mut regions = Vec::new();
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -184,6 +194,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                 } else {
                     gvcf_no_ref = true;
                 }
+            }
+            "-r" | "--regions" => {
+                regions.extend(parse_regions(&next_string(&mut iter, raw.as_ref())?)?);
             }
             "-0" | "--missing-to-ref" => missing_to_ref = true,
             "-o" | "--output" => {
@@ -219,6 +232,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
                     gvcf_no_ref = true;
                 }
             }
+            _ if raw.starts_with("--regions=") => {
+                regions.extend(parse_regions(value_after_equals(&raw))?);
+            }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
             }
@@ -247,6 +263,9 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
             _ if raw.starts_with("-O") && raw.len() > 2 => {
                 output_kind = parse_output_kind(&raw[2..])?
+            }
+            _ if raw.starts_with("-r") && raw.len() > 2 => {
+                regions.extend(parse_regions(&raw[2..])?)
             }
             _ if raw.starts_with('-') => {
                 return Err(ParseOutcome::Error(format!(
@@ -280,6 +299,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         gvcf_ref,
         gvcf_no_ref,
         missing_to_ref,
+        regions,
     })
 }
 
@@ -291,6 +311,61 @@ fn parse_filter_logic(raw: &str) -> Result<FilterLogic, ParseOutcome> {
             "filter logic not recognised: {raw}"
         ))),
     }
+}
+
+fn parse_regions(raw: &str) -> Result<Vec<Region>, ParseOutcome> {
+    raw.split(',')
+        .filter(|part| !part.trim().is_empty())
+        .map(parse_region)
+        .collect()
+}
+
+fn parse_region(raw: &str) -> Result<Region, ParseOutcome> {
+    let raw = raw.trim();
+    let Some((contig, interval)) = raw.split_once(':') else {
+        return Ok(Region {
+            contig: raw.to_owned(),
+            start: None,
+            end: None,
+        });
+    };
+    if contig.is_empty() {
+        return Err(ParseOutcome::Error(format!(
+            "Could not parse region: {raw}"
+        )));
+    }
+    let (start, end) = if let Some((start, end)) = interval.split_once('-') {
+        (
+            parse_region_bound(start, raw)?,
+            parse_region_bound(end, raw)?,
+        )
+    } else {
+        let pos = parse_region_bound(interval, raw)?;
+        (pos, pos)
+    };
+    if let (Some(start), Some(end)) = (start, end)
+        && start > end
+    {
+        return Err(ParseOutcome::Error(format!(
+            "Could not parse region: {raw}"
+        )));
+    }
+    Ok(Region {
+        contig: contig.to_owned(),
+        start,
+        end,
+    })
+}
+
+fn parse_region_bound(raw: &str, region: &str) -> Result<Option<u64>, ParseOutcome> {
+    let cleaned = raw.replace(',', "");
+    if cleaned.is_empty() {
+        return Ok(None);
+    }
+    cleaned
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| ParseOutcome::Error(format!("Could not parse region: {region}")))
 }
 
 fn parse_local_alleles(raw: &str) -> Result<usize, ParseOutcome> {
@@ -372,9 +447,12 @@ fn run(args: &Args) -> io::Result<()> {
         inputs.push(parse_vcf_text(&read_vcf_text(path)?)?);
     }
     if let Some(path) = &args.gvcf_ref {
-        split_gvcf_reference_blocks(&mut inputs, path)?;
+        split_gvcf_reference_blocks(&mut inputs, path, &args.regions)?;
     } else if args.gvcf_no_ref {
         split_gvcf_reference_blocks_without_reference(&mut inputs);
+    }
+    if !args.regions.is_empty() {
+        filter_inputs_by_regions(&mut inputs, &args.regions);
     }
     let merged = merge_inputs(
         &inputs,
@@ -478,7 +556,11 @@ fn parse_vcf_text(text: &str) -> io::Result<VcfInput> {
     })
 }
 
-fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -> io::Result<()> {
+fn split_gvcf_reference_blocks(
+    inputs: &mut [VcfInput],
+    reference_path: &Path,
+    regions: &[Region],
+) -> io::Result<()> {
     let reference = FastaReference::open(reference_path)?;
     let records_by_input = inputs
         .iter()
@@ -493,6 +575,7 @@ fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -
                 continue;
             };
             let mut breaks = vec![start, end + 1];
+            add_region_breakpoints(&mut breaks, &record.fixed[0], start, end, regions);
             for (other_idx, other_records) in records_by_input.iter().enumerate() {
                 if other_idx == input_idx {
                     continue;
@@ -540,6 +623,60 @@ fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -
         input.records = split_records;
     }
     Ok(())
+}
+
+fn add_region_breakpoints(
+    breaks: &mut Vec<u64>,
+    contig: &str,
+    start: u64,
+    end: u64,
+    regions: &[Region],
+) {
+    for region in regions {
+        if region.contig != contig {
+            continue;
+        }
+        let region_start = region.start.unwrap_or(start);
+        let region_end = region.end.unwrap_or(end);
+        if region_end < start || region_start > end {
+            continue;
+        }
+        if region_start > start {
+            breaks.push(region_start);
+        }
+        if region_end < end {
+            breaks.push(region_end + 1);
+        }
+    }
+}
+
+fn filter_inputs_by_regions(inputs: &mut [VcfInput], regions: &[Region]) {
+    for input in inputs {
+        input
+            .records
+            .retain(|record| record_overlaps_regions(record, regions));
+    }
+}
+
+fn record_overlaps_regions(record: &RecordLine, regions: &[Region]) -> bool {
+    let Some(chrom) = record.fixed.first() else {
+        return false;
+    };
+    let Some((start, end)) = record_span(record) else {
+        return false;
+    };
+    regions.iter().any(|region| {
+        region.contig == *chrom
+            && region.start.is_none_or(|region_start| end >= region_start)
+            && region.end.is_none_or(|region_end| start <= region_end)
+    })
+}
+
+fn record_span(record: &RecordLine) -> Option<(u64, u64)> {
+    reference_block_span(record).or_else(|| {
+        let start = record_pos(record)?;
+        Some((start, start))
+    })
 }
 
 fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
