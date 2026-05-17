@@ -383,6 +383,7 @@ fn run(args: &Args) -> io::Result<()> {
         args.merge_mode,
         args.local_alleles,
         args.missing_to_ref,
+        args.gvcf_ref.is_some() || args.gvcf_no_ref,
     )?;
     write_output(merged.as_bytes(), args)
 }
@@ -572,6 +573,9 @@ fn split_gvcf_reference_blocks_without_reference(inputs: &mut [VcfInput]) {
                         if other_end < end {
                             breaks.push(other_end + 1);
                         }
+                    } else if is_reference_block_alt(&split_alt(&other.fixed[4])) {
+                        breaks.push(other_start);
+                        breaks.push((other_start + 1).min(end + 1));
                     } else if !is_reference_block_alt(&split_alt(&other.fixed[4])) {
                         breaks.push(other_start);
                         breaks.push((other_start + 1).min(end + 1));
@@ -695,6 +699,7 @@ fn merge_inputs(
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
     missing_to_ref: bool,
+    gvcf_mode: bool,
 ) -> io::Result<String> {
     let first = inputs
         .first()
@@ -788,6 +793,9 @@ fn merge_inputs(
             add_missing_reference_alleles_to_an(&mut fixed, absent_alleles);
         }
         cleanup_single_base_reference_block_end(&mut fixed);
+        if gvcf_mode {
+            order_gvcf_info(&mut fixed);
+        }
         let mut samples = Vec::new();
         for (input_idx, input) in inputs.iter().enumerate() {
             match &site.samples_by_input[input_idx] {
@@ -807,6 +815,39 @@ fn merge_inputs(
     }
 
     Ok(out)
+}
+
+fn order_gvcf_info(fixed: &mut [String]) {
+    let Some(info) = fixed.get_mut(7) else {
+        return;
+    };
+    if *info == "." || info.is_empty() {
+        return;
+    }
+
+    let fields = info.split(';').map(str::to_owned).collect::<Vec<_>>();
+    let mut emitted = vec![false; fields.len()];
+    let mut ordered = Vec::with_capacity(fields.len());
+    for tag in [
+        "END", "VDB", "SGB", "RPB", "MQB", "MQSB", "BQB", "MQ0F", "DP", "I16", "MinDP", "QS",
+    ] {
+        for (idx, field) in fields.iter().enumerate() {
+            if !emitted[idx] && info_field_tag(field) == tag {
+                ordered.push(field.clone());
+                emitted[idx] = true;
+            }
+        }
+    }
+    for (idx, field) in fields.into_iter().enumerate() {
+        if !emitted[idx] {
+            ordered.push(field);
+        }
+    }
+    *info = ordered.join(";");
+}
+
+fn info_field_tag(field: &str) -> &str {
+    field.split_once('=').map(|(tag, _)| tag).unwrap_or(field)
 }
 
 fn fixed_headers_compatible(first: &[String], other: &[String]) -> bool {
@@ -853,7 +894,7 @@ fn merged_meta(inputs: &[VcfInput]) -> Vec<String> {
         return Vec::new();
     };
     let mut meta = first.meta.clone();
-    let mut seen_ids = ["INFO", "FORMAT", "FILTER", "SAMPLE"]
+    let mut seen_ids = ["contig", "ALT", "INFO", "FORMAT", "FILTER", "SAMPLE"]
         .into_iter()
         .map(|kind| {
             let ids = first
@@ -867,7 +908,7 @@ fn merged_meta(inputs: &[VcfInput]) -> Vec<String> {
 
     for input in &inputs[1..] {
         for line in &input.meta {
-            for kind in ["INFO", "FORMAT", "FILTER", "SAMPLE"] {
+            for kind in ["contig", "ALT", "INFO", "FORMAT", "FILTER", "SAMPLE"] {
                 if let Some(id) = meta_id(line, kind)
                     && seen_ids.get_mut(kind).is_some_and(|ids| ids.insert(id))
                 {
@@ -3145,6 +3186,7 @@ mod tests {
             InfoRules::default(),
             MergeMode::Default,
             None,
+            false,
             false,
         )
         .unwrap();

@@ -554,6 +554,22 @@ fn merge_gvcf3_src_join_fixture_matches_upstream_text_output() {
 }
 
 #[test]
+fn merge_gvcf4_reference_block_overlap_fixture_matches_upstream_text_output() {
+    let (out, err, code) = run(&[
+        "merge",
+        "--no-version",
+        "--gvcf",
+        "-",
+        "../../bcftools/test/merge.gvcf.4.a.vcf",
+        "../../bcftools/test/merge.gvcf.4.b.vcf",
+    ]);
+    assert_eq!(code, 0, "merge.gvcf.4 fixture failed: {err}");
+
+    let expected = std::fs::read_to_string("../../bcftools/test/merge.gvcf.4.out").unwrap();
+    assert_eq!(out, expected);
+}
+
+#[test]
 fn merge_sites_only_alt_union_matches_upstream_fixture() {
     for extra_args in [Vec::<&str>::new(), vec!["-i", "AN:sum,AC:sum"]] {
         let mut args = vec![
