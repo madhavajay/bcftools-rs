@@ -1,15 +1,16 @@
 //! `bcftools +tag2tag` (upstream `bcftools/plugins/tag2tag.c`).
 //!
-//! Local slice: the exact integer conversions
+//! Local slice: core GL/PL/GP/GT conversions
 //! - `--gl-to-pl`: `PL = lround(-10 * GL)`, missing preserved.
+//! - `--gl-to-gp`: `GP = 10^GL / sum(10^GL)`, missing preserved, with
+//!   upstream `float` arithmetic and `%g`-style formatting.
 //! - `--gp-to-gt`: hard-call `GT` from normalized `GP` with `-t`/`--threshold`
 //!   (call iff max posterior >= 1 - threshold).
 //!
 //! `-r`/`--replace` drops the source FORMAT tag (and its header line) and
 //! adds the destination tag's header line as the last `##` line, mirroring
-//! HTSlib `bcf_hdr_remove` + `bcf_hdr_append`. The float `--gl-to-gp`
-//! (`%g` formatting) and the localized `--LXX-to-XX` family remain tracked
-//! in `TODO.md`.
+//! HTSlib `bcf_hdr_remove` + `bcf_hdr_append`. The localized `--LXX-to-XX`
+//! family remains tracked in `TODO.md`.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -19,16 +20,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use super::prune::kputd;
 use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Conversion {
     GlToPl,
+    GlToGp,
     GpToGt,
 }
 
 const PL_HEADER: &str =
     "##FORMAT=<ID=PL,Number=G,Type=Integer,Description=\"Phred-scaled genotype likelihoods\">";
+const GP_HEADER: &str =
+    "##FORMAT=<ID=GP,Number=G,Type=Float,Description=\"Genotype probabilities\">";
 const GT_HEADER: &str = "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">";
 
 struct Plan {
@@ -43,6 +48,11 @@ fn plan(conv: Conversion) -> Plan {
             src: "GL",
             dst: "PL",
             dst_header: PL_HEADER,
+        },
+        Conversion::GlToGp => Plan {
+            src: "GL",
+            dst: "GP",
+            dst_header: GP_HEADER,
         },
         Conversion::GpToGt => Plan {
             src: "GP",
@@ -109,6 +119,7 @@ fn convert_record(line: &str, conv: Conversion, replace: bool, threshold: f64) -
             let src_val = parts.get(src_idx).copied().unwrap_or(".");
             let converted = match conv {
                 Conversion::GlToPl => gl_to_pl(src_val),
+                Conversion::GlToGp => gl_to_gp(src_val),
                 Conversion::GpToGt => gp_to_gt(src_val, threshold),
             };
             if replace {
@@ -164,6 +175,48 @@ fn gl_to_pl(gl: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn gl_to_gp(gl: &str) -> String {
+    if gl == "." {
+        return ".".to_owned();
+    }
+
+    let mut values: Vec<Option<f32>> = Vec::new();
+    let mut sum = 0.0f32;
+    for token in gl.split(',') {
+        if token == "." {
+            values.push(None);
+            continue;
+        }
+        let Ok(g) = token.parse::<f32>() else {
+            values.push(None);
+            continue;
+        };
+        let p = 10.0f32.powf(g);
+        sum += p;
+        values.push(Some(p));
+    }
+
+    if sum > 0.0 {
+        values
+            .into_iter()
+            .map(|v| match v {
+                Some(p) => kputd((p / sum) as f64),
+                None => ".".to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    } else {
+        values
+            .into_iter()
+            .map(|v| match v {
+                Some(p) => kputd(p as f64),
+                None => ".".to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 fn gp_to_gt(gp: &str, threshold: f64) -> String {
@@ -301,6 +354,15 @@ mod tests {
         assert_eq!(gl_to_pl("-25.5,0,-25.5"), "255,0,255");
         assert_eq!(gl_to_pl("."), ".");
         assert_eq!(gl_to_pl("-1,.,-2"), "10,.,20");
+    }
+
+    #[test]
+    fn gl_to_gp_values() {
+        assert_eq!(gl_to_gp("0"), "1");
+        assert_eq!(gl_to_gp("0,0,0"), "0.333333,0.333333,0.333333");
+        assert_eq!(gl_to_gp("-25.5,0,-25.5"), "3.16228e-26,1,3.16228e-26");
+        assert_eq!(gl_to_gp(".,.,."), ".,.,.");
+        assert_eq!(gl_to_gp("."), ".");
     }
 
     #[test]

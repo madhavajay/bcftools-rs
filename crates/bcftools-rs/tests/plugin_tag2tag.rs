@@ -1,4 +1,4 @@
-//! End-to-end tests for the `+tag2tag` plugin (gl-to-pl, gp-to-gt).
+//! End-to-end tests for the `+tag2tag` plugin (gl-to-pl, gl-to-gp, gp-to-gt).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -77,17 +77,18 @@ fn tag2tag_gp_to_gt_matches_upstream_fixture() {
 }
 
 #[test]
-fn tag2tag_gl_to_gp_is_reported_unsupported() {
+fn tag2tag_gl_to_gp_matches_upstream_fixture() {
     let input = fixture_path("view.GL.vcf");
-    let (_o, err, code) = run(&[
+    let expected = std::fs::read_to_string(fixture_path("view.GL-GP.vcf")).unwrap();
+    let (out, err, code) = run(&[
         "+tag2tag",
         "--no-version",
         input.to_str().unwrap(),
         "--",
         "--gl-to-gp",
     ]);
-    assert_ne!(code, 0, "gl-to-gp should be reported unsupported for now");
-    assert!(err.contains("gl-to-gp"), "stderr: {err}");
+    assert_eq!(code, 0, "+tag2tag --gl-to-gp failed: {err}");
+    assert_eq!(out, expected);
 }
 
 #[test]
