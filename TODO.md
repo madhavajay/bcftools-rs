@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #121 (`progress/merge-local-alleles-lpl2`, merge commit
+  `7056628`) added byte-for-byte `merge --force-samples -L 2` local-alleles
+  FORMAT-vector localization, including absent-sample `LAA` compaction, with
+  `merge.LPL.3.out` coverage.
 - 2026-05-17: PR #119 (`progress/merge-local-alleles-trim-empty`, merge
   commit `f830767`) trimmed zero-evidence merged ALT padding from localized
   FORMAT vectors, with byte-for-byte `merge.LPL.{4,5,6}.out` coverage.
@@ -451,13 +455,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`91d987b`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`7056628`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-local-alleles-lpl2` is adding
-  byte-for-byte `merge --force-samples -L 2` / `merge.LPL.3.out` coverage for
-  absent-sample `LAA` compaction in the text-backed local-alleles slice. Keep
-  the one-branch rule, run the full local gate, and wait for both required
-  GitHub checks before merge.
+- Current code slice in flight: none after PR #121; start one focused local-only
+  branch from fresh `main` for the next TODO item, keep the one-branch rule,
+  run the full local gate, and wait for both required GitHub checks before
+  merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
