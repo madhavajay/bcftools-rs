@@ -201,9 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
-- 2026-05-17: in-flight `progress/merge-gvcf5-nonref-order` adds
-  byte-for-byte text parity for upstream `merge.gvcf.5.1.out` by preserving
-  sampled reference-block segments at variant positions under `--gvcf -`.
+- 2026-05-17: PR #141 (`progress/merge-gvcf5-nonref-order`, merge commit
+  `2dd3d17`) added byte-for-byte text parity for upstream
+  `merge.gvcf.5.1.out` by preserving sampled reference-block segments at
+  variant positions under `--gvcf -`.
 - 2026-05-17: PR #139 (`progress/merge-gvcf8-no-ref-split`, merge commit
   `4a9bd2c`) added byte-for-byte text parity for upstream `merge.gvcf.8.out`
   by splitting `--gvcf -` reference blocks around overlapping records without
@@ -490,9 +491,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`4a9bd2c`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`2dd3d17`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf5-nonref-order`; keep the
+- Current code slice in flight: none after PR #141; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
   one-branch rule, run the full local gate, and wait for both required GitHub
   checks before merge.
 - Next local-only queue:
