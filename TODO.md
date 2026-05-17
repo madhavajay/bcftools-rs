@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #213 (`progress/contrast-common-filter`, merge commit
+  `240a3f3`) added common `+contrast -i` / `-e` record filtering through the
+  shared text filter engine before annotation and stderr statistic
+  accumulation.
+- 2026-05-18: PR #212
+  (`progress/todo-sync-after-guess-ploidy-common-filter`, merge commit
+  `2c2b3b6`) synced the TODO docs after PR #211.
 - 2026-05-18: PR #211 (`progress/guess-ploidy-common-filter`, merge commit
   `d3f490c`) added common `+guess-ploidy -i` / `-e` record filtering through
   the shared text filter engine before genotype-likelihood accumulation.
@@ -696,11 +703,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`d3f490c`) (318 lib unit tests plus
+  latest merged commit on `main` (`240a3f3`) (319 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: `progress/contrast-common-filter`, adding
-  common `+contrast -i/-e` record filtering through the shared text filter
-  engine before annotation and stderr statistic accumulation.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
