@@ -293,6 +293,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut contrast_annots: Option<String> = None;
     let mut contrast_control: Option<String> = None;
     let mut contrast_case: Option<String> = None;
+    let mut contrast_max_ac: Option<String> = None;
     let mut force_samples = false;
     // fixref options.
     let mut fixref_fasta: Option<String> = None;
@@ -676,6 +677,20 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 contrast_case = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             "--force-samples" => force_samples = true,
+            "-f" | "--max-allele-freq" if plugin_name.as_deref() == Some("contrast") => {
+                contrast_max_ac = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--max-allele-freq=")
+                && plugin_name.as_deref() == Some("contrast") =>
+            {
+                contrast_max_ac = Some(raw["--max-allele-freq=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-f")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("contrast") =>
+            {
+                contrast_max_ac = Some(raw[2..].to_owned());
+            }
             "-a" if plugin_name.as_deref() == Some("ad-bias") => {
                 min_alt_dp = iter.next().and_then(|s| s.to_string_lossy().parse().ok());
             }
@@ -1250,8 +1265,16 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 "contrast requires -0/--control-samples and -1/--case-samples",
             ));
         };
-        let vcf = contrast::run(Path::new(&input), annots, ctrl, case, force_samples)?;
-        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        let report = contrast::run(
+            Path::new(&input),
+            annots,
+            ctrl,
+            case,
+            force_samples,
+            contrast_max_ac.as_deref(),
+        )?;
+        eprint!("{}", report.stderr);
+        write_plugin_output(report.vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 
