@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #169 (`progress/norm-join-missing-ploidy`, merge commit
+  `6c700a2`) added byte-for-byte text parity for upstream
+  `norm.join-missing-ploidy.1.out` and `norm.4.1.out` by extending the narrow
+  `norm -m +both` join slice with missing-ploidy GT projection and SNP/indel
+  grouping.
+- 2026-05-17: PR #168 (`progress/todo-sync-after-norm-split-coverage`, merge
+  commit `bc561ea`) synced the TODO docs after PR #167.
 - 2026-05-17: PR #167 (`progress/norm-existing-split-fixtures`, merge commit
   `71a4d0d`) added byte-for-byte Rust coverage for already-supported upstream
   `norm.breakend.1.1.out` and `norm.5.{1,2}.out` split fixtures.
@@ -557,13 +564,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`bc561ea`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`6c700a2`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/norm-join-missing-ploidy`, extending
-  the local `norm -m +both` join slice with missing-ploidy GT projection and
-  SNP/indel grouping for upstream `norm.join-missing-ploidy.1.out` and
-  `norm.4.1.out`. Keep the one-branch rule, run the full local gate, and wait
-  for both required GitHub checks before merge.
+- Current code slice in flight: none after PR #169; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
