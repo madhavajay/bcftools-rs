@@ -353,16 +353,18 @@ fn merge_inputs(
     for (input_idx, input) in inputs.iter().enumerate() {
         for sample in &input.samples {
             let mut name = sample.clone();
-            if !seen_samples.insert(name.clone()) {
+            if seen_samples.contains(&name) {
                 if !force_samples {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         format!("duplicate sample name '{sample}'"),
                     ));
                 }
-                name = format!("{}:{sample}", input_idx + 1);
-                seen_samples.insert(name.clone());
+                while seen_samples.contains(&name) {
+                    name = format!("{}:{name}", input_idx + 1);
+                }
             }
+            seen_samples.insert(name.clone());
             sample_names.push(name);
         }
     }
