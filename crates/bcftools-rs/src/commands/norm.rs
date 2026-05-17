@@ -113,6 +113,7 @@ struct JoinKey {
     chrom: String,
     pos: String,
     reference: String,
+    kind: VariantKind,
     qual: String,
     filter: String,
     info: String,
@@ -124,6 +125,7 @@ struct JoinGroup {
     first_fields: Vec<String>,
     ids: Vec<String>,
     alts: Vec<String>,
+    rows: Vec<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -616,10 +618,12 @@ fn join_filtered_multiallelic_records(
             continue;
         }
 
+        let alts_for_key: Vec<&str> = fields[4].split(',').collect();
         let key = JoinKey {
             chrom: fields[0].clone(),
             pos: fields[1].clone(),
             reference: fields[3].clone(),
+            kind: classify_kind(&fields[3], &alts_for_key),
             qual: fields[5].clone(),
             filter: fields[6].clone(),
             info: fields[7].clone(),
@@ -627,25 +631,114 @@ fn join_filtered_multiallelic_records(
         if let Some(group) = groups.iter_mut().find(|group| group.key == key) {
             group.ids.push(fields[2].clone());
             group.alts.extend(fields[4].split(',').map(str::to_owned));
+            group.rows.push(fields);
         } else {
             groups.push(JoinGroup {
                 key,
                 first_fields: fields.clone(),
                 ids: vec![fields[2].clone()],
                 alts: fields[4].split(',').map(str::to_owned).collect(),
+                rows: vec![fields],
             });
         }
     }
 
     for group in groups {
         let mut fields = group.first_fields;
-        fields[2] = group.ids.join(";");
+        fields[2] = join_record_ids(&group.ids);
         fields[4] = group.alts.join(",");
+        project_joined_genotypes(&mut fields, &group.rows);
         out.push_str(&fields.join("\t"));
         out.push('\n');
     }
 
     Ok(out)
+}
+
+fn join_record_ids(ids: &[String]) -> String {
+    let joined: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty() && *id != ".")
+        .collect();
+    if joined.is_empty() {
+        ".".to_owned()
+    } else {
+        joined.join(";")
+    }
+}
+
+fn project_joined_genotypes(fields: &mut [String], rows: &[Vec<String>]) {
+    if fields.len() <= 9 {
+        return;
+    }
+    let Some(gt_index) = fields[8].split(':').position(|key| key == "GT") else {
+        return;
+    };
+
+    for (sample_index, sample_field) in fields.iter_mut().enumerate().skip(9) {
+        let mut first_called = None;
+        let mut first_alt = None;
+        for (alt_index, row) in rows.iter().enumerate() {
+            let Some(sample) = row.get(sample_index) else {
+                continue;
+            };
+            let Some(gt) = sample.split(':').nth(gt_index) else {
+                continue;
+            };
+            let Some((projected, has_alt)) = project_joined_gt(gt, alt_index + 1) else {
+                continue;
+            };
+            if first_called.is_none() {
+                first_called = Some(projected.clone());
+            }
+            if has_alt {
+                first_alt = Some(projected);
+                break;
+            }
+        }
+        let projected = first_alt.or(first_called);
+        if let Some(projected) = projected {
+            let mut parts: Vec<String> = sample_field.split(':').map(str::to_owned).collect();
+            if let Some(gt) = parts.get_mut(gt_index) {
+                *gt = projected;
+                *sample_field = parts.join(":");
+            }
+        }
+    }
+}
+
+fn project_joined_gt(gt: &str, target_alt: usize) -> Option<(String, bool)> {
+    let mut out = String::with_capacity(gt.len());
+    let mut allele = String::new();
+    let mut has_called_allele = false;
+    let mut has_alt_allele = false;
+    for ch in gt.chars() {
+        if ch == '/' || ch == '|' {
+            let (projected, called, alt) = projected_joined_allele(&allele, target_alt);
+            has_called_allele |= called;
+            has_alt_allele |= alt;
+            out.push_str(&projected);
+            allele.clear();
+            out.push(ch);
+        } else {
+            allele.push(ch);
+        }
+    }
+    let (projected, called, alt) = projected_joined_allele(&allele, target_alt);
+    has_called_allele |= called;
+    has_alt_allele |= alt;
+    out.push_str(&projected);
+
+    has_called_allele.then_some((out, has_alt_allele))
+}
+
+fn projected_joined_allele(raw: &str, target_alt: usize) -> (String, bool, bool) {
+    match raw.parse::<usize>() {
+        Ok(0) => ("0".to_owned(), true, false),
+        Ok(_) => (target_alt.to_string(), true, true),
+        Err(_) => (raw.to_owned(), false, false),
+    }
 }
 
 fn project_split_genotypes(
