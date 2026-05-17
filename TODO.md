@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #175 (`progress/view-trim-alt-gvcf`, merge commit
+  `72f1123`) added narrow text-output `view -A` / repeated `-A` parity for
+  upstream `merge.gvcf.2.a.{1,2}.out` by trimming symbolic reference ALT
+  alleles and projecting matching INFO/FORMAT Number=A/R/G values.
 - 2026-05-17: PR #174 (`progress/todo-sync-after-gvcf-merge1`, merge commit
   `2a7df35`) synced the TODO docs after PR #173.
 - 2026-05-17: PR #173 (`progress/gvcf-merge1-ref-blocks`, merge commit
@@ -580,14 +584,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`2a7df35`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`72f1123`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/view-trim-alt-gvcf` adds narrow
-  text-output `view -A` / repeated `-A` parity for upstream
-  `merge.gvcf.2.a.{1,2}.out` by trimming symbolic reference ALT alleles and
-  projecting matching INFO/FORMAT Number=A/R/G values. Keep the one-branch
-  rule, run the full local gate, and wait for both required GitHub checks
-  before merge.
+- Current code slice in flight: none after PR #175; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
