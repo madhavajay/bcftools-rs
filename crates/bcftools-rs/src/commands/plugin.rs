@@ -16,6 +16,7 @@ use crate::commands::plugins::guess_ploidy::FilterMode as GuessPloidyFilterMode;
 use crate::commands::plugins::mendelian2::FilterMode as Mendelian2FilterMode;
 use crate::commands::plugins::missing2ref::FilterMode as Missing2RefFilterMode;
 use crate::commands::plugins::parental_origin::FilterMode as ParentalOriginFilterMode;
+use crate::commands::plugins::split::FilterMode as SplitFilterMode;
 use crate::diagnostics::fmt_etag;
 
 const USAGE: &str = "\n\
@@ -138,6 +139,20 @@ fn set_mendelian2_filter(
     if target.is_some() {
         return Err(io::Error::other(
             "only one mendelian2 -i or -e expression can be given",
+        ));
+    }
+    *target = Some((mode, expr));
+    Ok(())
+}
+
+fn set_split_filter(
+    target: &mut Option<(SplitFilterMode, String)>,
+    mode: SplitFilterMode,
+    expr: String,
+) -> io::Result<()> {
+    if target.is_some() {
+        return Err(io::Error::other(
+            "only one split -i or -e expression can be given",
         ));
     }
     *target = Some((mode, expr));
@@ -412,7 +427,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut split_samples_file: Option<String> = None;
     let mut split_groups_file: Option<String> = None;
     let mut split_keep_tags: Option<String> = None;
-    let mut split_has_filter = false;
+    let mut split_filter: Option<(SplitFilterMode, String)> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -498,8 +513,51 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 split_keep_tags = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("split") => {
-                split_has_filter = true;
-                let _ = iter.next();
+                let mode = if raw == "-i" || raw == "--include" {
+                    SplitFilterMode::Include
+                } else {
+                    SplitFilterMode::Exclude
+                };
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("split requires an expression after -i/-e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                set_split_filter(&mut split_filter, mode, expr)?;
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("split") => {
+                set_split_filter(
+                    &mut split_filter,
+                    SplitFilterMode::Include,
+                    raw["--include=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("split") => {
+                set_split_filter(
+                    &mut split_filter,
+                    SplitFilterMode::Exclude,
+                    raw["--exclude=".len()..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split") =>
+            {
+                set_split_filter(
+                    &mut split_filter,
+                    SplitFilterMode::Include,
+                    raw[2..].to_owned(),
+                )?;
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split") =>
+            {
+                set_split_filter(
+                    &mut split_filter,
+                    SplitFilterMode::Exclude,
+                    raw[2..].to_owned(),
+                )?;
             }
             "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
                 frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1468,7 +1526,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             split_groups_file.as_deref().map(Path::new),
             split_keep_tags.as_deref(),
             output_kind == OutKind::VcfGz,
-            split_has_filter,
+            split_filter
+                .as_ref()
+                .map(|(mode, expr)| crate::commands::plugins::split::FilterSpec {
+                    mode: *mode,
+                    expr,
+                }),
         )?;
         return Ok(ExitCode::SUCCESS);
     }

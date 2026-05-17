@@ -719,8 +719,10 @@ Latest landed progress:
   (that enumeration drifted repeatedly); the workspace is green as of the
   latest merged commit on `main` (`521a362`) (321 lib unit tests plus
   per-command and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/split-common-filter` — add
+  `+split -i` / `-e` common filtering through the shared text filter engine
+  after per-output sample/tag projection, matching upstream's per-output
+  filter placement.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1452,19 +1454,22 @@ Current local slice:
   contig). Byte-for-byte parity with `scatter.1.{1,2,3}.out` via the
   sort-dir / `cat` / `grep -v ^##` harness. 3 integration tests in
   `crates/bcftools-rs/tests/plugin_scatter.rs` + 2 unit tests.
-  Remaining: `-i`/`-e` filtering (filter engine).
+  Note: pinned upstream `scatter.c` accepts `-i`/`-e` but does not apply
+  the stored filter in its `run()` path; the Rust port currently matches
+  that behavior.
 - [x] `+split` (`crates/bcftools-rs/src/commands/plugins/split.rs`):
-  filter-free slice of `split.c`. Splits VCF text into per-sample output
-  VCFs by default, `-S` samples file, or `-G` groups file, including
-  upstream filename sanitization / suffix collision behavior and sample
-  renaming. Also supports `-k`/`--keep-tags` INFO/FORMAT projection in
-  the text path and `-Oz` BGZF VCF output. Byte-for-byte parity with
-  `split.1.{1,2,3,7}.out` and `split.2.1.out` through the harness
-  shape that sorts output files, runs `query -l`, then `view -H`.
-  7 integration tests in
-  `crates/bcftools-rs/tests/plugin_split.rs` + 3 unit tests.
-  Remaining: `-i`/`-e` filtering (rows 882–884), region/target
-  restriction, BCF output, `-W` indexing, and output threading.
+  Splits VCF text into per-sample output VCFs by default, `-S` samples
+  file, or `-G` groups file, including upstream filename sanitization /
+  suffix collision behavior and sample renaming. Also supports
+  `-k`/`--keep-tags` INFO/FORMAT projection in the text path, `-Oz`
+  BGZF VCF output, and common `-i`/`-e` record filtering through the
+  shared text filter engine after per-output sample/tag projection.
+  Byte-for-byte parity with `split.1.{1,2,3,7}.out` and
+  `split.2.1.out` through the harness shape that sorts output files,
+  runs `query -l`, then `view -H`. 8 integration tests in
+  `crates/bcftools-rs/tests/plugin_split.rs` + 4 unit tests.
+  Remaining: region/target restriction, BCF output, `-W` indexing, and
+  output threading.
 - [x] `+isecGT` (`crates/bcftools-rs/src/commands/plugins/isecgt.rs`):
   local text-backed slice of `isecGT.c`. Compares two VCF/BCF inputs
   by matching `CHROM/POS/REF/ALT`, maps samples from file A to file B

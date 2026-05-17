@@ -230,3 +230,50 @@ fn split_writes_bgzf_vcf_outputs() {
     assert!(view_records(&a1).contains("22\t10\t.\tC\tA\t.\t.\t.\tGT\t./.\n"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn split_include_filter_applies_to_each_projected_output() {
+    ensure_binary_built();
+    let root =
+        std::env::temp_dir().join(format!("bcftools-rs-split-filter-{}", std::process::id()));
+    let out_dir = root.join("out");
+    let input = root.join("input.vcf");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        &input,
+        "\
+##fileformat=VCFv4.2
+##contig=<ID=1>
+##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB
+1\t1\t.\tA\tC\t.\t.\t.\tGT\t0/1\t0/0
+1\t2\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/1
+",
+    )
+    .unwrap();
+
+    let out = run_bcftools(&[
+        "+split".into(),
+        input.display().to_string(),
+        "-o".into(),
+        out_dir.display().to_string(),
+        "-i".into(),
+        r#"GT="alt""#.into(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "+split -i failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let a_records = view_records(&out_dir.join("A.vcf"));
+    assert!(a_records.contains("1\t1\t.\tA\tC"));
+    assert!(!a_records.contains("1\t2\t.\tA\tG"));
+
+    let b_records = view_records(&out_dir.join("B.vcf"));
+    assert!(!b_records.contains("1\t1\t.\tA\tC"));
+    assert!(b_records.contains("1\t2\t.\tA\tG"));
+    let _ = std::fs::remove_dir_all(&root);
+}
