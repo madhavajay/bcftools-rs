@@ -88,3 +88,34 @@ fn mendelian2_list_miss() {
 fn mendelian2_count() {
     check(&["-p", "child1,dad1,mom1"], "mendelian.8.out", true);
 }
+
+#[test]
+fn mendelian2_include_filter_counts_failed_sites() {
+    ensure_binary_built();
+    let input = fixture_path("mendelian.vcf");
+    let out = Command::new(bin_path())
+        .args([
+            "+mendelian2",
+            input.to_str().unwrap(),
+            "-p",
+            "child1,dad1,mom1",
+            "-i",
+            "CHROM=\"1\" && POS=100",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "include filter failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("sites_fail\t29\t# skipped because of failed -i/-e filter\n"));
+    assert!(stdout.contains("sites_good\t1\t# number of sites with at least one good trio\n"));
+    assert!(
+        stdout.contains("sites_merr\t0\t# number of sites with at least one Mendelian error\n")
+    );
+    assert!(stdout.contains("ngood\t1\n"));
+    assert!(stdout.contains("nfail\t0\n"));
+}
