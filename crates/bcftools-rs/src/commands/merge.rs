@@ -18,6 +18,7 @@ use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
 use crate::diagnostics::fmt_etag;
+use crate::reference::FastaReference;
 use crate::vcf_compat::normalize_vcf_text;
 
 const USAGE: &str = "\n\
@@ -30,6 +31,7 @@ Options:\n\
     -m, --merge TYPE                Support narrow none/both/snp-ins-del slices; other modes accepted for command-shape compatibility\n\
     -o, --output FILE               Write output to a file [standard output]\n\
     -O, --output-type u|b|v|z[0-9]  u/b: BCF, v/z: VCF/BGZF VCF [v]\n\
+    -g, --gvcf -|REF.FA             Narrow reference-backed gVCF block splitting for local fixtures\n\
         --force-single              Allow a single input for command-shape compatibility\n\
         --force-samples             Allow duplicate sample names by prefixing later inputs with the input index\n\
         --no-index                  Accepted for command-shape compatibility in this text slice\n\
@@ -45,6 +47,7 @@ struct Args {
     info_rules: InfoRules,
     merge_mode: MergeMode,
     local_alleles: Option<usize>,
+    gvcf_ref: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,7 +89,7 @@ struct VcfInput {
     records: Vec<RecordLine>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RecordLine {
     fixed: Vec<String>,
     samples: Vec<String>,
@@ -135,6 +138,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
     let mut info_rules = InfoRules::default();
     let mut merge_mode = MergeMode::Default;
     let mut local_alleles = None;
+    let mut gvcf_ref = None;
 
     let mut iter = argv.iter().skip(1).peekable();
     while let Some(arg) = iter.next() {
@@ -152,6 +156,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             }
             "-L" | "--local-alleles" => {
                 local_alleles = Some(parse_local_alleles(&next_string(&mut iter, raw.as_ref())?)?);
+            }
+            "-g" | "--gvcf" => {
+                let path = next_string(&mut iter, raw.as_ref())?;
+                if path != "-" {
+                    gvcf_ref = Some(PathBuf::from(path));
+                }
             }
             "-o" | "--output" => {
                 output = Some(PathBuf::from(next_string(&mut iter, raw.as_ref())?))
@@ -175,6 +185,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("--local-alleles=") => {
                 local_alleles = Some(parse_local_alleles(value_after_equals(&raw))?)
             }
+            _ if raw.starts_with("--gvcf=") => {
+                let path = value_after_equals(&raw);
+                if path != "-" {
+                    gvcf_ref = Some(PathBuf::from(path));
+                }
+            }
             _ if raw.starts_with("--output=") => {
                 output = Some(PathBuf::from(value_after_equals(&raw)))
             }
@@ -187,6 +203,12 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
             _ if raw.starts_with("-i") && raw.len() > 2 => info_rules = parse_info_rules(&raw[2..]),
             _ if raw.starts_with("-L") && raw.len() > 2 => {
                 local_alleles = Some(parse_local_alleles(&raw[2..])?)
+            }
+            _ if raw.starts_with("-g") && raw.len() > 2 => {
+                let path = &raw[2..];
+                if path != "-" {
+                    gvcf_ref = Some(PathBuf::from(path));
+                }
             }
             _ if raw.starts_with("-m") && raw.len() > 2 => merge_mode = parse_merge_mode(&raw[2..]),
             _ if raw.starts_with("-o") && raw.len() > 2 => output = Some(PathBuf::from(&raw[2..])),
@@ -222,6 +244,7 @@ fn parse_args(argv: &[OsString]) -> Result<Args, ParseOutcome> {
         info_rules,
         merge_mode,
         local_alleles,
+        gvcf_ref,
     })
 }
 
@@ -300,6 +323,9 @@ fn run(args: &Args) -> io::Result<()> {
     let mut inputs = Vec::new();
     for path in &args.inputs {
         inputs.push(parse_vcf_text(&read_vcf_text(path)?)?);
+    }
+    if let Some(path) = &args.gvcf_ref {
+        split_gvcf_reference_blocks(&mut inputs, path)?;
     }
     let merged = merge_inputs(
         &inputs,
@@ -399,6 +425,106 @@ fn parse_vcf_text(text: &str) -> io::Result<VcfInput> {
         samples,
         records,
     })
+}
+
+fn split_gvcf_reference_blocks(inputs: &mut [VcfInput], reference_path: &Path) -> io::Result<()> {
+    let reference = FastaReference::open(reference_path)?;
+    let records_by_input = inputs
+        .iter()
+        .map(|input| input.records.clone())
+        .collect::<Vec<_>>();
+
+    for (input_idx, input) in inputs.iter_mut().enumerate() {
+        let mut split_records = Vec::new();
+        for record in &records_by_input[input_idx] {
+            let Some((start, end)) = reference_block_span(record) else {
+                split_records.push(record.clone());
+                continue;
+            };
+            let mut breaks = vec![start, end + 1];
+            for (other_idx, other_records) in records_by_input.iter().enumerate() {
+                if other_idx == input_idx {
+                    continue;
+                }
+                for other in other_records {
+                    if other.fixed.first() != record.fixed.first() {
+                        continue;
+                    }
+                    let Some(other_start) = record_pos(other) else {
+                        continue;
+                    };
+                    if other_start > start && other_start <= end {
+                        breaks.push(other_start);
+                    } else if other_start == start {
+                        if let Some((_, other_end)) = reference_block_span(other) {
+                            if other_end < end {
+                                breaks.push(other_end + 1);
+                            }
+                        } else if !is_single_ref_symbolic_alt(&split_alt(&other.fixed[4])) {
+                            let other_ref_len = other.fixed[3].len().max(1) as u64;
+                            breaks.push((start + other_ref_len).min(end + 1));
+                        }
+                    }
+                }
+            }
+            breaks.sort_unstable();
+            breaks.dedup();
+            for window in breaks.windows(2) {
+                let seg_start = window[0];
+                let seg_end = window[1] - 1;
+                if seg_start > seg_end {
+                    continue;
+                }
+                split_records.push(split_reference_block_segment(
+                    record, &reference, seg_start, seg_end,
+                )?);
+            }
+        }
+        input.records = split_records;
+    }
+    Ok(())
+}
+
+fn reference_block_span(record: &RecordLine) -> Option<(u64, u64)> {
+    if record.fixed.len() < 8 || !is_single_ref_symbolic_alt(&split_alt(&record.fixed[4])) {
+        return None;
+    }
+    let start = record_pos(record)?;
+    let end = info_u64(&record.fixed[7], "END")?;
+    (end >= start).then_some((start, end))
+}
+
+fn record_pos(record: &RecordLine) -> Option<u64> {
+    record.fixed.get(1)?.parse().ok()
+}
+
+fn split_reference_block_segment(
+    record: &RecordLine,
+    reference: &FastaReference,
+    start: u64,
+    end: u64,
+) -> io::Result<RecordLine> {
+    let mut segment = record.clone();
+    segment.fixed[1] = start.to_string();
+    segment.fixed[3] = fetch_reference_base(reference, &segment.fixed[0], start)?;
+    segment.fixed[7] = if end > start {
+        set_info_value(&segment.fixed[7], "END", &end.to_string())
+    } else {
+        remove_info_value(&segment.fixed[7], "END")
+    };
+    Ok(segment)
+}
+
+fn fetch_reference_base(reference: &FastaReference, chrom: &str, pos: u64) -> io::Result<String> {
+    let region = format!("{chrom}:{pos}-{pos}");
+    let seq = reference.fetch_region(&region)?;
+    let base = seq.first().copied().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("reference region {region} is empty"),
+        )
+    })?;
+    Ok((base as char).to_ascii_uppercase().to_string())
 }
 
 fn merge_inputs(
@@ -2362,6 +2488,25 @@ fn set_info_value(info: &str, key: &str, value: &str) -> String {
     }
 }
 
+fn remove_info_value(info: &str, key: &str) -> String {
+    if info == "." || info.is_empty() {
+        return ".".to_owned();
+    }
+    let fields = info
+        .split(';')
+        .filter(|field| {
+            field
+                .split_once('=')
+                .is_none_or(|(field_key, _)| field_key != key)
+        })
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        ".".to_owned()
+    } else {
+        fields.join(";")
+    }
+}
+
 fn site_has_no_sample_values(site: &MergedSite) -> bool {
     site.samples_by_input
         .iter()
@@ -2390,6 +2535,10 @@ fn add_ac_by_alt(out: &mut HashMap<String, i64>, alt: &str, info: &str) {
 }
 
 fn info_i64(info: &str, key: &str) -> Option<i64> {
+    info_value(info, key)?.parse().ok()
+}
+
+fn info_u64(info: &str, key: &str) -> Option<u64> {
     info_value(info, key)?.parse().ok()
 }
 
