@@ -50,6 +50,7 @@ struct Args {
 struct InfoRules {
     sum_ac: bool,
     sum_an: bool,
+    join_af: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,12 +219,10 @@ fn parse_info_rules(raw: &str) -> InfoRules {
         let Some((tag, method)) = rule.split_once(':') else {
             continue;
         };
-        if method != "sum" {
-            continue;
-        }
         match tag {
-            "AC" => rules.sum_ac = true,
-            "AN" => rules.sum_an = true,
+            "AC" if method == "sum" => rules.sum_ac = true,
+            "AN" if method == "sum" => rules.sum_an = true,
+            "AF" if method == "join" => rules.join_af = true,
             _ => {}
         }
     }
@@ -397,7 +396,7 @@ fn merge_inputs(
         }
     }
 
-    let mut out = render_meta_with_pass_filter(&first.meta);
+    let mut out = render_meta_with_pass_filter(&first.meta, info_rules);
     out.push_str(&first.fixed_header.join("\t"));
     if !sample_names.is_empty() {
         out.push('\t');
@@ -447,14 +446,18 @@ fn fixed_headers_compatible(first: &[String], other: &[String]) -> bool {
     first.len() == 9 && other.len() == 8 && first[8] == "FORMAT" && first[..8] == other[..8]
 }
 
-fn render_meta_with_pass_filter(meta: &[String]) -> String {
+fn render_meta_with_pass_filter(meta: &[String], info_rules: InfoRules) -> String {
     let has_pass = meta
         .iter()
         .any(|line| line.starts_with("##FILTER=<ID=PASS,"));
     let mut out = String::new();
     let mut inserted = false;
     for line in meta {
-        out.push_str(line);
+        if info_rules.join_af && line.starts_with("##INFO=<ID=AF,") {
+            out.push_str(&rewrite_info_number(line, "."));
+        } else {
+            out.push_str(line);
+        }
         out.push('\n');
         if !inserted && !has_pass && line.starts_with("##fileformat=") {
             out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
@@ -464,6 +467,21 @@ fn render_meta_with_pass_filter(meta: &[String]) -> String {
     if !inserted && !has_pass {
         out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
     }
+    out
+}
+
+fn rewrite_info_number(line: &str, number: &str) -> String {
+    let Some(start) = line.find("Number=") else {
+        return line.to_owned();
+    };
+    let value_start = start + "Number=".len();
+    let Some(value_end) = line[value_start..].find(',').map(|idx| value_start + idx) else {
+        return line.to_owned();
+    };
+    let mut out = String::new();
+    out.push_str(&line[..value_start]);
+    out.push_str(number);
+    out.push_str(&line[value_end..]);
     out
 }
 
@@ -482,7 +500,7 @@ fn collect_sites(
             let key = site_key(record);
             if let Some(site_idx) = by_key.get(&key).copied() {
                 let site: &mut MergedSite = &mut sites[site_idx];
-                merge_exact_site(site, record, input_idx)?;
+                merge_exact_site(site, record, input_idx, info_rules)?;
             } else {
                 let mut merged = false;
                 let mut same_locus_conflict = None;
@@ -647,6 +665,7 @@ fn merge_exact_site(
     site: &mut MergedSite,
     record: &RecordLine,
     input_idx: usize,
+    info_rules: InfoRules,
 ) -> io::Result<()> {
     if site.fixed.len() != record.fixed.len()
         || site.fixed[..5] != record.fixed[..5]
@@ -670,6 +689,9 @@ fn merge_exact_site(
         ));
     }
     merge_fixed_shared_fields(&mut site.fixed, &record.fixed);
+    if info_rules.join_af {
+        site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "AF");
+    }
     site.samples_by_input[input_idx] = Some(record.samples.clone());
     Ok(())
 }
@@ -930,6 +952,12 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_r
     }
 
     let site_has_no_sample_values = site_has_no_sample_values(site);
+    if info_rules.join_af {
+        site.fixed[4] = alts.join(",");
+        site.fixed[7] = join_info_tag(&site.fixed[7], &record.fixed[7], "AF");
+        return;
+    }
+
     let mut ac_by_alt = HashMap::new();
     add_ac_by_alt(&mut ac_by_alt, &site.fixed[4], &site.fixed[7]);
     if site_has_no_sample_values || info_rules.sum_ac {
@@ -953,6 +981,44 @@ fn merge_sites_only_alt_union(site: &mut MergedSite, record: &RecordLine, info_r
     } else {
         format!("AN={an};AC={ac_values}")
     };
+}
+
+fn join_info_tag(current: &str, next: &str, key: &str) -> String {
+    let current_value = info_value(current, key).filter(|value| !value.is_empty() && *value != ".");
+    let next_value = info_value(next, key).filter(|value| !value.is_empty() && *value != ".");
+    match (current_value, next_value) {
+        (Some(a), Some(b)) => set_info_value(current, key, &format!("{a},{b}")),
+        (None, Some(b)) => set_info_value(current, key, b),
+        _ => current.to_owned(),
+    }
+}
+
+fn set_info_value(info: &str, key: &str, value: &str) -> String {
+    if info == "." || info.is_empty() {
+        return format!("{key}={value}");
+    }
+
+    let mut found = false;
+    let fields = info
+        .split(';')
+        .map(|field| {
+            if field
+                .split_once('=')
+                .is_some_and(|(field_key, _)| field_key == key)
+            {
+                found = true;
+                format!("{key}={value}")
+            } else {
+                field.to_owned()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if found {
+        fields.join(";")
+    } else {
+        format!("{};{key}={value}", fields.join(";"))
+    }
 }
 
 fn site_has_no_sample_values(site: &MergedSite) -> bool {
