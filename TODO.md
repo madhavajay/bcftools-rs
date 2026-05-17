@@ -201,6 +201,9 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: PR #202
+  (`progress/todo-sync-after-guess-ploidy-af-tag`, merge commit `bdc8b31`)
+  synced the TODO docs after PR #201.
 - 2026-05-18: PR #201 (`progress/guess-ploidy-af-tag`, merge commit
   `69f2712`) added `+guess-ploidy --AF-tag TAG` INFO allele-frequency
   override support, including missing-tag validation and focused Rust
@@ -662,10 +665,11 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`69f2712`) (309 lib unit tests plus per-command
+  latest merged commit on `main` (`bdc8b31`) (309 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: none; pick the next focused local-only item
-  from the queue below.
+- Current code slice in flight: `progress/guess-ploidy-genome-shortcut`
+  adds `+guess-ploidy -g/--genome` shortcut regions and inline
+  `CHROM:FROM-TO` interval filtering in `bcftools-rs` only.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
@@ -1224,12 +1228,13 @@ Current local slice:
   non-informative skips, the PL→GL→GT header auto-switch, and the
   verbose `SEX` report (`%f`, score computed at full precision), and
   `--AF-tag TAG` INFO allele-frequency override (first value only) with
-  upstream-style missing-tag validation.
+  upstream-style missing-tag validation, and `-g` / `--genome` shortcuts
+  (`b37`, `b38`, `hg19`, `hg38`) backed by inline `CHROM:FROM-TO`
+  interval matching.
   Byte-for-byte parity with `guess-ploidy.PL.out` and
   `guess-ploidy.GL.out` (identical, exercising the PL→GL auto-switch).
-  3 integration tests in `crates/bcftools-rs/tests/plugin_guess_ploidy.rs`
-  + 5 unit tests. Remaining: `-g` genome shortcut begin-end sub-region and
-  `-i`/`-e` filtering (filter engine).
+  4 integration tests in `crates/bcftools-rs/tests/plugin_guess_ploidy.rs`
+  + 7 unit tests. Remaining: `-i`/`-e` filtering (filter engine).
 - [x] `+contrast` (`crates/bcftools-rs/src/commands/plugins/contrast.rs`):
   port of `contrast.c`. `-0`/`-1` control/case sample groups (comma
   list or one-per-line file, sample-name precedence, `--force-samples`
