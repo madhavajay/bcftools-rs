@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #127 (`progress/merge-gvcf10-reference-split`, merge commit
+  `2f24bf2`) extended the narrow gVCF10 merge slice with reference-backed
+  `-g REF.fa` block splitting, with byte-for-byte
+  `merge.gvcf.10.{3,4}.out` coverage.
 - 2026-05-17: PR #125 (`progress/merge-gvcf10-text-fixtures`, merge commit
   `8743da0`) added narrow gVCF reference-symbolic same-position handling in
   the text-backed `merge` slice, with byte-for-byte
@@ -463,13 +467,12 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`c77e61b`) (~220 lib unit tests plus per-command
+  latest merged commit on `main` (`2f24bf2`) (~220 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/merge-gvcf10-reference-split` is
-  extending the narrow text-backed gVCF10 merge slice with reference-backed
-  `-g REF.fa` block splitting and byte-for-byte `merge.gvcf.10.{3,4}.out`
-  coverage. Keep the one-branch rule, run the full local gate, and wait for
-  both required GitHub checks before merge.
+- Current code slice in flight: none after PR #127; start one focused
+  local-only branch from fresh `main` for the next TODO item, keep the
+  one-branch rule, run the full local gate, and wait for both required GitHub
+  checks before merge.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
