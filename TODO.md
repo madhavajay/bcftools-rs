@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-17: PR #199 (`progress/fixploidy-default-ploidy-line`, merge
+  commit `9ea3c0c`) added `+fixploidy` support for
+  `* * * SEX PLOIDY` default-ploidy rows, including per-sex defaults for
+  non-overlapping regions while preserving upstream overlap behavior.
 - 2026-05-17: PR #198 (`progress/todo-sync-after-af-dist-bin-files`, merge
   commit `944d8f7`) synced the TODO docs after PR #197.
 - 2026-05-17: PR #197 (`progress/af-dist-bin-files`, merge commit
@@ -651,10 +655,10 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`944d8f7`) (305 lib unit tests plus per-command
+  latest merged commit on `main` (`9ea3c0c`) (306 lib unit tests plus per-command
   and per-plugin integration suites).
-- Current code slice in flight: `progress/fixploidy-default-ploidy-line` —
-  add `+fixploidy` support for `* * * SEX PLOIDY` default-ploidy lines.
+- Current code slice in flight: none; pick the next focused local-only item
+  from the queue below.
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
