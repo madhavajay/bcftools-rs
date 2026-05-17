@@ -325,6 +325,24 @@ fn merge_ad_vector_allele_union_matches_upstream_fixture() {
 }
 
 #[test]
+fn merge_non_ref_symbolic_allele_union_matches_upstream_fixture() {
+    for mode in ["none", "both"] {
+        let (out, err, code) = run(&[
+            "merge",
+            "--no-version",
+            "--merge",
+            mode,
+            "../../bcftools/test/merge.12.a.vcf",
+            "../../bcftools/test/merge.12.b.vcf",
+        ]);
+        assert_eq!(code, 0, "merge.12 --merge {mode} fixture failed: {err}");
+
+        let expected = std::fs::read_to_string("../../bcftools/test/merge.12.1.out").unwrap();
+        assert_eq!(out, expected, "mode {mode}");
+    }
+}
+
+#[test]
 fn merge_rejects_single_input() {
     let dir = TempDir::new().unwrap();
     let a = write_vcf(&dir, "a.vcf", "SAMPLE_A", "0/1");

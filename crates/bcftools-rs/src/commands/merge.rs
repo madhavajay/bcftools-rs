@@ -486,45 +486,45 @@ fn collect_sites(
             } else {
                 let mut merged = false;
                 let mut same_locus_conflict = None;
-                if merge_mode != MergeMode::None {
-                    if let Some(site_indices) = by_locus.get(&locus_key(record)).cloned() {
-                        for site_idx in site_indices {
-                            let site: &mut MergedSite = &mut sites[site_idx];
-                            if can_merge_same_locus_alt_union(site, record) {
-                                merge_sites_only_alt_union(site, record, info_rules);
-                                site.samples_by_input[input_idx] = Some(record.samples.clone());
-                                merged = true;
-                                break;
-                            }
-                            same_locus_conflict = Some(site_idx);
+                if merge_mode != MergeMode::None
+                    && let Some(site_indices) = by_locus.get(&locus_key(record)).cloned()
+                {
+                    for site_idx in site_indices {
+                        let site: &mut MergedSite = &mut sites[site_idx];
+                        if can_merge_same_locus_alt_union(site, record) {
+                            merge_sites_only_alt_union(site, record, info_rules);
+                            site.samples_by_input[input_idx] = Some(record.samples.clone());
+                            merged = true;
+                            break;
+                        }
+                        same_locus_conflict = Some(site_idx);
+                    }
+                }
+                if !merged
+                    && supports_sampled_same_position_union(merge_mode)
+                    && let Some(site_indices) = by_position.get(&position_key(record)).cloned()
+                {
+                    for site_idx in site_indices {
+                        let site: &mut MergedSite = &mut sites[site_idx];
+                        if can_merge_sampled_same_position(site, record, merge_mode) {
+                            merge_sampled_same_position(site, record, input_idx)?;
+                            merged = true;
+                            break;
                         }
                     }
-                    if !merged
-                        && supports_sampled_same_position_union(merge_mode)
-                        && let Some(site_indices) = by_position.get(&position_key(record)).cloned()
-                    {
-                        for site_idx in site_indices {
-                            let site: &mut MergedSite = &mut sites[site_idx];
-                            if can_merge_sampled_same_position(site, record, merge_mode) {
-                                merge_sampled_same_position(site, record, input_idx)?;
-                                merged = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !merged
-                        && merge_mode == MergeMode::Default
-                        && let Some(site_idx) = same_locus_conflict
-                    {
-                        let existing = &sites[site_idx].fixed;
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            format!(
-                                "conflicting records at {}:{} require full merge semantics",
-                                existing[0], existing[1]
-                            ),
-                        ));
-                    }
+                }
+                if !merged
+                    && merge_mode == MergeMode::Default
+                    && let Some(site_idx) = same_locus_conflict
+                {
+                    let existing = &sites[site_idx].fixed;
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "conflicting records at {}:{} require full merge semantics",
+                            existing[0], existing[1]
+                        ),
+                    ));
                 }
                 if !merged {
                     let site_idx = sites.len();
@@ -592,7 +592,7 @@ fn can_merge_same_locus_alt_union(site: &MergedSite, record: &RecordLine) -> boo
 fn supports_sampled_same_position_union(merge_mode: MergeMode) -> bool {
     matches!(
         merge_mode,
-        MergeMode::Default | MergeMode::Both | MergeMode::SnpInsDel
+        MergeMode::Default | MergeMode::None | MergeMode::Both | MergeMode::SnpInsDel
     )
 }
 
@@ -610,6 +610,8 @@ fn can_merge_sampled_same_position(
         return false;
     }
 
+    let site_has_non_ref = alt_contains_non_ref(&site.fixed[4]);
+    let record_has_non_ref = alt_contains_non_ref(&record.fixed[4]);
     match merge_mode {
         MergeMode::Default => {
             let site_alts = split_alt(&site.fixed[4]);
@@ -620,7 +622,11 @@ fn can_merge_sampled_same_position(
                     && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
             }
         }
+        MergeMode::None => site_has_non_ref && record_has_non_ref,
         MergeMode::Both => {
+            if site_has_non_ref && record_has_non_ref {
+                return true;
+            }
             let site_class = coarse_variant_class(&site.fixed[3], &site.fixed[4]);
             site_class != CoarseVariantClass::Other
                 && site_class == coarse_variant_class(&record.fixed[3], &record.fixed[4])
@@ -630,8 +636,11 @@ fn can_merge_sampled_same_position(
             site_class != PreciseVariantClass::Other
                 && site_class == precise_variant_class(&record.fixed[3], &record.fixed[4])
         }
-        _ => false,
     }
+}
+
+fn alt_contains_non_ref(alt: &str) -> bool {
+    split_alt(alt).iter().any(|alt| alt == "<NON_REF>")
 }
 
 fn merge_exact_site(
