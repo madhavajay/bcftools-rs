@@ -97,6 +97,55 @@ enum VcfNumber {
     Other,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MissingRules {
+    gvcf_defaults: bool,
+}
+
+impl MissingRules {
+    fn for_gvcf_mode(gvcf_defaults: bool) -> Self {
+        Self { gvcf_defaults }
+    }
+
+    fn format_fill(
+        &self,
+        key: &str,
+        value: &str,
+        input_gt: Option<&str>,
+        input_alts: &[String],
+    ) -> String {
+        if !self.gvcf_defaults {
+            return ".".to_owned();
+        }
+
+        match key {
+            "AD" => "0".to_owned(),
+            "PL" if genotype_ploidy(input_gt).is_some_and(|ploidy| ploidy == 1) => {
+                non_ref_haploid_value(value, input_alts)
+                    .or_else(|| max_numeric_token(value))
+                    .unwrap_or_else(|| ".".to_owned())
+            }
+            "PL" => max_numeric_token(value).unwrap_or_else(|| ".".to_owned()),
+            _ => ".".to_owned(),
+        }
+    }
+}
+
+struct MergeContext<'a> {
+    format_numbers: &'a HashMap<String, VcfNumber>,
+    info_numbers: &'a HashMap<String, VcfNumber>,
+    ordered_info_numbers: &'a [(String, VcfNumber)],
+    missing_rules: &'a MissingRules,
+}
+
+struct FormatTransform<'a> {
+    allele_map: &'a [Option<usize>],
+    alt_count: usize,
+    format_numbers: &'a HashMap<String, VcfNumber>,
+    missing_rules: &'a MissingRules,
+    input_alts: &'a [String],
+}
+
 #[derive(Debug)]
 struct VcfInput {
     meta: Vec<String>,
@@ -878,6 +927,13 @@ fn merge_inputs(
     let format_numbers = format_numbers(&merged_meta);
     let info_numbers = info_numbers(&merged_meta);
     let ordered_info_numbers = ordered_info_numbers(&merged_meta);
+    let missing_rules = MissingRules::for_gvcf_mode(gvcf_mode);
+    let context = MergeContext {
+        format_numbers: &format_numbers,
+        info_numbers: &info_numbers,
+        ordered_info_numbers: &ordered_info_numbers,
+        missing_rules: &missing_rules,
+    };
 
     for input in &inputs[1..] {
         if !fixed_headers_compatible(&first.fixed_header, &input.fixed_header) {
@@ -888,14 +944,7 @@ fn merge_inputs(
         }
     }
 
-    let mut sites = collect_sites(
-        inputs,
-        info_rules,
-        merge_mode,
-        &format_numbers,
-        &info_numbers,
-        &ordered_info_numbers,
-    )?;
+    let mut sites = collect_sites(inputs, info_rules, merge_mode, &context)?;
     let contigs = contig_order(&first.meta);
     if info_rules.join_src {
         sites.sort_by_key(|site| site.order);
@@ -1274,9 +1323,7 @@ fn collect_sites(
     inputs: &[VcfInput],
     info_rules: InfoRules,
     merge_mode: MergeMode,
-    format_numbers: &HashMap<String, VcfNumber>,
-    info_numbers: &HashMap<String, VcfNumber>,
-    ordered_info_numbers: &[(String, VcfNumber)],
+    context: &MergeContext<'_>,
 ) -> io::Result<Vec<MergedSite>> {
     let mut sites: Vec<MergedSite> = Vec::new();
     let mut by_key = HashMap::new();
@@ -1293,37 +1340,13 @@ fn collect_sites(
             if let Some(site_idx) = key_site_idx {
                 let site: &mut MergedSite = &mut sites[site_idx];
                 if site.fixed.len() == record.fixed.len() && site.fixed[..5] == record.fixed[..5] {
-                    merge_exact_site(
-                        site,
-                        record,
-                        input_idx,
-                        info_rules,
-                        format_numbers,
-                        info_numbers,
-                        ordered_info_numbers,
-                    )?;
+                    merge_exact_site(site, record, input_idx, info_rules, context)?;
                 } else if supports_sampled_same_position_union(merge_mode)
                     && can_merge_sampled_same_position(site, record, merge_mode)
                 {
-                    merge_sampled_same_position(
-                        site,
-                        record,
-                        input_idx,
-                        info_rules,
-                        format_numbers,
-                        info_numbers,
-                        ordered_info_numbers,
-                    )?;
+                    merge_sampled_same_position(site, record, input_idx, info_rules, context)?;
                 } else {
-                    merge_exact_site(
-                        site,
-                        record,
-                        input_idx,
-                        info_rules,
-                        format_numbers,
-                        info_numbers,
-                        ordered_info_numbers,
-                    )?;
+                    merge_exact_site(site, record, input_idx, info_rules, context)?;
                 }
             } else {
                 let mut merged = false;
@@ -1351,13 +1374,7 @@ fn collect_sites(
                         }
                         if can_merge_sampled_same_position(site, record, merge_mode) {
                             merge_sampled_same_position(
-                                site,
-                                record,
-                                input_idx,
-                                info_rules,
-                                format_numbers,
-                                info_numbers,
-                                ordered_info_numbers,
+                                site, record, input_idx, info_rules, context,
                             )?;
                             merged = true;
                             break;
@@ -1454,6 +1471,7 @@ fn can_merge_sampled_same_position(
 
     let site_has_non_ref = alt_contains_non_ref(&site.fixed[4]);
     let record_has_non_ref = alt_contains_non_ref(&record.fixed[4]);
+    let same_ref = site.fixed[3].eq_ignore_ascii_case(&record.fixed[3]);
     let same_ref_subset_compatible = same_ref_alt_subset_compatible(
         &site.fixed[3],
         &site.fixed[4],
@@ -1466,10 +1484,13 @@ fn can_merge_sampled_same_position(
         &record.fixed[3],
         &record.fixed[4],
     );
+    let ref_extended_non_ref_compatible = !same_ref
+        && site_has_non_ref
+        && record_has_non_ref
+        && merged_ref(&site.fixed[3], &record.fixed[3]).is_some();
     let subset_compatible = same_ref_subset_compatible || ref_extended_subset_compatible;
     let same_id =
         site.fixed.get(2) == record.fixed.get(2) && site.fixed.get(2).is_some_and(|id| id != ".");
-    let same_ref = site.fixed[3].eq_ignore_ascii_case(&record.fixed[3]);
     let both_missing_id = site.fixed.get(2).is_some_and(|id| id == ".")
         && record.fixed.get(2).is_some_and(|id| id == ".");
     match merge_mode {
@@ -1478,6 +1499,7 @@ fn can_merge_sampled_same_position(
             let record_alts = split_alt(&record.fixed[4]);
             same_id
                 || ref_extended_subset_compatible
+                || ref_extended_non_ref_compatible
                 || single_ref_symbolic_alt_compatible(&site.fixed[4], &record.fixed[4])
                 || same_ref
                     && contains_ref_symbolic_alt(&site_alts)
@@ -1573,9 +1595,7 @@ fn merge_exact_site(
     record: &RecordLine,
     input_idx: usize,
     info_rules: InfoRules,
-    format_numbers: &HashMap<String, VcfNumber>,
-    info_numbers: &HashMap<String, VcfNumber>,
-    ordered_info_numbers: &[(String, VcfNumber)],
+    context: &MergeContext<'_>,
 ) -> io::Result<()> {
     if site.fixed.len() != record.fixed.len() || site.fixed[..5] != record.fixed[..5] {
         return Err(io::Error::new(
@@ -1604,27 +1624,27 @@ fn merge_exact_site(
             let alts = split_alt(&site.fixed[4]);
             let map = allele_map(&alts, &alts);
             for values in site.samples_by_input.iter_mut().flatten() {
-                *values = transform_sample_values(
-                    &old_format,
-                    &merged_format,
-                    values,
-                    &map,
-                    alts.len(),
-                    format_numbers,
-                );
+                let transform = FormatTransform {
+                    allele_map: &map,
+                    alt_count: alts.len(),
+                    format_numbers: context.format_numbers,
+                    missing_rules: context.missing_rules,
+                    input_alts: &alts,
+                };
+                *values = transform_sample_values(&old_format, &merged_format, values, &transform);
             }
             site.fixed[8] = merged_format.clone();
         }
         let alts = split_alt(&site.fixed[4]);
         let map = allele_map(&alts, &alts);
-        transform_sample_values(
-            &record_format,
-            &merged_format,
-            &record.samples,
-            &map,
-            alts.len(),
-            format_numbers,
-        )
+        let transform = FormatTransform {
+            allele_map: &map,
+            alt_count: alts.len(),
+            format_numbers: context.format_numbers,
+            missing_rules: context.missing_rules,
+            input_alts: &alts,
+        };
+        transform_sample_values(&record_format, &merged_format, &record.samples, &transform)
     } else {
         record.samples.clone()
     };
@@ -1643,8 +1663,8 @@ fn merge_exact_site(
                 current_map: &map,
                 next_map: &map,
                 alt_count: alts.len(),
-                info_numbers,
-                ordered_info_numbers,
+                info_numbers: context.info_numbers,
+                ordered_info_numbers: context.ordered_info_numbers,
                 preserve_info_order: true,
             },
         );
@@ -1824,9 +1844,7 @@ fn merge_sampled_same_position(
     record: &RecordLine,
     input_idx: usize,
     info_rules: InfoRules,
-    format_numbers: &HashMap<String, VcfNumber>,
-    info_numbers: &HashMap<String, VcfNumber>,
-    ordered_info_numbers: &[(String, VcfNumber)],
+    context: &MergeContext<'_>,
 ) -> io::Result<()> {
     if site.samples_by_input[input_idx].is_some() {
         return Err(io::Error::new(
@@ -1873,8 +1891,8 @@ fn merge_sampled_same_position(
             current_map: &old_site_map,
             next_map: &record_map,
             alt_count: merged_alts.len(),
-            info_numbers,
-            ordered_info_numbers,
+            info_numbers: context.info_numbers,
+            ordered_info_numbers: context.ordered_info_numbers,
             preserve_info_order: same_non_dot_id,
         },
     );
@@ -1886,14 +1904,14 @@ fn merge_sampled_same_position(
     }
     if new_ref != old_ref || merged_alts != old_alts || merged_format != old_format {
         for values in site.samples_by_input.iter_mut().flatten() {
-            *values = transform_sample_values(
-                &old_format,
-                &merged_format,
-                values,
-                &old_site_map,
-                merged_alts.len(),
-                format_numbers,
-            );
+            let transform = FormatTransform {
+                allele_map: &old_site_map,
+                alt_count: merged_alts.len(),
+                format_numbers: context.format_numbers,
+                missing_rules: context.missing_rules,
+                input_alts: &normalized_site_alts,
+            };
+            *values = transform_sample_values(&old_format, &merged_format, values, &transform);
         }
     }
 
@@ -1906,13 +1924,18 @@ fn merge_sampled_same_position(
     site.fixed[7] = merged_info;
     site.fixed[8] = merged_format.clone();
     merge_fixed_shared_fields(&mut site.fixed, &record.fixed, info_rules.filter_logic);
+    let transform = FormatTransform {
+        allele_map: &record_map,
+        alt_count: merged_alts.len(),
+        format_numbers: context.format_numbers,
+        missing_rules: context.missing_rules,
+        input_alts: &normalized_record_alts,
+    };
     site.samples_by_input[input_idx] = Some(transform_sample_values(
         &record_format,
         &merged_format,
         &record.samples,
-        &record_map,
-        merged_alts.len(),
-        format_numbers,
+        &transform,
     ));
     Ok(())
 }
@@ -2335,9 +2358,7 @@ fn transform_sample_values(
     input_format: &str,
     output_format: &str,
     samples: &[String],
-    allele_map: &[Option<usize>],
-    alt_count: usize,
-    format_numbers: &HashMap<String, VcfNumber>,
+    transform: &FormatTransform<'_>,
 ) -> Vec<String> {
     let input_keys = split_format_keys(input_format);
     let output_keys = split_format_keys(output_format);
@@ -2360,16 +2381,7 @@ fn transform_sample_values(
                     input_index
                         .get(key)
                         .and_then(|idx| input_values.get(*idx))
-                        .map(|value| {
-                            remap_format_value(
-                                key,
-                                value,
-                                allele_map,
-                                alt_count,
-                                format_numbers,
-                                input_gt,
-                            )
-                        })
+                        .map(|value| remap_format_value(key, value, input_gt, transform))
                         .unwrap_or_else(|| ".".to_owned())
                 })
                 .collect::<Vec<_>>()
@@ -2406,22 +2418,28 @@ fn merged_sample_format(left: &str, right: &str) -> String {
 fn remap_format_value(
     key: &str,
     value: &str,
-    allele_map: &[Option<usize>],
-    alt_count: usize,
-    format_numbers: &HashMap<String, VcfNumber>,
     input_gt: Option<&str>,
+    transform: &FormatTransform<'_>,
 ) -> String {
+    let fill = transform
+        .missing_rules
+        .format_fill(key, value, input_gt, transform.input_alts);
     match key {
-        "GT" => remap_gt(value, allele_map),
-        "AD" => remap_number_r(value, allele_map, alt_count),
-        _ => match format_numbers.get(key).copied().unwrap_or(VcfNumber::Other) {
-            VcfNumber::A => remap_number_a(value, allele_map, alt_count),
-            VcfNumber::R => remap_number_r(value, allele_map, alt_count),
+        "GT" => remap_gt(value, transform.allele_map),
+        "AD" => remap_number_r(value, transform.allele_map, transform.alt_count, &fill),
+        _ => match transform
+            .format_numbers
+            .get(key)
+            .copied()
+            .unwrap_or(VcfNumber::Other)
+        {
+            VcfNumber::A => remap_number_a(value, transform.allele_map, transform.alt_count, &fill),
+            VcfNumber::R => remap_number_r(value, transform.allele_map, transform.alt_count, &fill),
             VcfNumber::G => {
                 if genotype_ploidy(input_gt).is_some_and(|ploidy| ploidy == 1) {
-                    remap_number_g_haploid(value, allele_map, alt_count)
+                    remap_number_g_haploid(value, transform.allele_map, transform.alt_count, &fill)
                 } else {
-                    remap_number_g(value, allele_map, alt_count)
+                    remap_number_g(value, transform.allele_map, transform.alt_count, &fill)
                 }
             }
             VcfNumber::Other => value.to_owned(),
@@ -2435,6 +2453,29 @@ fn genotype_ploidy(gt: Option<&str>) -> Option<usize> {
         return Some(1);
     }
     Some(gt.chars().filter(|ch| *ch == '/' || *ch == '|').count() + 1)
+}
+
+fn non_ref_haploid_value(raw: &str, input_alts: &[String]) -> Option<String> {
+    let non_ref_idx = input_alts
+        .iter()
+        .position(|alt| is_ref_symbolic_alt(alt))
+        .map(|idx| idx + 1)?;
+    raw.split(',')
+        .nth(non_ref_idx)
+        .and_then(|value| (!value.is_empty() && value != ".").then(|| value.to_owned()))
+}
+
+fn max_numeric_token(raw: &str) -> Option<String> {
+    let mut best: Option<(f64, &str)> = None;
+    for value in raw.split(',') {
+        let parsed = value.parse::<f64>().ok();
+        if let Some(parsed) = parsed
+            && best.is_none_or(|(current, _)| parsed > current)
+        {
+            best = Some((parsed, value));
+        }
+    }
+    best.map(|(_, value)| value.to_owned())
 }
 
 fn remap_gt(raw: &str, allele_map: &[Option<usize>]) -> String {
@@ -2466,34 +2507,54 @@ fn remap_gt(raw: &str, allele_map: &[Option<usize>]) -> String {
     out
 }
 
-fn remap_number_a(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+fn remap_number_a(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+    missing: &str,
+) -> String {
     if raw == "." {
         return raw.to_owned();
     }
-    slots_to_string(remap_number_a_slots(raw, allele_map, alt_count), ".")
+    slots_to_string(remap_number_a_slots(raw, allele_map, alt_count), missing)
 }
 
-fn remap_number_r(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+fn remap_number_r(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+    missing: &str,
+) -> String {
     if raw == "." {
         return raw.to_owned();
     }
-    slots_to_string(remap_number_r_slots(raw, allele_map, alt_count), ".")
+    slots_to_string(remap_number_r_slots(raw, allele_map, alt_count), missing)
 }
 
-fn remap_number_g(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+fn remap_number_g(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+    missing: &str,
+) -> String {
     if raw == "." {
         return raw.to_owned();
     }
-    slots_to_string(remap_number_g_slots(raw, allele_map, alt_count), ".")
+    slots_to_string(remap_number_g_slots(raw, allele_map, alt_count), missing)
 }
 
-fn remap_number_g_haploid(raw: &str, allele_map: &[Option<usize>], alt_count: usize) -> String {
+fn remap_number_g_haploid(
+    raw: &str,
+    allele_map: &[Option<usize>],
+    alt_count: usize,
+    missing: &str,
+) -> String {
     if raw == "." {
         return raw.to_owned();
     }
     slots_to_string(
         remap_number_g_haploid_slots(raw, allele_map, alt_count),
-        ".",
+        missing,
     )
 }
 
