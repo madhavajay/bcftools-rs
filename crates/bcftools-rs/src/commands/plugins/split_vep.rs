@@ -266,8 +266,9 @@ pub struct Options<'a> {
     pub columns: &'a str,
     /// `-s TR:CSQ:PRN` (default `all:any`).
     pub select: &'a str,
-    /// `-a`/`--annotation` INFO tag (default `CSQ`).
-    pub annotation: &'a str,
+    /// `-a`/`--annotation` INFO tag. `None` = auto (`CSQ` if its
+    /// header is present, else `BCSQ`), mirroring upstream.
+    pub annotation: Option<&'a str>,
     /// `-f`/`--format` query-style format string. When set, the plugin
     /// emits rendered text (records with no severity-passing transcript
     /// are dropped) instead of an annotated VCF, mirroring upstream's
@@ -279,6 +280,13 @@ pub struct Options<'a> {
     /// `-d`/`--duplicate`: emit one record per selected severity-passing
     /// transcript instead of comma-joining their annotations.
     pub duplicate: bool,
+    /// `-A`/`--all-fields` delimiter: when set and the `-f` format
+    /// references `%<tag>`, that token is expanded to every CSQ
+    /// subfield joined by this delimiter (`"tab"` → a TAB).
+    pub all_fields: Option<&'a str>,
+    /// `-H`/`-HH` header rows: `1` → `#[1]POS\t[2]Allele…`, `2` →
+    /// bare `#POS\tAllele…`, `0` → none.
+    pub header_level: u8,
 }
 
 /// A parsed `-t` region: `chrom` with an inclusive 1-based `[lo, hi]`
@@ -328,7 +336,19 @@ fn parse_region(spec: &str) -> Result<Region, String> {
 /// transiently annotated VCF).
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    let tag = opts.annotation;
+    // Resolve the VEP tag: explicit `-a`, else `CSQ` when its header is
+    // present, else `BCSQ` (upstream split-vep.c:881-886).
+    let tag = match opts.annotation {
+        Some(a) => a.to_owned(),
+        None => {
+            if parse_format_tokens(&text, "CSQ").is_some() {
+                "CSQ".to_owned()
+            } else {
+                "BCSQ".to_owned()
+            }
+        }
+    };
+    let tag = tag.as_str();
     let fields = parse_format_tokens(&text, tag).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -362,7 +382,25 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             names.push(c.to_owned());
         }
     }
-    if let Some(fmt) = opts.format {
+    // `-A DELIM`: expand a `%<tag>` token in the format string to every
+    // subfield joined by DELIM (`"tab"` → `\t`), then annotate every
+    // subfield (upstream `expand_csq_expression`).
+    let mut effective_format: Option<String> = opts.format.map(str::to_owned);
+    let mut raw_expanded = false;
+    if let (Some(delim), Some(fmt)) = (opts.all_fields, opts.format)
+        && let Some(expanded) = expand_tag_token(fmt, tag, delim, &fields)
+    {
+        effective_format = Some(expanded);
+        raw_expanded = true;
+        for f in &fields {
+            if !names.iter().any(|n| n == f) {
+                names.push(f.clone());
+            }
+        }
+    }
+    if let Some(fmt) = &effective_format
+        && !raw_expanded
+    {
         for tok in format_field_tokens(fmt) {
             if fields.iter().any(|f| f == &tok) && !names.iter().any(|n| n == &tok) {
                 names.push(tok);
@@ -432,20 +470,40 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         }
     }
 
-    match opts.format {
+    match effective_format {
         None => Ok(out),
         Some(fmt) => {
             let mut buf: Vec<u8> = Vec::with_capacity(out.len());
-            crate::commands::query::query_format_text(
-                &out,
-                fmt,
-                &crate::commands::query::QueryFormatOptions::plain(),
-                &mut buf,
-            )?;
+            let mut qopts = crate::commands::query::QueryFormatOptions::plain();
+            qopts.header_level = opts.header_level;
+            crate::commands::query::query_format_text(&out, &fmt, &qopts, &mut buf)?;
             String::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         }
     }
+}
+
+/// Upstream `expand_csq_expression`: replace a `%<tag>` token (not
+/// followed by an identifier char) in `fmt` with every subfield name
+/// joined by `delim` (`"tab"` → a TAB), each as its own `%field`.
+fn expand_tag_token(fmt: &str, tag: &str, delim: &str, fields: &[String]) -> Option<String> {
+    let needle = format!("%{tag}");
+    let pos = fmt.find(&needle)?;
+    let after = &fmt[pos + needle.len()..];
+    if after
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    let sep = if delim == "tab" { "\\t" } else { delim };
+    let joined = fields
+        .iter()
+        .map(|f| format!("%{f}"))
+        .collect::<Vec<_>>()
+        .join(sep);
+    Some(format!("{}{joined}{}", &fmt[..pos], after))
 }
 
 /// Identifiers referenced by `%NAME` / `%INFO/NAME` tokens in a query
