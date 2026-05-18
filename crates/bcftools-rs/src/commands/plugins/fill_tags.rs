@@ -242,6 +242,33 @@ struct Func {
     raw: String,
 }
 
+/// Split the `-t` list on commas at parenthesis depth 0 so that
+/// function arguments (e.g. `binom(FMT/AD[:0],FMT/AD[:1])`) are kept
+/// intact.
+fn split_tags(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 fn parse_func(token: &str) -> Result<Func, String> {
     let (lhs, expr) = token
         .split_once('=')
@@ -491,7 +518,8 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     // (VAF computation itself deferred).
     let mut vaf_hdr = false;
     let mut funcs: Vec<Func> = Vec::new();
-    for t in opts.tags.split(',').filter(|t| !t.is_empty()) {
+    for t in split_tags(opts.tags).iter().filter(|t| !t.is_empty()) {
+        let t = t.as_str();
         if t.eq_ignore_ascii_case("all") {
             for &a in ALL_TAGS {
                 if !want.contains(&a) {
