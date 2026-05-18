@@ -197,3 +197,46 @@ fn setgt_invert_phase_matches_upstream_fixture() {
         .collect();
     assert_eq!(filtered, expected);
 }
+
+fn run_setgt3(out_fixture: &str, new: &str) {
+    ensure_binary_built();
+    let input = fixture_path("setGT.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path(out_fixture)).unwrap();
+    let out = Command::new(bin_path())
+        .args([
+            "+setGT",
+            "--no-version",
+            input.to_str().unwrap(),
+            "--",
+            "-t",
+            "a",
+            "-n",
+            new,
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "+setGT -t a -n {new} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected, "mismatch for -n {new}");
+}
+
+#[test]
+fn setgt_major_minor_custom_matches_upstream_fixtures() {
+    // Upstream rows in=>'setGT.3' (-t a -n {pM,pm,c:1,c:1|1,c:m|M,c:0/1/1}).
+    run_setgt3("setGT.3.1.out", "pM");
+    run_setgt3("setGT.3.2.out", "pm");
+    run_setgt3("setGT.3.3.out", "c:1");
+    run_setgt3("setGT.3.4.out", "c:1|1");
+    run_setgt3("setGT.3.5.out", "c:m|M");
+    run_setgt3("setGT.3.6.out", "c:0/1/1");
+}
