@@ -807,24 +807,53 @@ Latest landed progress:
   37 filter, 2 `+gvcfz`, 2 `+setGT` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
-- Concrete next steps (as of PR #231, `ad09371`; refreshed after the
-  2026-05-18 +impute-info / +vcf2table / +split-filter / filter-subscript
-  session): every remaining unimplemented plugin is infra-coupled (no
-  filter-free plugin slice remains), and the suite is fully green with no
-  `#[ignore]` markers. The highest-value remaining items are, in order:
-  1. **Filter engine completeness** — the shared engine (`src/filter.rs`,
-     ~2200 LOC) already handles GT class literals incl. subscripts,
-     FORMAT vector predicates, `TYPE`/`ALT="*"`, scalar INFO/FORMAT
-     comparisons. Extend toward the constructs the remaining plugins need
-     (`+setGT`, `+split-vep` expressions, `+gvcfz` `-g` group filters,
-     `remove-overlaps -m 'min(QUAL)'`, `prune -i/-e`). Each plugin then
-     becomes a bounded, fixture-backed slice.
-  2. **`+gvcfz`** (35th plugin): its `-g` group expressions
-     (`GT!="alt"`, `GQ>10`) are now engine-supported; remaining work is
-     the block-compression algorithm + the `| query` fixture coupling.
-  3. Deepen the large subcommand first-slices (`merge`, `consensus`,
-     `annotate`, `norm`) and tighten `concat`/`filter`/`stats`/`isec`/
-     `query`/`view`/`reheader`/`convert` edge cases.
+- Remaining tasks (as of PR #238, `220d8e4`; 36/41 plugins; suite fully
+  green, no `#[ignore]` markers). The easy filter-free plugin slices are
+  exhausted — everything below is a substantial, multi-PR effort. In
+  rough priority order:
+
+  1. **Filter-engine `@file` sample-subset subscript** (next concrete
+     slice). `@` is currently a hard lex error (`src/filter.rs` lexer;
+     `lex("@").is_err()` test). Add: `@`+path lexing, parser for
+     `IDENT[@path]` (sample-subset `FormatIndex` variant), sample-name
+     list resolution, and per-sample eval restricted to the subset —
+     the per-sample `EvalContext` fold carries **no sample identity**
+     today, so sample name/index must be threaded through. Unblocks
+     `setGT.{2,3}.out` (`-t q -i 'GT[@samples.txt]="het"'`,
+     `… & binom(AD[@…])<0.1`; `binom()` already exists at
+     `src/filter.rs` ~998) and is also needed by `+split-vep`.
+  2. **`+split-vep`** (74k — heaviest plugin): VEP/CSQ field extraction
+     + `-c`/`-f`/`-i` expression filtering. Depends on (1) and the
+     `convert` `-f` formatter.
+  3. **`+fill-tags`** (1084 LOC — heaviest tag-fixer): INFO/FORMAT tag
+     computation (AC/AN/AF/MAF/HWE/ExcHet/…), `-t`/`-S` group support.
+  4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
+     `test/trio-dnm3/test.sh` fixture). **`+vrfs`** (mpileup/BAM —
+     `#include mpileup2/mpileup.h`, blocked on the mpileup engine).
+     **`+color-chrs`** (HMM + curses-style output).
+  5. **Deferred rows on landed plugins**: `gvcfz.2.out`
+     (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
+     `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
+     `setGT.2.1.out`/`setGT.3.{1..6}.out` (`-n m/M/c:GT/i/p/u/X`),
+     `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
+     `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
+     'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
+  6. **Unstarted subcommands** (each a major port): `call`
+     (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
+     `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
+     `polysomy`.
+  7. **Deepen large subcommand first-slices**: `merge` (synced-reader
+     alignment, allele unification, `-m none|snps|indels|both|all|id`),
+     `consensus`, `annotate` (annotation transfer, column mapping),
+     `norm` (`cluster`, `-m` modes); tighten
+     `concat`/`filter`/`stats`/`isec`/`query`/`view`/`reheader`/
+     `convert` edge cases.
+  8. **Phase 4/5 cross-cutting**: byte-for-byte parity diffing vs C
+     bcftools, `--threads` propagation, exit-code parity, performance
+     triage, `synced_bcf_reader` parity, and the end-of-file
+     dependency-blocker list (BCF haploid-missing `GT=.`,
+     out-of-range/missing typed-value serialization).
+
   NB: several per-entry "Remaining" notes are stale — verify against the
   current code/tests before assuming a gap (e.g. query `TYPE`,
   `ALT="*"`, FORMAT subscripts already work and are tested).
