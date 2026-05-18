@@ -233,3 +233,22 @@ fn format_worst_unfiltered() {
         "split-vep.7.1.out",
     );
 }
+
+#[test]
+fn format_region_and_duplicate() {
+    // `-t 1:14464`: only that site; default select → all transcripts,
+    // annotations comma-joined across them.
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464"],
+        r"%POS\t%CANONICAL\t%Consequence\n",
+        "split-vep.9.out",
+    );
+    // `-d`: one output row per selected severity-passing transcript.
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-d"],
+        r"%POS\t%CANONICAL\t%Consequence\n",
+        "split-vep.10.out",
+    );
+}

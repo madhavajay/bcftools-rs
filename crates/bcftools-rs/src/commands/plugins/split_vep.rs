@@ -273,6 +273,52 @@ pub struct Options<'a> {
     /// are dropped) instead of an annotated VCF, mirroring upstream's
     /// `convert_init` text path.
     pub format: Option<&'a str>,
+    /// `-t`/`--regions` `CHR[:POS[-TO]]` restriction (single region, as
+    /// exercised by the upstream fixtures).
+    pub regions: Option<&'a str>,
+    /// `-d`/`--duplicate`: emit one record per selected severity-passing
+    /// transcript instead of comma-joining their annotations.
+    pub duplicate: bool,
+}
+
+/// A parsed `-t` region: `chrom` with an inclusive 1-based `[lo, hi]`
+/// position range (`hi == i64::MAX` for a whole-chromosome request).
+struct Region {
+    chrom: String,
+    lo: i64,
+    hi: i64,
+}
+
+fn parse_region(spec: &str) -> Result<Region, String> {
+    let (chrom, range) = match spec.split_once(':') {
+        Some((c, r)) => (c, Some(r)),
+        None => (spec, None),
+    };
+    let (lo, hi) = match range {
+        None => (0, i64::MAX),
+        Some(r) => match r.split_once('-') {
+            Some((a, b)) => (
+                a.replace(',', "")
+                    .parse()
+                    .map_err(|_| format!("could not parse region \"{spec}\""))?,
+                b.replace(',', "")
+                    .parse()
+                    .map_err(|_| format!("could not parse region \"{spec}\""))?,
+            ),
+            None => {
+                let p = r
+                    .replace(',', "")
+                    .parse()
+                    .map_err(|_| format!("could not parse region \"{spec}\""))?;
+                (p, p)
+            }
+        },
+    };
+    Ok(Region {
+        chrom: chrom.to_owned(),
+        lo,
+        hi,
+    })
 }
 
 /// Reads the input VCF/BCF and returns either the `-c`-annotated VCF
@@ -328,6 +374,12 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         .map(|n| (n.clone(), field_idx(n).unwrap()))
         .collect();
 
+    let region = opts
+        .regions
+        .map(parse_region)
+        .transpose()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("split-vep: {e}")))?;
+
     // Drop non-matching sites only in `-f` (text) mode; the `-c` VCF
     // path keeps every record (annotation just absent when unmatched).
     let drop_unmatched = opts.format.is_some();
@@ -351,16 +403,33 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         if line.trim().is_empty() {
             continue;
         }
-        let (rendered, passed, all_missing) =
-            process_record(line, tag, &fields, csq_idx, &sel, &annots, &mut sev);
-        // Upstream `-f` default is `--drop-sites`: skip a record that has
-        // no severity-passing transcript, or (when CSQ subfields are
-        // requested) whose every requested annotation is missing.
-        if drop_unmatched && (!passed || (!annots.is_empty() && all_missing)) {
-            continue;
+        if let Some(r) = &region {
+            let mut it = line.splitn(3, '\t');
+            let chrom = it.next().unwrap_or("");
+            let pos: i64 = it.next().and_then(|p| p.parse().ok()).unwrap_or(-1);
+            if chrom != r.chrom || pos < r.lo || pos > r.hi {
+                continue;
+            }
         }
-        out.push_str(&rendered);
-        out.push('\n');
+        for (rendered, passed, all_missing) in process_record(
+            line,
+            tag,
+            &fields,
+            csq_idx,
+            &sel,
+            &annots,
+            opts.duplicate,
+            &mut sev,
+        ) {
+            // Upstream `-f` default is `--drop-sites`: skip a record with
+            // no severity-passing transcript, or (when CSQ subfields are
+            // requested) whose every requested annotation is missing.
+            if drop_unmatched && (!passed || (!annots.is_empty() && all_missing)) {
+                continue;
+            }
+            out.push_str(&rendered);
+            out.push('\n');
+        }
     }
 
     match opts.format {
@@ -418,17 +487,18 @@ fn process_record(
     csq_idx: usize,
     sel: &Select,
     annots: &[(String, usize)],
+    duplicate: bool,
     sev: &mut Severity,
-) -> (String, bool, bool) {
-    let mut f: Vec<String> = line.split('\t').map(str::to_owned).collect();
+) -> Vec<(String, bool, bool)> {
+    let f: Vec<String> = line.split('\t').map(str::to_owned).collect();
     if f.len() < 8 {
-        return (line.to_owned(), false, true);
+        return vec![(line.to_owned(), false, true)];
     }
     let csq_str = f[7]
         .split(';')
         .find_map(|kv| kv.strip_prefix(&format!("{tag}=")));
     let Some(csq_str) = csq_str else {
-        return (line.to_owned(), false, true); // no CSQ: emit unchanged
+        return vec![(line.to_owned(), false, true)]; // no CSQ: emit unchanged
     };
 
     // transcripts -> field vectors
@@ -467,43 +537,59 @@ fn process_record(
         }
     };
 
-    // Collect per-annot values across selected transcripts that pass
-    // the CSQ severity threshold.
-    let mut acc: Vec<Vec<String>> = vec![Vec::new(); annots.len()];
-    let mut severity_pass = false;
-    // Upstream `all_missing`: every requested annotation empty across all
-    // severity-passing transcripts (record dropped in the `-f` path).
-    let mut all_missing = true;
-    for &ti in &selected {
-        let tr = &transcripts[ti];
-        let csq = tr.get(csq_idx).copied().unwrap_or("");
-        if !csq_severity_pass(csq, sel, sev) {
-            continue;
-        }
-        severity_pass = true;
-        for (ai, (_, idx)) in annots.iter().enumerate() {
-            let raw = tr.get(*idx).copied().unwrap_or("");
-            if !raw.is_empty() {
-                all_missing = false;
-            }
-            let val = if *idx == csq_idx && sel.prn == PrnCsq::Worst {
-                rewrite_worst(raw, sev)
-            } else {
-                raw.to_owned()
-            };
-            acc[ai].push(if val.is_empty() { ".".to_owned() } else { val });
-        }
+    // Transcripts that survive both selection and the CSQ severity gate.
+    let passing: Vec<usize> = selected
+        .into_iter()
+        .filter(|&ti| {
+            let csq = transcripts[ti].get(csq_idx).copied().unwrap_or("");
+            csq_severity_pass(csq, sel, sev)
+        })
+        .collect();
+
+    if passing.is_empty() {
+        // No severity-passing transcript: emit the record once,
+        // unannotated, leaving the `-f` drop decision to the caller.
+        return vec![(f.join("\t"), false, true)];
     }
 
-    if severity_pass {
-        for (ai, (name, _)) in annots.iter().enumerate() {
-            let joined = acc[ai].join(",");
-            if !joined.is_empty() {
-                set_info(&mut f, name, &joined);
+    // `-d`/`--duplicate`: one output record per passing transcript.
+    // Otherwise a single record with annotations comma-joined.
+    let groups: Vec<Vec<usize>> = if duplicate {
+        passing.iter().map(|&ti| vec![ti]).collect()
+    } else {
+        vec![passing]
+    };
+
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut rec = f.clone();
+            let mut all_missing = true;
+            let mut acc: Vec<Vec<String>> = vec![Vec::new(); annots.len()];
+            for &ti in &group {
+                let tr = &transcripts[ti];
+                for (ai, (_, idx)) in annots.iter().enumerate() {
+                    let raw = tr.get(*idx).copied().unwrap_or("");
+                    if !raw.is_empty() {
+                        all_missing = false;
+                    }
+                    let val = if *idx == csq_idx && sel.prn == PrnCsq::Worst {
+                        rewrite_worst(raw, sev)
+                    } else {
+                        raw.to_owned()
+                    };
+                    acc[ai].push(if val.is_empty() { ".".to_owned() } else { val });
+                }
             }
-        }
-    }
-    (f.join("\t"), severity_pass, all_missing)
+            for (ai, (name, _)) in annots.iter().enumerate() {
+                let joined = acc[ai].join(",");
+                if !joined.is_empty() {
+                    set_info(&mut rec, name, &joined);
+                }
+            }
+            (rec.join("\t"), true, all_missing)
+        })
+        .collect()
 }
 
 fn csq_severity_pass(csq: &str, sel: &Select, sev: &mut Severity) -> bool {

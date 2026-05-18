@@ -201,6 +201,16 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-7` added `+split-vep` `-t`/`--regions`
+  (`CHR[:POS[-TO]]` single-region restriction) and `-d`/`--duplicate`
+  (one output record per selected severity-passing transcript instead
+  of comma-joining their annotations). `process_record` now yields a
+  per-record list so `-d` and the `-f` drop rule compose. Byte-for-byte
+  against `split-vep.9.out` (region + comma-join) and `split-vep.10.out`
+  (region + duplicate). Still deferred: `%CSQ`/`%BCSQ` raw-tag
+  expansion + `-A`/`-H`/`-HH` (`split-vep.{11,12,12.2,12.3,12.4,13,
+  13.1}.out`), per-sample `[%SAMPLE]` (`split-vep.8.out`, needs the
+  engine-level `@file`/per-sample work), `-g`, `-S`.
 - 2026-05-18: `progress/batch-6` added the `+split-vep -f FMT`
   text-output path. Upstream uses `convert_init`; we reuse our own
   `bcftools query` format engine (`query_format_text`, now
@@ -897,12 +907,13 @@ Latest landed progress:
      `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation path landed in
      `progress/batch-5` (`split-vep.{1,1.1,2,2.1}.out`), and the
      `-f FMT` text path in `progress/batch-6` (reusing our query
-     formatter; `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`). Still to
-     port: `-d` duplicate output, per-sample `[%SAMPLE]` blocks +
-     `-i'GT=...'` (depends on (1)), `-t`/`-T` regions, `-g`/
-     `--gene-list`, `-A` column-type/`-H`/`-HH` header rows
-     (`split-vep.{8,9,10,11,12,12.2,12.3,12.4,13,13.1}.out`), and
-     `-S` custom severity file.
+     formatter; `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`); `-t`
+     region restriction + `-d` duplicate in `progress/batch-7`
+     (`split-vep.{9,10}.out`). Still to port: `%CSQ`/`%BCSQ` raw-tag
+     expansion + `-A` separator/`-H`/`-HH` header rows
+     (`split-vep.{11,12,12.2,12.3,12.4,13,13.1}.out`), per-sample
+     `[%SAMPLE]` blocks + `-i'GT=...'` (`split-vep.8.out`, depends on
+     (1)), `-g`/`--gene-list`, and `-S` custom severity file.
   3. **`+fill-tags`** (1084 LOC — heaviest tag-fixer): INFO/FORMAT tag
      computation (AC/AN/AF/MAF/HWE/ExcHet/…), `-t`/`-S` group support.
   4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
@@ -1934,8 +1945,10 @@ Grouped roughly by complexity / shared dependencies:
       (severity scale, `csq_to_severity`, transcript selection, CSQ
       threshold, PRN) — `split-vep.{1,1.1,2,2.1}.out`; and the `-f FMT`
       text path (reusing our query formatter, upstream `--drop-sites`
-      default) — `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`. Remaining:
-      `-d`, `[%SAMPLE]`, `-t`/`-T`, `-g`, `-A`/`-H`, `-S`.
+      default) — `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`; and
+      `-t`/`--regions` + `-d`/`--duplicate` — `split-vep.{9,10}.out`.
+      Remaining: `%CSQ`/`%BCSQ` raw expansion + `-A`/`-H`/`-HH`,
+      `[%SAMPLE]`, `-g`, `-S`.
 - [ ] **Trio / pedigree** — `+mendelian2` (37k), `+trio-dnm3` (105k — the single largest plugin; has its own `test/trio-dnm3/test.sh` fixture), `+trio-switch-rate`, `+parental-origin`.
 - [ ] **Sample inference** — `+guess-ploidy`, `+contrast`.
 - [ ] **Misc** — `+color-chrs` (curses-style colored output), `+prune`.

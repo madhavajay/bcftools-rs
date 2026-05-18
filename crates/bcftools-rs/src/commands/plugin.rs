@@ -444,6 +444,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_select: Option<String> = None;
     let mut sv_annotation: Option<String> = None;
     let mut sv_format: Option<String> = None;
+    let mut sv_regions: Option<String> = None;
+    let mut sv_duplicate = false;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -651,6 +653,21 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             _ if raw.starts_with("--format=") && plugin_name.as_deref() == Some("split-vep") => {
                 sv_format = Some(raw["--format=".len()..].to_owned());
+            }
+            "-t" | "--regions" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_regions = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--regions=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_regions = Some(raw["--regions=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-t")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_regions = Some(raw[2..].to_owned());
+            }
+            "-d" | "--duplicate" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_duplicate = true;
             }
             // getopt-style attached short option: `-f'%POS\t...'`.
             _ if raw.starts_with("-f")
@@ -1730,6 +1747,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 select: sv_select.as_deref().unwrap_or("all:any"),
                 annotation: sv_annotation.as_deref().unwrap_or("CSQ"),
                 format: sv_format.as_deref(),
+                regions: sv_regions.as_deref(),
+                duplicate: sv_duplicate,
             },
         )?;
         write_plugin_output(out.as_bytes(), output.as_deref(), output_kind)?;
