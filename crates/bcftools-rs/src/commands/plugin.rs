@@ -449,6 +449,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_all_fields: Option<String> = None;
     let mut sv_header_level: u8 = 0;
     let mut sv_filter: Option<(bool, String)> = None;
+    let mut ft_tags: Option<String> = None;
+    let mut ft_samples: Option<String> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -722,6 +724,33 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-HH" if plugin_name.as_deref() == Some("split-vep") => {
                 sv_header_level = 2;
+            }
+            // fill-tags: -t TAG[,TAG...], -S/--samples-file FILE.
+            "-t" | "--tags" if plugin_name.as_deref() == Some("fill-tags") => {
+                ft_tags = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--tags=") && plugin_name.as_deref() == Some("fill-tags") => {
+                ft_tags = Some(raw["--tags=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-t")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("fill-tags") =>
+            {
+                ft_tags = Some(raw[2..].to_owned());
+            }
+            "-S" | "--samples-file" if plugin_name.as_deref() == Some("fill-tags") => {
+                ft_samples = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--samples-file=")
+                && plugin_name.as_deref() == Some("fill-tags") =>
+            {
+                ft_samples = Some(raw["--samples-file=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-S")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("fill-tags") =>
+            {
+                ft_samples = Some(raw[2..].to_owned());
             }
             // getopt-style attached short option: `-f'%POS\t...'`.
             _ if raw.starts_with("-f")
@@ -1591,6 +1620,25 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "fill-AN-AC" {
         let input = input.unwrap_or_else(|| "-".to_owned());
         let vcf = crate::commands::plugins::fill_an_ac::run(Path::new(&input))?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "fill-tags" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(tags) = ft_tags.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fill-tags in this slice requires -t LIST (the TAG:Num=EXPR function engine and HWE/ExcHet/VAF/all are not yet ported)",
+            ));
+        };
+        let vcf = crate::commands::plugins::fill_tags::run(
+            Path::new(&input),
+            crate::commands::plugins::fill_tags::Options {
+                tags,
+                samples_file: ft_samples.as_deref().map(Path::new),
+            },
+        )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
