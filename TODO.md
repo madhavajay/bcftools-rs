@@ -735,7 +735,7 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`2a374ef`) (322 lib unit tests plus
+  latest merged commit on `main` (`b4f4897`) (330 lib unit tests plus
   per-command and per-plugin integration suites).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
@@ -784,6 +784,14 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+impute-info`, PR #221 landed; no open PR):
+  approximately 50-53% complete toward the full stated goal. Movement
+  since the prior estimate is `+impute-info` (filter-free IMPUTE2
+  `INFO/INFO` score from `FORMAT/GP`), verified by 8 unit + 2 synthetic
+  integration tests. The estimate band is unchanged because the remaining
+  weight is dominated by the unfinished large subcommands and the bcftools
+  filter engine, not by individual filter-free plugin slices.
+  33 of 41 plugins done.
 - 2026-05-17 (post FORMAT subscript filter slice, PR #73 landed; no open PR):
   approximately 50-53% complete toward the full stated goal. Movement since
   the prior estimate includes `+split`, `+isecGT`, `+frameshifts`,
