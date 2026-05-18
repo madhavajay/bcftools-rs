@@ -88,3 +88,16 @@ fn per_population_grouping() {
 fn many_alt_alleles() {
     check("many-alts.vcf", &["-t", "AN,AC"], "fill-tags.4.out");
 }
+
+#[test]
+fn default_all_tag_set_with_hwe_exchet() {
+    // No `-t` ⇒ the `all` set: F_MISSING/NS/AN/AF/MAF/AC/AC_Het/AC_Hom/
+    // AC_Hemi/HWE/ExcHet (+ the VAF/VAF1 ##FORMAT header lines).
+    check("fill-tags-hemi.vcf", &[], "fill-tags-hemi.1.out");
+    check("fill-tags-hwe.vcf", &[], "fill-tags-hwe.out");
+}
+
+#[test]
+fn drop_missing_flag() {
+    check("fill-tags-hemi.vcf", &["-d"], "fill-tags-hemi.2.out");
+}

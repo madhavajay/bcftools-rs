@@ -451,6 +451,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_filter: Option<(bool, String)> = None;
     let mut ft_tags: Option<String> = None;
     let mut ft_samples: Option<String> = None;
+    let mut ft_drop_missing = false;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -751,6 +752,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 && plugin_name.as_deref() == Some("fill-tags") =>
             {
                 ft_samples = Some(raw[2..].to_owned());
+            }
+            "-d" | "--drop-missing" if plugin_name.as_deref() == Some("fill-tags") => {
+                ft_drop_missing = true;
             }
             // getopt-style attached short option: `-f'%POS\t...'`.
             _ if raw.starts_with("-f")
@@ -1626,17 +1630,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
 
     if plugin.name == "fill-tags" {
         let input = input.unwrap_or_else(|| "-".to_owned());
-        let Some(tags) = ft_tags.as_deref() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "fill-tags in this slice requires -t LIST (the TAG:Num=EXPR function engine and HWE/ExcHet/VAF/all are not yet ported)",
-            ));
-        };
+        // No `-t` ⇒ upstream default tag list is `all`.
+        let tags = ft_tags.as_deref().unwrap_or("all");
         let vcf = crate::commands::plugins::fill_tags::run(
             Path::new(&input),
             crate::commands::plugins::fill_tags::Options {
                 tags,
                 samples_file: ft_samples.as_deref().map(Path::new),
+                drop_missing: ft_drop_missing,
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;

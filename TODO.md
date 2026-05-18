@@ -201,6 +201,16 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-11` extended `+fill-tags` with `HWE`/
+  `ExcHet` (ported `calc_hwe`, Wigginton 2005 PMID:15789306), the
+  `F_MISSING` builtin (fraction of samples whose GT has a missing
+  allele), the `all` / default (no-`-t`) tag set, and `-d`/
+  `--drop-missing` (half-missing → `nac`). Float output switched to C
+  `%g`/precision-6 over the f32-stored value (matches bcftools'
+  32-bit float storage). Byte-for-byte against `fill-tags-hemi.1.out`,
+  `fill-tags-hemi.2.out` (`-d`), and `fill-tags-hwe.out`. Still
+  deferred: `END`/`TYPE`, `FORMAT/VAF`/`VAF1` values, and the
+  `TAG:Num=EXPR` function engine.
 - 2026-05-18: `progress/batch-10` started `+fill-tags` (38th plugin) —
   the genotype-derived INFO count tags `AN`/`AC`/`AC_Hom`/`AC_Het`/
   `AC_Hemi`/`AF`/`MAF`/`NS`, `-t LIST` selection, and `-S`/
@@ -941,15 +951,17 @@ Latest landed progress:
      `split-vep.{1,1.1,2,2.1,3,3.1,4,5,6,7,7.1,8,9,10,11,12,12.2,
      12.3,12.4,13,13.1}.out` (all 21) passes.** Only the no-fixture
      `-g`/`--gene-list` and `-S` custom-severity options are unported.
-  3. **`+fill-tags` — remaining paths** (1084 LOC). The count-tags
-     slice landed in `progress/batch-10`: `AN`/`AC`/`AC_Hom`/`AC_Het`/
-     `AC_Hemi`/`AF`/`MAF`/`NS` + `-t`/`-S` (`fill-tags.{out,2,3,4}.out`
-     pass). Still to port: `HWE`/`ExcHet` (kf chi/beta functions),
-     `END`/`TYPE`/`F_MISSING`/`VAF`/`VAF1`, the `TAG:Num=EXPR`
-     function engine (`sum`/`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/
-     `phred`/…), the `all` tag set, and `-d`/`--drop-missing` —
-     `fill-tags.{func.1,5,-hemi.1,-hemi.2,-hwe,-func,-AN0,-VAF,-AD.*}
-     .out`, `fmissing.*.out`, `fisher.*.out`.
+  3. **`+fill-tags` — remaining paths** (1084 LOC). Landed:
+     `progress/batch-10` count tags (`AN`/`AC`/`AC_Hom`/`AC_Het`/
+     `AC_Hemi`/`AF`/`MAF`/`NS` + `-t`/`-S`, `fill-tags.{out,2,3,4}.out`);
+     `progress/batch-11` `HWE`/`ExcHet` (`calc_hwe`), `F_MISSING`, the
+     `all`/default set, `-d` (`fill-tags-hemi.{1,2}.out`,
+     `fill-tags-hwe.out`). Still to port: `END`/`TYPE`, `FORMAT/VAF`/
+     `VAF1` values, and the `TAG:Num=EXPR` function engine
+     (`sum`/`ssum`/`smpl_sum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/
+     `phred`/`int`/`float`) — `fill-tags.{func.1,5}.out`,
+     `fill-tags-func.out`, `fill-tags-AN0.out`, `fill-tags-VAF.out`,
+     `fill-tags-AD.{1..5}.out`, `fmissing.*.out`, `fisher.*.out`.
   4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
      `test/trio-dnm3/test.sh` fixture). **`+vrfs`** (mpileup/BAM —
      `#include mpileup2/mpileup.h`, blocked on the mpileup engine).
@@ -1013,7 +1025,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 38 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (count-tags slice) |
+| `plugin` | registry + 38 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (count + HWE/ExcHet/F_MISSING/all/-d slice) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -1970,7 +1982,7 @@ Current local slice:
 
 Grouped roughly by complexity / shared dependencies:
 
-- [ ] **Tag fixers** — `+fill-AN-AC`, `+fill-tags` (45k — heaviest of this group; **count-tags slice done**: `AN/AC/AC_Hom/AC_Het/AC_Hemi/AF/MAF/NS` + `-t`/`-S`, `fill-tags.{out,2,3,4}.out` pass; HWE/ExcHet/VAF/`TAG:Num=EXPR` engine/`all`/`-d` remain), `+missing2ref`, `+tag2tag`, `+setGT`, `+add-variantkey`, `+variantkey-hex`, `+allele-length`, `+impute-info`, `+counts`, `+dosage`, `+frameshifts`, `+remove-overlaps`, `+fill-from-fasta`.
+- [ ] **Tag fixers** — `+fill-AN-AC`, `+fill-tags` (45k — heaviest of this group; **count + HWE/ExcHet/F_MISSING/all/-d slice done**: `fill-tags.{out,2,3,4}.out` + `fill-tags-hemi.{1,2}.out` + `fill-tags-hwe.out` pass; `END`/`TYPE`, `FORMAT/VAF`/`VAF1` values, and the `TAG:Num=EXPR` function engine remain), `+missing2ref`, `+tag2tag`, `+setGT`, `+add-variantkey`, `+variantkey-hex`, `+allele-length`, `+impute-info`, `+counts`, `+dosage`, `+frameshifts`, `+remove-overlaps`, `+fill-from-fasta`.
 - [ ] **Reference fixers** — `+fixref`, `+fixploidy`.
 - [ ] **Subset/split** — `+split` (30k), `+scatter`, `+GTsubset`, `+GTisec`, `+isecGT`.
 - [ ] **Stats / reports** — `+smpl-stats`, `+indel-stats`, `+trio-stats`, `+variant-distance`, `+ad-bias`, `+af-dist`, `+check-ploidy`, `+check-sparsity`, `+vcf2table` (46k), `+vrfs` (38k).
