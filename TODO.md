@@ -201,6 +201,18 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/gvcfz` added the `+gvcfz` plugin (35th) — gVCF
+  block compression by `-g` group expressions, evaluated through the
+  shared filter engine (same wiring as `+split`), with `-a` allele
+  trimming (incl. upstream's multi-base-REF→ref-block collapse), block
+  min/extend/flush (`INFO/END`, `FORMAT/DP|GQ|RGQ|PL`), and non-`PASS`
+  FILTER stamping. Also fixed `query %END` to fall back to
+  `POS+len(REF)-1` when `INFO/END` is absent (bcftools semantics).
+  Byte-for-byte through `bcftools query` against `gvcfz.1.out` and
+  `gvcfz.2.1.out`; 5 unit + 2 integration tests. The multi-group
+  `gvcfz.2.out` (`-g 'PASS:GQ>10; FLT:-'`) is deferred — 3 RGQ cells
+  differ in the `FLT:-` catch-all path for `-a`-collapsed multiallelic
+  block representatives (a `gq_key` / `bcf_update_alleles` interaction).
 - 2026-05-18: `progress/filter-gt-subscript` taught the shared filter
   engine that a subscripted FORMAT/GT (`Expr::Index` over a GT
   identifier, e.g. `GT[0]`, `FMT/GT[*]`) carries the same GT-class
@@ -826,7 +838,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 33 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table` |
+| `plugin` | registry + 35 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -837,8 +849,8 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-34 of 41 plugin record-processing implementations done (see Wave F);
-11 remain.
+35 of 41 plugin record-processing implementations done (see Wave F);
+10 remain.
 
 Current whole-project estimate:
 
@@ -1186,7 +1198,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 7 remaining unimplemented plugins and many still-open plugin
+dump). The 6 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1666,6 +1678,26 @@ Current local slice:
   path; genome-build hyperlink generation; and full `vcf_format` float
   round-trip for arbitrary INFO/FORMAT values.
 
+- [x] `+gvcfz` (`crates/bcftools-rs/src/commands/plugins/gvcfz.rs`):
+  text port of `gvcfz.c`. Compresses a gVCF by resizing reference
+  blocks per `-g 'FLT:expr; ...'` groups; each record is assigned to the
+  first group whose expression matches, evaluated through the shared
+  filter engine (the `+split` wiring: `eval_expression_with` +
+  `record_lookup`). `-a` allele trimming mirrors upstream including the
+  multi-base-REF → single-base ref-block collapse after
+  `bcf_trim_alleles`. Block state tracks max `INFO/END`, min
+  `FORMAT/DP`, min `GQ`/`RGQ` (`gq_key` fixed at block start), and
+  element-wise min `FORMAT/PL`; non-`PASS` groups stamp their FILTER.
+  Also fixed `bcftools query %END` to fall back to `POS+len(REF)-1`
+  (1-based variant end) when `INFO/END` is absent, matching upstream.
+  Byte-for-byte through `bcftools query` against `gvcfz.1.out`
+  (`-g 'PASS:GT!="alt"' -a`) and `gvcfz.2.1.out`; 5 unit + 2 integration
+  tests in `crates/bcftools-rs/tests/plugin_gvcfz.rs`. Remaining:
+  `gvcfz.2.out` (`-g 'PASS:GQ>10; FLT:-' -a`) — 3 RGQ cells differ in
+  the `FLT:-` catch-all path for `-a`-collapsed multiallelic block
+  representatives (a `gq_key`/`bcf_update_alleles` interaction); plus
+  BCF output, `-W` indexing, and output threading.
+
 Grouped roughly by complexity / shared dependencies:
 
 - [ ] **Tag fixers** — `+fill-AN-AC`, `+fill-tags` (45k — heaviest of this group), `+missing2ref`, `+tag2tag`, `+setGT`, `+add-variantkey`, `+variantkey-hex`, `+allele-length`, `+impute-info`, `+counts`, `+dosage`, `+frameshifts`, `+remove-overlaps`, `+fill-from-fasta`.
@@ -1675,7 +1707,7 @@ Grouped roughly by complexity / shared dependencies:
 - [ ] **VEP-aware** — `+split-vep` (74k — the heaviest plugin by far).
 - [ ] **Trio / pedigree** — `+mendelian2` (37k), `+trio-dnm3` (105k — the single largest plugin; has its own `test/trio-dnm3/test.sh` fixture), `+trio-switch-rate`, `+parental-origin`.
 - [ ] **Sample inference** — `+guess-ploidy`, `+contrast`.
-- [ ] **Misc** — `+color-chrs` (curses-style colored output), `+gvcfz`, `+prune`.
+- [ ] **Misc** — `+color-chrs` (curses-style colored output), `+prune`.
 
 For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plugin`, with named cases like `test_plugin_vrfs`, `test_plugin_split`, `test_plugin_scatter`, `test_trio_dnm3`) plus a Rust integration test.
 

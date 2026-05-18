@@ -2791,6 +2791,17 @@ fn render_token(token: &str, record: &TextRecord<'_>, sample_index: Option<usize
     {
         return record.format_value(i, token);
     }
+    if token == "END" {
+        // bcftools `%END` == INFO/END when present, else the variant end
+        // `POS + len(REF) - 1` (1-based inclusive; == POS for a 1-base REF).
+        let info_end = record.info("END");
+        if info_end != "." {
+            return info_end;
+        }
+        let pos = record.core("POS").parse::<i64>().unwrap_or(0);
+        let reflen = record.core("REF").chars().count().max(1) as i64;
+        return (pos + reflen - 1).to_string();
+    }
     match token {
         "CHROM" | "POS" | "ID" | "REF" | "ALT" | "QUAL" | "FILTER" | "INFO" | "FORMAT"
         | "N_ALT" | "N_SAMPLES" | "TYPE" | "LINE" => record.core(token),
