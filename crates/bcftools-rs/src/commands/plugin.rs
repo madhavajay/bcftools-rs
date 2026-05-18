@@ -433,6 +433,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut gvcfz_group: Option<String> = None;
     let mut gvcfz_trim_alts = false;
     let mut gvcfz_filter: Option<(bool, String)> = None;
+    // setGT options.
+    let mut setgt_target: Option<String> = None;
+    let mut setgt_new: Option<String> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -595,6 +598,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     .to_string_lossy()
                     .into_owned();
                 gvcfz_filter = Some((exclude, expr));
+            }
+            // setGT: -t/--target-gt TYPE, -n/--new-gt TYPE.
+            "-t" | "--target-gt" if plugin_name.as_deref() == Some("setGT") => {
+                setgt_target = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-n" | "--new-gt" if plugin_name.as_deref() == Some("setGT") => {
+                setgt_new = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--target-gt=") && plugin_name.as_deref() == Some("setGT") => {
+                setgt_target = Some(raw["--target-gt=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--new-gt=") && plugin_name.as_deref() == Some("setGT") => {
+                setgt_new = Some(raw["--new-gt=".len()..].to_owned());
             }
             "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
                 frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1608,6 +1624,29 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "setGT" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(target) = setgt_target.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected -t option",
+            ));
+        };
+        let Some(new_gt) = setgt_new.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected -n option",
+            ));
+        };
+        let (vcf, nchanged) = crate::commands::plugins::setgt::run(
+            Path::new(&input),
+            crate::commands::plugins::setgt::Options { target, new_gt },
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        writeln!(io::stderr().lock(), "Filled {nchanged} alleles")?;
         return Ok(ExitCode::SUCCESS);
     }
 
