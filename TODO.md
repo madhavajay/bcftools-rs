@@ -748,7 +748,7 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`b4f4897`) (330 lib unit tests plus
+  latest merged commit on `main` (`9f0bcfb`) (335 lib unit tests plus
   per-command and per-plugin integration suites).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
@@ -797,6 +797,15 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+vcf2table` first slice, PR #223 landed; no open PR):
+  approximately 50-53% complete toward the full stated goal. Movement
+  since the prior estimate is the `+vcf2table` first slice (filter-free
+  ASCII box-table render), byte-for-byte against `vcf2table.1.out` via
+  the `test_vcf_plugin` harness shape, 5 unit + 1 integration test. The
+  estimate band is unchanged: the remaining weight is dominated by the
+  unfinished large subcommands and the bcftools filter engine, and
+  `+vcf2table`'s heavier `vcf2table.2.out` path (VEP/CSQ + BCSQ) is still
+  open. 34 of 41 plugins done.
 - 2026-05-18 (post `+impute-info`, PR #221 landed; no open PR):
   approximately 50-53% complete toward the full stated goal. Movement
   since the prior estimate is `+impute-info` (filter-free IMPUTE2
