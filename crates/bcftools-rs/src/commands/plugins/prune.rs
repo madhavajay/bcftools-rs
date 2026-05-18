@@ -4,9 +4,11 @@
 //! Keeps at most `-n N` sites per `-w` window, choosing which to drop by
 //! `-N` mode: `1st` (keep the earliest), `maxAF` (drop the lowest allele
 //! frequency, `--AF-tag` or computed). Faithful port of the `vcfbuf`
-//! window flush condition and `_prune_sites` removal order. The LD/`-a`/`-m`
-//! annotation modes, `-N rand` (needs `hts_drand48` parity), and `-i`/`-e`
-//! filtering need infrastructure tracked in `TODO.md`.
+//! window flush condition and `_prune_sites` removal order. Common
+//! `-i`/`-e` record filtering (applied before windowing, as upstream
+//! does) routes through the shared filter engine. The LD/`-a`/`-m`
+//! `count` cluster modes and `-N rand` (needs `hts_drand48` parity)
+//! remain tracked in `TODO.md`.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -16,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,12 +76,65 @@ pub fn run(
     max_sites: i32,
     mode: Mode,
     af_tag: Option<&str>,
+    filter: Option<(bool, &str)>,
 ) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    Ok(process(&text, win, max_sites, mode, af_tag))
+    Ok(process(&text, win, max_sites, mode, af_tag, filter))
 }
 
-fn process(text: &str, win: i64, max_sites: i32, mode: Mode, af_tag: Option<&str>) -> String {
+/// Upstream `+prune -i/-e` discards non-matching records *before* the
+/// windowed pruning. Record-level eval through the shared filter engine
+/// (per-sample `EvalContext` + `record_lookup`, the `+split` wiring).
+fn record_passes(line: &str, exclude: bool, expr: &str) -> bool {
+    let fields: Vec<String> = line.split('\t').map(str::to_owned).collect();
+    if fields.len() < 8 {
+        return true;
+    }
+    let context = if fields.len() > 9 {
+        let keys: Vec<&str> = fields[8].split(':').collect();
+        fields[9..].iter().fold(EvalContext::new(), |c, s| {
+            let vals: Vec<&str> = s.split(':').collect();
+            c.with_sample(
+                keys.iter()
+                    .enumerate()
+                    .map(|(i, k)| {
+                        let raw = vals.get(i).copied().unwrap_or(".");
+                        let v = if k.eq_ignore_ascii_case("GT") {
+                            FilterValue::String(raw.to_owned())
+                        } else if raw == "." || raw.is_empty() {
+                            FilterValue::Missing
+                        } else if let Ok(n) = raw.parse::<f64>() {
+                            FilterValue::Number(n)
+                        } else {
+                            FilterValue::String(raw.to_owned())
+                        };
+                        ((*k).to_owned(), v)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+    } else {
+        EvalContext::new()
+    };
+    let matched = bcffilter::eval_expression_with(expr, &context, |name, si| {
+        if si.is_some() {
+            return None;
+        }
+        crate::commands::filter::record_lookup(name, &fields)
+    })
+    .map(|v| v.truthy())
+    .unwrap_or(false);
+    if exclude { !matched } else { matched }
+}
+
+fn process(
+    text: &str,
+    win: i64,
+    max_sites: i32,
+    mode: Mode,
+    af_tag: Option<&str>,
+    filter: Option<(bool, &str)>,
+) -> String {
     let lines: Vec<&str> = text.lines().collect();
 
     let mut out = String::with_capacity(text.len());
@@ -97,6 +153,11 @@ fn process(text: &str, win: i64, max_sites: i32, mode: Mode, af_tag: Option<&str
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() < 8 {
             continue;
+        }
+        if let Some((exclude, expr)) = filter
+            && !record_passes(line, exclude, expr)
+        {
+            continue; // upstream discards non-matching sites pre-window
         }
         let Ok(pos) = f[1].parse::<i64>() else {
             continue;
@@ -886,13 +947,13 @@ mod tests {
 
     #[test]
     fn first_mode_keeps_earliest() {
-        let out = process(VCF, -2, 1, Mode::First, None);
+        let out = process(VCF, -2, 1, Mode::First, None, None);
         assert_eq!(positions(&out), vec!["101", "103", "105", "107"]);
     }
 
     #[test]
     fn maxaf_mode_drops_lowest_af() {
-        let out = process(VCF, -2, 1, Mode::MaxAf, Some("AF"));
+        let out = process(VCF, -2, 1, Mode::MaxAf, Some("AF"), None);
         assert_eq!(positions(&out), vec!["101", "104", "105", "107"]);
     }
 }

@@ -201,6 +201,12 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-1` (batched, ~1 PR/hr per user request):
+  (a) un-deferred `+fill-from-fasta aa.out` (already passing+tested —
+  stale note); (b) added `+prune -i`/`-e` common record filtering
+  (applied before windowing via the shared engine; also fixed the
+  broad plugin `-i/-e` arm that was silently swallowing prune's),
+  byte-for-byte against `prune.1.5.out`.
 - 2026-05-18: `progress/setgt-custom` added `+setGT` `-n M`/`pM`,
   `-n m`/`pm` (major/minor allele from FMT/GT allele counts, ploidy
   preserved) and `-n c:GT` custom specs (literal / `m` / `M` alleles,
@@ -702,7 +708,8 @@ Latest landed progress:
 - 2026-05-16: PR #65 (`progress/fill-from-fasta`, merge commit
   `c4cc5cd`) landed `+fill-from-fasta` (`-c REF` modes) — REF fill
   from a FASTA reference, byte-for-byte against `ref.out` / `aa.2.out`
-  (the `-i` `aa.out` row deferred to the filter engine).
+  (the `-c AA -h -i 'TYPE="snp"'` `aa.out` row also passes — it was
+  later un-deferred once the shared filter engine landed `TYPE`).
 - 2026-05-16: PR #64 (`progress/gtisec`, merge commit `68cc665`)
   landed `+GTisec` — genotype-intersection subset counts in
   banker's-sequence order, byte-for-byte against
@@ -858,10 +865,13 @@ Latest landed progress:
   5. **Deferred rows on landed plugins**: `gvcfz.2.out`
      (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     (`+setGT` is now fully complete — all `setGT*.out` fixtures pass),
-     `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
-     `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
-     'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
+     (`+setGT` fully complete; `+fill-from-fasta aa.out` and the
+     `+split.1.4` `GT[0]` subscript also already done — were stale
+     deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes),
+     `+remove-overlaps -m 'min(QUAL)'` (the `-m`/`-M` MARK_EXPR
+     machinery), `+prune` `-a count`/`-m count=` cluster mode
+     (`prune.3.*`), `+smpl-stats`/`+indel-stats -i/-e` (verify against
+     current code before assuming still blocked).
   6. **Unstarted subcommands** (each a major port): `call`
      (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
      `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
@@ -1512,10 +1522,12 @@ Current local slice:
   htslib-style `##FILTER=<ID=PASS>` header injection. Byte-for-byte parity
   with `prune.1.1.out` (`-a r2,LD,HD`), `prune.1.2.out` (`-m 0.5 -f
   MaxR2`), `prune.1.3.out` (`-m 0.5`), `prune.1.4.out` (maxAF
-  `--AF-tag`), `prune.1.6.out` (1st), and `prune.2.1.out` (20-sample).
-  6 integration tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 4
-  unit tests. Remaining: `-a count`/`-m count=` cluster mode, `-N rand`
-  (`hts_drand48` parity), and `-i`/`-e` filtering (filter engine).
+  `--AF-tag`), `prune.1.5.out` (`-i 'GT="alt"'` discards REF-only
+  sites before windowing — common filter through the shared engine),
+  `prune.1.6.out` (1st), and `prune.2.1.out` (20-sample). 7 integration
+  tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 4 unit tests.
+  Remaining: `-a count`/`-m count=` cluster mode (`prune.3.*`) and
+  `-N rand` (`hts_drand48` parity).
 - [x] `+dosage` (`crates/bcftools-rs/src/commands/plugins/dosage.rs`):
   port of `dosage.c`. `-t PL,GL,GT` ordered handlers (first applicable
   wins, header-gated for PL/GL); PL/GL dosages from diploid GL-ordered
