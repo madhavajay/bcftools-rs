@@ -1,18 +1,19 @@
 //! `bcftools +fill-tags` (upstream `bcftools/plugins/fill-tags.c`).
 //!
-//! First slice: the genotype-derived INFO count tags
-//! `AN`/`AC`/`AC_Hom`/`AC_Het`/`AC_Hemi`/`AF`/`MAF`/`NS`, the `-t LIST`
-//! tag selection, and `-S`/`--samples-file` population grouping
-//! (per-group `<TAG>_<pop>` plus the always-present global tag). The
-//! counting mirrors upstream `process_fmt`'s per-sample classification
-//! (hom/het/hemi/half-missing), and tags are written in the upstream
-//! fixed order (NS, AN, AF, MAF, AC, AC_Het, AC_Hom, AC_Hemi),
-//! replacing an existing INFO key in place or appending otherwise.
+//! Implemented: the genotype-derived INFO tags
+//! `F_MISSING`/`NS`/`AN`/`AF`/`MAF`/`AC`/`AC_Het`/`AC_Hom`/`AC_Hemi`/
+//! `HWE`/`ExcHet`, the `-t LIST` selection, the `all` / default
+//! (no-`-t`) set, `-S`/`--samples-file` population grouping (per-group
+//! `<TAG>_<pop>` plus the always-present global tag), and
+//! `-d`/`--drop-missing`. Counting mirrors upstream `process_fmt`'s
+//! per-sample hom/het/hemi/half-missing classification; `HWE`/`ExcHet`
+//! port `calc_hwe` (Wigginton 2005). Tags are written in the upstream
+//! fixed order and floats use C `%g`/6 over the f32-stored value.
 //!
-//! Deferred (tracked in TODO.md): `HWE`/`ExcHet` (kf functions),
-//! `END`/`TYPE`/`F_MISSING`/`VAF`/`VAF1`, the `TAG:Num=EXPR` function
-//! engine (`sum`/`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/…), the
-//! `all` tag set, and `-d`/`--drop-missing`.
+//! Deferred (tracked in TODO.md): `END`/`TYPE`, `FORMAT/VAF`/`VAF1`
+//! values (their `##FORMAT` headers are emitted under `all`), and the
+//! `TAG:Num=EXPR` function engine
+//! (`sum`/`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/`phred`/…).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -27,6 +28,7 @@ use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tag {
+    FMissing,
     Ns,
     An,
     Af,
@@ -35,10 +37,14 @@ enum Tag {
     AcHet,
     AcHom,
     AcHemi,
+    Hwe,
+    ExcHet,
 }
 
-/// `-t` tags in the fixed upstream `process_fmt` write order.
+/// Fixed upstream `process_fmt` write order: the `F_MISSING` func is
+/// emitted first, then the SET_ block, then `HWE`/`ExcHet`.
 const WRITE_ORDER: &[Tag] = &[
+    Tag::FMissing,
     Tag::Ns,
     Tag::An,
     Tag::Af,
@@ -47,6 +53,26 @@ const WRITE_ORDER: &[Tag] = &[
     Tag::AcHet,
     Tag::AcHom,
     Tag::AcHemi,
+    Tag::Hwe,
+    Tag::ExcHet,
+];
+
+/// The `all` / default (no `-t`) tag set in this slice. Upstream `all`
+/// is `~(SET_END|SET_TYPE)` plus the `F_MISSING` func; `VAF`/`VAF1` are
+/// FORMAT tags that only emit with `FORMAT/AD` (deferred — a no-op for
+/// the GT-only fixtures this covers).
+const ALL_TAGS: &[Tag] = &[
+    Tag::FMissing,
+    Tag::Ns,
+    Tag::An,
+    Tag::Af,
+    Tag::Maf,
+    Tag::Ac,
+    Tag::AcHet,
+    Tag::AcHom,
+    Tag::AcHemi,
+    Tag::Hwe,
+    Tag::ExcHet,
 ];
 
 fn parse_tag(name: &str) -> Result<Tag, String> {
@@ -60,9 +86,12 @@ fn parse_tag(name: &str) -> Result<Tag, String> {
         "AC_HET" => Ok(Tag::AcHet),
         "AC_HOM" => Ok(Tag::AcHom),
         "AC_HEMI" => Ok(Tag::AcHemi),
+        "HWE" => Ok(Tag::Hwe),
+        "EXCHET" => Ok(Tag::ExcHet),
+        "F_MISSING" => Ok(Tag::FMissing),
         _ => Err(format!(
             "the tag \"{name}\" is not yet ported (this slice supports \
-             AN,AC,AC_Hom,AC_Het,AC_Hemi,AF,MAF,NS)"
+             AN,AC,AC_Hom,AC_Het,AC_Hemi,AF,MAF,NS,HWE,ExcHet,F_MISSING,all)"
         )),
     }
 }
@@ -105,6 +134,18 @@ impl Tag {
                 "MAF",
                 "##INFO=<ID=MAF{S},Number=1,Type=Float,Description=\"Frequency of the second most common allele{IN}\">",
             ),
+            Tag::FMissing => (
+                "F_MISSING",
+                "##INFO=<ID=F_MISSING{S},Number=1,Type=Float,Description=\"Added by +fill-tags expression F_MISSING:1=F_MISSING\">",
+            ),
+            Tag::Hwe => (
+                "HWE",
+                "##INFO=<ID=HWE{S},Number=A,Type=Float,Description=\"HWE test{IN} (PMID:15789306); 1=good, 0=bad\">",
+            ),
+            Tag::ExcHet => (
+                "ExcHet",
+                "##INFO=<ID=ExcHet{S},Number=A,Type=Float,Description=\"Test excess heterozygosity{IN}; 1=good, 0=bad\">",
+            ),
         }
     }
     fn base_id(self) -> &'static str {
@@ -112,8 +153,10 @@ impl Tag {
     }
 }
 
-/// `hdr_append` order (upstream lines 590-598).
+/// `hdr_append` order: the `F_MISSING` func header is appended first,
+/// then upstream lines 590-598, then `HWE`, then `ExcHet`.
 const HDR_ORDER: &[Tag] = &[
+    Tag::FMissing,
     Tag::An,
     Tag::Ac,
     Tag::Ns,
@@ -122,6 +165,8 @@ const HDR_ORDER: &[Tag] = &[
     Tag::AcHemi,
     Tag::Af,
     Tag::Maf,
+    Tag::Hwe,
+    Tag::ExcHet,
 ];
 
 #[derive(Default, Clone)]
@@ -140,15 +185,32 @@ struct Pop {
 }
 
 pub struct Options<'a> {
-    /// `-t` comma-separated tag list (required in this slice).
+    /// `-t` comma-separated tag list; `"all"` (the default when `-t` is
+    /// omitted) expands to [`ALL_TAGS`].
     pub tags: &'a str,
     /// `-S`/`--samples-file` path (`sample<ws>pop1,pop2` per line).
     pub samples_file: Option<&'a Path>,
+    /// `-d`/`--drop-missing`: count half-missing `./1` genotypes via
+    /// `nac` instead of as hemizygous.
+    pub drop_missing: bool,
 }
 
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let mut want: Vec<Tag> = Vec::new();
+    // Upstream `all` also enables FORMAT/VAF+VAF1: their ##FORMAT header
+    // lines are declared even though values only appear with FORMAT/AD
+    // (VAF computation itself deferred).
+    let mut vaf_hdr = false;
     for t in opts.tags.split(',').filter(|t| !t.is_empty()) {
+        if t.eq_ignore_ascii_case("all") {
+            for &a in ALL_TAGS {
+                if !want.contains(&a) {
+                    want.push(a);
+                }
+            }
+            vaf_hdr = true;
+            continue;
+        }
         let tag = parse_tag(t)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("fill-tags: {e}")))?;
         if !want.contains(&tag) {
@@ -158,7 +220,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     if want.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "fill-tags: this slice requires -t with a supported tag list",
+            "fill-tags: empty tag list",
         ));
     }
 
@@ -210,6 +272,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let mut out = String::with_capacity(text.len() + 4096);
     let mut sample_to_pops: Vec<Vec<usize>> = Vec::new();
     let mut gt_warned = false;
+    let mut hwe_buf: Vec<f64> = Vec::new();
     // bcftools inserts a PASS FILTER header (after ##fileformat) when
     // the input lacks one.
     let has_pass = text.contains("##FILTER=<ID=PASS,");
@@ -248,6 +311,14 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
                 }
             }
             out.push_str(&hdr);
+            if vaf_hdr && !out.contains("##FORMAT=<ID=VAF,") {
+                out.push_str(
+                    "##FORMAT=<ID=VAF,Number=A,Type=Float,Description=\"The fraction of reads with alternate allele (nALT/nSumAll)\">\n",
+                );
+                out.push_str(
+                    "##FORMAT=<ID=VAF1,Number=1,Type=Float,Description=\"The fraction of reads with alternate alleles (nSumALT/nSumAll)\">\n",
+                );
+            }
             // Map each sample column to its pop indices.
             let samples: Vec<&str> = cols.split('\t').skip(9).collect();
             sample_to_pops = samples
@@ -277,6 +348,8 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             &pops,
             &sample_to_pops,
             &want,
+            opts.drop_missing,
+            &mut hwe_buf,
             &mut gt_warned,
         ));
         out.push('\n');
@@ -296,11 +369,14 @@ fn collect_declared_info_ids(header: &str) -> Vec<String> {
     ids
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_record(
     line: &str,
     pops: &[Pop],
     sample_to_pops: &[Vec<usize>],
     want: &[Tag],
+    drop_missing: bool,
+    hwe_buf: &mut Vec<f64>,
     gt_warned: &mut bool,
 ) -> String {
     let mut f: Vec<&str> = line.split('\t').collect();
@@ -328,15 +404,22 @@ fn process_record(
         .map(|_| vec![Counts::default(); n_allele])
         .collect();
     let mut ns: Vec<i64> = vec![0; pops.len()];
+    // F_MISSING bookkeeping: samples mapped to a pop, and those whose
+    // GT contains any missing allele (`GT="mis"`).
+    let mut npop_smpl: Vec<i64> = vec![0; pops.len()];
+    let mut nmiss: Vec<i64> = vec![0; pops.len()];
 
     for (si, sample) in f[9..].iter().enumerate() {
         let gt = sample.split(':').nth(gt_idx).unwrap_or(".");
+        let smpl_pops = sample_to_pops.get(si).map(Vec::as_slice).unwrap_or(&[]);
         let mut distinct: Vec<usize> = Vec::new();
         let mut nals = 0usize;
         let mut islots = 0usize;
+        let mut any_missing_allele = false;
         for tok in gt.split(['/', '|']) {
             islots += 1;
             if tok == "." || tok.is_empty() {
+                any_missing_allele = true;
                 continue; // missing allele
             }
             let Ok(idx) = tok.parse::<usize>() else {
@@ -350,16 +433,31 @@ fn process_record(
                 distinct.push(idx);
             }
         }
+        for &pi in smpl_pops {
+            npop_smpl[pi] += 1;
+            if any_missing_allele {
+                nmiss[pi] += 1;
+            }
+        }
         if nals == 0 {
             continue; // missing genotype
         }
         let is_hom = distinct.len() == 1;
-        // Half-missing (no `-d`) or a single-allele genotype is
-        // hemizygous; `is_half` is only ever set under `-d` (deferred).
-        let is_half = false;
-        let is_hemi = nals != islots || nals == 1;
+        // Upstream classification (BRANCH_INT): a partially-missing GT is
+        // hemizygous, or — under `-d` — counted via `nac` (`is_half`);
+        // a single-allele genotype is hemizygous.
+        let (is_half, is_hemi) = if nals != islots {
+            if drop_missing {
+                (true, false)
+            } else {
+                (false, true)
+            }
+        } else if nals == 1 {
+            (false, true)
+        } else {
+            (false, false)
+        };
 
-        let smpl_pops = sample_to_pops.get(si).map(Vec::as_slice).unwrap_or(&[]);
         for &pi in smpl_pops {
             for &a in &distinct {
                 let c = &mut counts[pi][a];
@@ -387,6 +485,44 @@ fn process_record(
             let c = &counts[pi];
             let total = |a: usize| c[a].nhet + c[a].nhom + c[a].nhemi + c[a].nac;
             match tag {
+                Tag::FMissing => {
+                    let denom = npop_smpl[pi];
+                    let v = if denom == 0 {
+                        0.0
+                    } else {
+                        nmiss[pi] as f64 / denom as f64
+                    };
+                    set_info(&mut info, &format!("F_MISSING{}", p.suffix), &fmt_float(v));
+                }
+                Tag::Hwe | Tag::ExcHet => {
+                    let key = format!(
+                        "{}{}",
+                        if tag == Tag::Hwe { "HWE" } else { "ExcHet" },
+                        p.suffix
+                    );
+                    if n_allele <= 1 {
+                        del_info(&mut info, &key);
+                        continue;
+                    }
+                    let mut nref_tot = c[0].nhom;
+                    for ci in c.iter().take(n_allele) {
+                        nref_tot += ci.nhet;
+                    }
+                    let vals: Vec<String> = (1..n_allele)
+                        .map(|j| {
+                            let nref = nref_tot - c[j].nhet;
+                            let nalt = c[j].nhet + c[j].nhom;
+                            let nhet = c[j].nhet;
+                            let (hwe, exc) = if nref > 0 && nalt > 0 {
+                                calc_hwe(nref, nalt, nhet, hwe_buf)
+                            } else {
+                                (1.0, 1.0)
+                            };
+                            fmt_float(if tag == Tag::Hwe { hwe } else { exc })
+                        })
+                        .collect();
+                    set_info(&mut info, &key, &vals.join(","));
+                }
                 Tag::Ns => {
                     set_info(&mut info, &format!("NS{}", p.suffix), &ns[pi].to_string());
                 }
@@ -487,15 +623,117 @@ fn process_record(
     f.join("\t")
 }
 
-/// bcftools float printing: `%.6f` with trailing zeros (and a lone
-/// trailing `.`) trimmed.
+/// Wigginton 2005 (PMID:15789306) HWE exact test, ported from upstream
+/// `calc_hwe`. Returns `(hwe, exc_het)`. `nref`/`nalt` are allele counts
+/// (`nalt = nhet + nhom`, `nhom` already doubled per upstream `counts`).
+fn calc_hwe(nref: i64, nalt: i64, nhet: i64, probs: &mut Vec<f64>) -> (f64, f64) {
+    let ngt = (nref + nalt) / 2;
+    let nrare = nref.min(nalt);
+    // Upstream asserts these; on violation fall back to the neutral 1.0
+    // rather than abort.
+    if (nrare & 1) ^ (nhet & 1) != 0 || nrare < nhet || (nref + nalt) & 1 != 0 {
+        return (1.0, 1.0);
+    }
+    let nrare_us = nrare as usize;
+    probs.clear();
+    probs.resize(nrare_us + 1, 0.0);
+
+    let mut mid = ((nrare as f64) * ((nref + nalt - nrare) as f64) / ((nref + nalt) as f64)) as i64;
+    if (nrare & 1) ^ (mid & 1) != 0 {
+        mid += 1;
+    }
+
+    let mut hom_r = (nrare - mid) / 2;
+    let mut hom_c = ngt - mid - hom_r;
+    let mut sum = 1.0;
+    probs[mid as usize] = 1.0;
+
+    let mut het = mid;
+    while het > 1 {
+        probs[(het - 2) as usize] = probs[het as usize] * het as f64 * (het as f64 - 1.0)
+            / (4.0 * (hom_r as f64 + 1.0) * (hom_c as f64 + 1.0));
+        sum += probs[(het - 2) as usize];
+        hom_r += 1;
+        hom_c += 1;
+        het -= 2;
+    }
+
+    het = mid;
+    hom_r = (nrare - mid) / 2;
+    hom_c = ngt - mid - hom_r;
+    while het <= nrare - 2 {
+        probs[(het + 2) as usize] = probs[het as usize] * 4.0 * hom_r as f64 * hom_c as f64
+            / ((het as f64 + 2.0) * (het as f64 + 1.0));
+        sum += probs[(het + 2) as usize];
+        hom_r -= 1;
+        hom_c -= 1;
+        het += 2;
+    }
+
+    for p in probs.iter_mut() {
+        *p /= sum;
+    }
+
+    let p_nhet = probs[nhet as usize];
+    let mut exc = p_nhet;
+    for h in (nhet + 1)..=nrare {
+        exc += probs[h as usize];
+    }
+
+    let mut hwe = 0.0;
+    for h in 0..=nrare {
+        let ph = probs[h as usize];
+        if ph > p_nhet {
+            continue;
+        }
+        hwe += ph;
+    }
+    if hwe > 1.0 {
+        hwe = 1.0;
+    }
+    (hwe, exc)
+}
+
+/// bcftools float printing: C `printf("%g")` with the default
+/// precision 6 (6 significant digits; fixed unless exponent `< -4` or
+/// `>= 6`, trailing zeros trimmed; min-2-digit signed exponent).
 fn fmt_float(x: f64) -> String {
-    let s = format!("{x:.6}");
-    let t = s.trim_end_matches('0').trim_end_matches('.');
-    if t.is_empty() {
-        "0".to_owned()
-    } else {
+    // bcftools stores INFO/FORMAT floats as 32-bit; the printed text is
+    // the f32 value, so round through f32 before formatting.
+    let x = x as f32 as f64;
+    if x == 0.0 {
+        return "0".to_owned();
+    }
+    if !x.is_finite() {
+        return if x.is_nan() {
+            "nan".to_owned()
+        } else if x < 0.0 {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
+    }
+    const P: i32 = 6;
+    let exp = x.abs().log10().floor() as i32;
+    if !(-4..P).contains(&exp) {
+        // Scientific: P-1 mantissa decimals, C-style `e[+-]NN`.
+        let s = format!("{:.*e}", (P - 1) as usize, x);
+        let (mant, e) = s.split_once('e').unwrap();
+        let mant = if mant.contains('.') {
+            mant.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            mant
+        };
+        let ev: i32 = e.parse().unwrap_or(0);
+        return format!("{mant}e{}{:02}", if ev < 0 { '-' } else { '+' }, ev.abs());
+    }
+    let decimals = (P - 1 - exp).max(0) as usize;
+    let s = format!("{x:.decimals$}");
+    if s.contains('.') {
+        let t = s.trim_end_matches('0').trim_end_matches('.');
         t.to_owned()
+    } else {
+        s
     }
 }
 
@@ -606,6 +844,10 @@ mod tests {
     fn tag_parsing_aliases() {
         assert!(matches!(parse_tag("AC_Hom"), Ok(Tag::AcHom)));
         assert!(matches!(parse_tag("INFO/AF"), Ok(Tag::Af)));
-        assert!(parse_tag("HWE").is_err());
+        assert!(matches!(parse_tag("HWE"), Ok(Tag::Hwe)));
+        assert!(matches!(parse_tag("ExcHet"), Ok(Tag::ExcHet)));
+        assert!(matches!(parse_tag("F_MISSING"), Ok(Tag::FMissing)));
+        // The function engine / END / TYPE remain unported.
+        assert!(parse_tag("TYPE").is_err());
     }
 }
