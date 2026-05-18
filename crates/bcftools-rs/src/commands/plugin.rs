@@ -448,6 +448,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_duplicate = false;
     let mut sv_all_fields: Option<String> = None;
     let mut sv_header_level: u8 = 0;
+    let mut sv_filter: Option<(bool, String)> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -638,6 +639,37 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("setGT") => {
                 setgt_filter = Some((true, raw["--exclude=".len()..].to_owned()));
+            }
+            "-i" | "--include" | "-e" | "--exclude"
+                if plugin_name.as_deref() == Some("split-vep") =>
+            {
+                let exclude = raw == "-e" || raw == "--exclude";
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::other("split-vep requires an expression after -i/-e")
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+                sv_filter = Some((exclude, expr));
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_filter = Some((false, raw["--include=".len()..].to_owned()));
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_filter = Some((true, raw["--exclude=".len()..].to_owned()));
+            }
+            _ if raw.starts_with("-i")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_filter = Some((false, raw[2..].to_owned()));
+            }
+            _ if raw.starts_with("-e")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_filter = Some((true, raw[2..].to_owned()));
             }
             // split-vep: -c/--columns LIST, -s/--select TR:CSQ:PRN,
             // -a/--annotation TAG.
@@ -1773,6 +1805,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 duplicate: sv_duplicate,
                 all_fields: sv_all_fields.as_deref(),
                 header_level: sv_header_level,
+                filter: sv_filter
+                    .as_ref()
+                    .map(|(exclude, expr)| (expr.as_str(), *exclude)),
             },
         )?;
         write_plugin_output(out.as_bytes(), output.as_deref(), output_kind)?;

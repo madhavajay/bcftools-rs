@@ -287,6 +287,10 @@ pub struct Options<'a> {
     /// `-H`/`-HH` header rows: `1` → `#[1]POS\t[2]Allele…`, `2` →
     /// bare `#POS\tAllele…`, `0` → none.
     pub header_level: u8,
+    /// `-i`/`-e` filter expression (`exclude` = `-e`), applied to the
+    /// transiently annotated VCF by the query engine (so it also drives
+    /// per-sample `[%SAMPLE]` inclusion).
+    pub filter: Option<(&'a str, bool)>,
 }
 
 /// A parsed `-t` region: `chrom` with an inclusive 1-based `[lo, hi]`
@@ -407,6 +411,16 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             }
         }
     }
+    // CSQ subfields referenced by the `-i`/`-e` expression (bare
+    // identifiers) must also be annotated so the query filter can
+    // resolve them.
+    if let Some((expr, _)) = opts.filter {
+        for tok in expr_identifiers(expr) {
+            if fields.iter().any(|f| f == &tok) && !names.iter().any(|n| n == &tok) {
+                names.push(tok);
+            }
+        }
+    }
     let annots: Vec<(String, usize)> = names
         .iter()
         .map(|n| (n.clone(), field_idx(n).unwrap()))
@@ -474,13 +488,49 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         None => Ok(out),
         Some(fmt) => {
             let mut buf: Vec<u8> = Vec::with_capacity(out.len());
+            let filter_spec = opts.filter.map(|(expr, exclude)| {
+                crate::commands::query::FilterSpec::new(expr.to_owned(), exclude)
+            });
             let mut qopts = crate::commands::query::QueryFormatOptions::plain();
             qopts.header_level = opts.header_level;
+            qopts.filter_spec = filter_spec.as_ref();
             crate::commands::query::query_format_text(&out, &fmt, &qopts, &mut buf)?;
             String::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         }
     }
+}
+
+/// Maximal `[A-Za-z_][A-Za-z0-9_.]*` runs outside double-quoted
+/// strings — candidate CSQ subfield names in a `-i`/`-e` expression.
+fn expr_identifiers(expr: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    for c in expr.chars() {
+        if c == '"' {
+            in_str = !in_str;
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if in_str {
+            continue;
+        }
+        if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+            if cur.is_empty() && c.is_ascii_digit() {
+                continue;
+            }
+            cur.push(c);
+        } else if !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Upstream `expand_csq_expression`: replace a `%<tag>` token (not

@@ -62,6 +62,14 @@ pub(crate) struct FilterSpec {
     exclude: bool,
 }
 
+impl FilterSpec {
+    /// Build a `-i`/`-e` filter spec for in-process callers (e.g.
+    /// `+split-vep -f … -i/-e`).
+    pub(crate) fn new(raw: String, exclude: bool) -> Self {
+        FilterSpec { raw, exclude }
+    }
+}
+
 /// Subcommand entry point. `argv[0]` is `"query"`.
 pub fn main(argv: &[OsString]) -> ExitCode {
     match parse_args(argv) {
