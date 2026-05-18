@@ -290,9 +290,11 @@ fn plugin_shortcut_help_uses_registry() {
 
 #[test]
 fn plugin_known_name_without_implementation_errors() {
-    let (_out, err, code) = run(&["+fill-tags"]);
+    // `+fill-tags` is now implemented; use a still-unported registered
+    // plugin to exercise the "registered but not yet implemented" path.
+    let (_out, err, code) = run(&["+vrfs"]);
     assert_ne!(code, 0);
-    assert!(err.contains("plugin 'fill-tags' is registered but not yet implemented"));
+    assert!(err.contains("plugin 'vrfs' is registered but not yet implemented"));
 }
 
 #[test]

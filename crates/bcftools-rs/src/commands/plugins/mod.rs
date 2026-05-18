@@ -16,6 +16,7 @@ pub mod counts;
 pub mod dosage;
 pub mod fill_an_ac;
 pub mod fill_from_fasta;
+pub mod fill_tags;
 pub mod fixploidy;
 pub mod fixref;
 pub mod frameshifts;
