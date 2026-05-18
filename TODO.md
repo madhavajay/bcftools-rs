@@ -757,7 +757,7 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`9f0bcfb`) (335 lib unit tests plus
+  latest merged commit on `main` (`263b560`) (337 lib unit tests plus
   per-command and per-plugin integration suites).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
@@ -806,6 +806,16 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+vcf2table` VEP/CSQ+BCSQ slice, PR #225 landed; no
+  open PR): approximately 50-53% complete toward the full stated goal.
+  Movement since the prior estimate completes `+vcf2table` — the
+  `# VEP/CSQ` and `# BCSQ` tables plus `-x`/`--hide`, byte-for-byte
+  against both `vcf2table.1.out` and `vcf2table.2.out` via the
+  `test_vcf_plugin` harness shape (7 unit + 2 integration tests). The
+  estimate band is unchanged: the remaining weight is dominated by the
+  unfinished large subcommands and the bcftools filter engine; the 7
+  still-unimplemented plugins are all filter-engine / PED / mpileup / HMM
+  coupled. 34 of 41 plugins done (both `vcf2table` fixtures now pass).
 - 2026-05-18 (post `+vcf2table` first slice, PR #223 landed; no open PR):
   approximately 50-53% complete toward the full stated goal. Movement
   since the prior estimate is the `+vcf2table` first slice (filter-free
