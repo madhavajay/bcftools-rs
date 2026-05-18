@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-2` added `+remove-overlaps -m 'min(QUAL)'`
+  — the `vcfbuf` `MARK_EXPR` greedy (per connected overlap component,
+  mark the lowest-QUAL record and drop its edges until no overlaps
+  remain; mark-tag `##INFO` appended last) with scalar `--missing N`.
+  Byte-for-byte against `remove-overlaps.2.1.out` and
+  `remove-overlaps.3.1.out` (incl. `--missing 0`). `--missing DP`
+  heuristic deferred.
 - 2026-05-18: `progress/batch-1` (batched, ~1 PR/hr per user request):
   (a) un-deferred `+fill-from-fasta aa.out` (already passing+tested —
   stale note); (b) added `+prune -i`/`-e` common record filtering
@@ -867,11 +874,12 @@ Latest landed progress:
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
      (`+setGT` fully complete; `+fill-from-fasta aa.out` and the
      `+split.1.4` `GT[0]` subscript also already done — were stale
-     deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes),
-     `+remove-overlaps -m 'min(QUAL)'` (the `-m`/`-M` MARK_EXPR
-     machinery), `+prune` `-a count`/`-m count=` cluster mode
-     (`prune.3.*`), `+smpl-stats`/`+indel-stats -i/-e` (verify against
-     current code before assuming still blocked).
+     deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes;
+     `+remove-overlaps -m 'min(QUAL)'` done — `2.1.out`/`3.1.out`
+     pass), `+remove-overlaps --missing DP` heuristic
+     (`remove-overlaps.3.2.out`), `+prune` `-a count`/`-m count=`
+     cluster mode (`prune.3.*`), `+smpl-stats`/`+indel-stats -i/-e`
+     (verify against current code before assuming still blocked).
   6. **Unstarted subcommands** (each a major port): `call`
      (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
      `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
@@ -1447,12 +1455,18 @@ Current local slice:
   adjustment, `can_flush` drain) plus the `remove-overlaps.c` driver:
   `-m overlap`, `-m dup`, `-M TAG` (INFO flag injection with htslib-style
   `##FILTER=<ID=PASS>`/`##INFO` header normalization), `--reverse`, and
-  `-O t` plain `chr<TAB>pos` site list. VCF/VCF.gz/BCF and stdin input;
-  `-o`/`-O u|b|v|z` via `write_plugin_output`. Byte-for-byte parity with
-  all six `remove-overlaps.1.{1..6}.out` fixtures. 6 integration tests in
-  `crates/bcftools-rs/tests/plugin_remove_overlaps.rs` + 5 unit tests.
-  Remaining: `-m 'min(QUAL)'` expression mode, `--missing`, and `-i`/`-e`
-  filtering (all blocked on the bcftools filter engine port).
+  `-O t` plain `chr<TAB>pos` site list, **and `-m 'min(QUAL)'`** — the
+  `vcfbuf` `MARK_EXPR` greedy: per connected overlap component, mark the
+  lowest-QUAL record and drop its edges until no overlaps remain (the
+  mark-tag `##INFO` appended last per upstream `bcf_hdr_printf`),
+  including the scalar `--missing N` value. VCF/VCF.gz/BCF and stdin
+  input; `-o`/`-O u|b|v|z` via `write_plugin_output`. Byte-for-byte
+  parity with all six `remove-overlaps.1.{1..6}.out` fixtures plus
+  `remove-overlaps.2.1.out` and `remove-overlaps.3.1.out`
+  (`-m 'min(QUAL)' -M rmme`, incl. `--missing 0`). 7 integration tests
+  in `crates/bcftools-rs/tests/plugin_remove_overlaps.rs` + 5 unit
+  tests. Remaining: `--missing DP` (max-QUAL/DP heuristic;
+  `remove-overlaps.3.2.out`) and `-i`/`-e` record filtering.
 - [x] `+af-dist` (`crates/bcftools-rs/src/commands/plugins/af_dist.rs`):
   port of `af-dist.c` + the `bin.c` histogram (`bin_init`/`bin_get_idx`/
   `bin_get_value` for the `0..1` boundary case). Computes the HWE

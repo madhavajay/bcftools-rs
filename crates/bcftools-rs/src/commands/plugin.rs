@@ -1533,15 +1533,23 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "remove-overlaps" {
         use crate::commands::plugins::remove_overlaps::{self, Mark};
         let input = input.unwrap_or_else(|| "-".to_owned());
-        if let Some(m) = missing_expr.as_deref() {
-            // --missing only applies to the `min(QUAL)` expression mode,
-            // which needs the not-yet-ported filter engine.
-            let _ = m;
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "remove-overlaps --missing requires the min(QUAL) expression mode (filter engine not yet ported)",
-            ));
-        }
+        // `--missing`: scalar value used for missing QUAL in `min(QUAL)`.
+        // Default 0; the `DP` heuristic is not yet supported.
+        let missing_qual: f32 = match missing_expr.as_deref() {
+            None => 0.0,
+            Some(v) if v.eq_ignore_ascii_case("DP") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "remove-overlaps --missing DP (max-QUAL/DP heuristic) is not supported in this slice",
+                ));
+            }
+            Some(v) => v.parse::<f32>().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Could not parse --missing {v}"),
+                )
+            })?,
+        };
         let mode = Mark::parse(mark_expr.as_deref().unwrap_or("overlap"))
             .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
         let text_list = out_type_raw.as_deref().is_some_and(|o| o.starts_with('t'));
@@ -1551,6 +1559,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             mark_tag.as_deref(),
             reverse,
             text_list,
+            missing_qual,
         )?;
         if text_list {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), OutKind::VcfText)?;

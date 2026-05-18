@@ -8,10 +8,14 @@
 //! first exactly as upstream does, so output order and marking match
 //! byte-for-byte.
 //!
-//! Implemented modes: `-m overlap`, `-m dup`, `-M TAG`, `--reverse`, and
-//! `-O t` (plain `chr<TAB>pos` site list). The `-m 'min(QUAL)'` expression
-//! mode, `--missing`, and `-i`/`-e` filtering depend on the not-yet-ported
-//! bcftools filter engine and are tracked in `TODO.md`.
+//! Implemented modes: `-m overlap`, `-m dup`, `-m 'min(QUAL)'`,
+//! `-M TAG`, `--reverse`, `-O t` (plain `chr<TAB>pos` site list), and
+//! the scalar `--missing N` value for `min(QUAL)`. `-m 'min(QUAL)'`
+//! greedily marks the lowest-QUAL record in each connected overlap
+//! component until no overlaps remain (upstream `vcfbuf` `MARK_EXPR`),
+//! with the mark-tag `##INFO` appended last per `bcf_hdr_printf`. The
+//! `--missing DP` max-QUAL/DP heuristic and `-i`/`-e` filtering are
+//! tracked in `TODO.md`.
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
@@ -28,19 +32,25 @@ use crate::vcf_compat::normalize_vcf_text;
 pub enum Mark {
     Overlap,
     Dup,
+    /// `-m 'min(QUAL)'`: within each overlap cluster, mark the
+    /// lowest-QUAL records for removal until no overlaps remain
+    /// (upstream `vcfbuf` `MARK_EXPR`).
+    MinQual,
 }
 
 impl Mark {
-    /// Parses the `-m`/`--mark` value. `min(QUAL)` and other expressions are
-    /// not supported in this slice (they need the bcftools filter engine).
+    /// Parses the `-m`/`--mark` value.
     pub fn parse(expr: &str) -> Result<Mark, String> {
+        let e = expr.replace(' ', "");
         if expr.eq_ignore_ascii_case("overlap") {
             Ok(Mark::Overlap)
         } else if expr.eq_ignore_ascii_case("dup") {
             Ok(Mark::Dup)
+        } else if e.eq_ignore_ascii_case("min(QUAL)") {
+            Ok(Mark::MinQual)
         } else {
             Err(format!(
-                "remove-overlaps -m '{expr}' is not supported in this local slice (only 'overlap' and 'dup')"
+                "remove-overlaps -m '{expr}' is not supported in this local slice (only 'overlap', 'dup', 'min(QUAL)')"
             ))
         }
     }
@@ -55,6 +65,8 @@ struct Rec {
     rlen: i64,
     /// Minimum shared REF/ALT prefix across non-symbolic alleles.
     imin: i64,
+    /// QUAL (`None` when `.`); used by `-m 'min(QUAL)'`.
+    qual: Option<f32>,
 }
 
 fn common_prefix_len_ci(a: &[u8], b: &[u8]) -> i64 {
@@ -93,12 +105,18 @@ fn parse_rec(line: &str) -> Option<Rec> {
         }
     }
 
+    let qual = match f[5] {
+        "." | "" => None,
+        q => q.parse::<f32>().ok(),
+    };
+
     Some(Rec {
         line: line.to_owned(),
         chrom,
         pos0,
         rlen,
         imin,
+        qual,
     })
 }
 
@@ -236,6 +254,8 @@ impl VcfBuf {
         let can_flush = match self.mode {
             Mark::Overlap => self.mark_overlap_can_flush(flush_all),
             Mark::Dup => self.mark_dup_can_flush(flush_all),
+            // MinQual is handled by `min_qual_process`, never the buffer.
+            Mark::MinQual => flush_all,
         };
         self.status = Status::Clean;
         if !can_flush {
@@ -254,9 +274,142 @@ pub fn run(
     mark_tag: Option<&str>,
     reverse: bool,
     text_list: bool,
+    missing_qual: f32,
 ) -> io::Result<String> {
     let text = read_vcf_text(input)?;
-    Ok(process(&text, mode, mark_tag, reverse, text_list))
+    Ok(process(
+        &text,
+        mode,
+        mark_tag,
+        reverse,
+        text_list,
+        missing_qual,
+    ))
+}
+
+/// Upstream `vcfbuf` `MARK_EXPR` (`min(QUAL)`): within each connected
+/// overlap component, repeatedly mark the lowest-QUAL record and drop
+/// its overlap edges until the component has no overlaps left. A
+/// non-overlapping record (singleton component) is never marked, which
+/// is exactly upstream's per-dirty-window behavior.
+fn min_qual_process(
+    lines: &[&str],
+    mark_tag: Option<&str>,
+    reverse: bool,
+    text_list: bool,
+    missing_qual: f32,
+    out: &mut String,
+) {
+    let recs: Vec<Rec> = lines
+        .iter()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .filter_map(|l| parse_rec(l))
+        .collect();
+    let n = recs.len();
+    let value = |r: &Rec| r.qual.unwrap_or(missing_qual);
+
+    // Symmetric overlap adjacency (upstream `records_overlap`: same
+    // chrom and the earlier record's end >= the later record's start).
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let (a, b) = (&recs[i], &recs[j]);
+            if a.chrom != b.chrom {
+                continue;
+            }
+            let (e, s) = if a.pos0 <= b.pos0 {
+                (a.pos0 + a.rlen - 1, b.pos0)
+            } else {
+                (b.pos0 + b.rlen - 1, a.pos0)
+            };
+            if e >= s {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+
+    let mut mark = vec![0u8; n];
+    let mut seen = vec![false; n];
+    for start in 0..n {
+        if seen[start] || adj[start].is_empty() {
+            seen[start] = true;
+            continue;
+        }
+        // Collect the connected component (BFS).
+        let mut comp = Vec::new();
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(v) = stack.pop() {
+            comp.push(v);
+            for &w in &adj[v] {
+                if !seen[w] {
+                    seen[w] = true;
+                    stack.push(w);
+                }
+            }
+        }
+        // Live edge sets within the component.
+        use std::collections::BTreeSet;
+        let mut edges: std::collections::HashMap<usize, BTreeSet<usize>> = comp
+            .iter()
+            .map(|&v| (v, adj[v].iter().copied().collect()))
+            .collect();
+        let mut nolap: usize = comp.iter().map(|&v| edges[&v].len()).sum::<usize>() / 2;
+        // Process members ascending by (value, original index).
+        let mut order = comp.clone();
+        order.sort_by(|&a, &b| {
+            value(&recs[a])
+                .partial_cmp(&value(&recs[b]))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(&b))
+        });
+        for &oi in &order {
+            if nolap == 0 {
+                break;
+            }
+            let neighbours: Vec<usize> = edges[&oi].iter().copied().collect();
+            for j in neighbours {
+                edges.get_mut(&oi).unwrap().remove(&j);
+                edges.get_mut(&j).unwrap().remove(&oi);
+                nolap -= 1;
+            }
+            mark[oi] = 1;
+        }
+    }
+
+    let mut idx = 0;
+    for line in lines {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        if parse_rec(line).is_none() {
+            continue;
+        }
+        let r = &recs[idx];
+        let m = mark[idx];
+        idx += 1;
+        let mut keep = m == 0;
+        if reverse {
+            keep = !keep;
+        }
+        if text_list {
+            if keep {
+                out.push_str(&r.chrom);
+                out.push('\t');
+                out.push_str(&(r.pos0 + 1).to_string());
+                out.push('\n');
+            }
+            continue;
+        }
+        if keep {
+            out.push_str(&r.line);
+            out.push('\n');
+        } else if let Some(tag) = mark_tag {
+            out.push_str(&set_info_flag(&r.line, tag));
+            out.push('\n');
+        }
+    }
 }
 
 fn process(
@@ -265,10 +418,22 @@ fn process(
     mark_tag: Option<&str>,
     reverse: bool,
     text_list: bool,
+    missing_qual: f32,
 ) -> String {
     let lines: Vec<&str> = text.lines().collect();
 
     let mut out = String::with_capacity(text.len() + 256);
+
+    if mode == Mark::MinQual {
+        // Upstream `bcf_hdr_printf` appends the mark-tag INFO line at the
+        // *end* of the header (just before `#CHROM`), not grouped after
+        // the existing `##INFO` lines.
+        if !text_list {
+            emit_header_append_last(&lines, mark_tag, &mut out);
+        }
+        min_qual_process(&lines, mark_tag, reverse, text_list, missing_qual, &mut out);
+        return out;
+    }
 
     if !text_list {
         emit_header(&lines, mark_tag, &mut out);
@@ -316,6 +481,36 @@ fn process(
         emit(&r, m, &mut out);
     }
     out
+}
+
+/// Like [`emit_header`] but appends the mark-tag `##INFO` line as the
+/// last header line (immediately before `#CHROM`), matching upstream
+/// `bcf_hdr_printf` + `bcf_hdr_sync` append order for `-m 'min(QUAL)'`.
+fn emit_header_append_last(lines: &[&str], mark_tag: Option<&str>, out: &mut String) {
+    let info_header = mark_tag.map(|tag| {
+        format!("##INFO=<ID={tag},Type=Flag,Number=0,Description=\"Marked by +remove-overlaps\">")
+    });
+    let fileformat = lines.iter().position(|l| l.starts_with("##fileformat="));
+    let has_pass = lines.iter().any(|l| l.starts_with("##FILTER=<ID=PASS,"));
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.starts_with('#') {
+            break;
+        }
+        if line.starts_with("#CHROM") {
+            if let Some(h) = &info_header {
+                out.push_str(h);
+                out.push('\n');
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if Some(idx) == fileformat && !has_pass {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+        }
+    }
 }
 
 /// Emits the header with htslib-style normalization: `##FILTER=<ID=PASS>`
@@ -450,7 +645,7 @@ mod tests {
 
     #[test]
     fn overlap_remove_keeps_non_overlapping() {
-        let out = process(VCF, Mark::Overlap, None, false, false);
+        let out = process(VCF, Mark::Overlap, None, false, false, 0.0);
         assert_eq!(
             data_lines(&out),
             vec![
@@ -465,7 +660,7 @@ mod tests {
 
     #[test]
     fn overlap_mark_tags_overlapping_sites() {
-        let out = process(VCF, Mark::Overlap, Some("overlap"), false, false);
+        let out = process(VCF, Mark::Overlap, Some("overlap"), false, false, 0.0);
         let d = data_lines(&out);
         assert_eq!(d[0], "1\t100000\t.\tCC\tG\t.\t.\toverlap");
         assert_eq!(d[1], "1\t100001\t.\tC\tG\t.\t.\toverlap");
@@ -482,7 +677,7 @@ mod tests {
 
     #[test]
     fn overlap_reverse_keeps_only_overlapping() {
-        let out = process(VCF, Mark::Overlap, None, true, false);
+        let out = process(VCF, Mark::Overlap, None, true, false, 0.0);
         let d = data_lines(&out);
         assert_eq!(
             d,
@@ -497,7 +692,7 @@ mod tests {
 
     #[test]
     fn dup_marks_same_position_only() {
-        let out = process(VCF, Mark::Dup, Some("DUP"), false, false);
+        let out = process(VCF, Mark::Dup, Some("DUP"), false, false, 0.0);
         let d = data_lines(&out);
         // Different positions are not duplicates even if spans overlap.
         assert_eq!(d[0], "1\t100000\t.\tCC\tG\t.\t.\t.");
@@ -511,7 +706,7 @@ mod tests {
 
     #[test]
     fn text_list_emits_kept_sites() {
-        let out = process(VCF, Mark::Overlap, None, false, true);
+        let out = process(VCF, Mark::Overlap, None, false, true, 0.0);
         assert_eq!(
             out,
             "1\t789241\n1\t789243\n1\t789243\n1\t790000\n1\t900000\n"
