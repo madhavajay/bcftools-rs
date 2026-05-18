@@ -20,11 +20,16 @@
 //!
 //! `END` (`INFO/END` else `POS+len(REF)-1`) and `TYPE`
 //! (`bcf_get_variant_types` classification) are pop-independent site
-//! tags.
+//! tags. A general `FuncKind::Expr` fallback evaluates any other
+//! expression through the shared filter engine (`INFO/X` re-split into
+//! numeric lists for the resolver; a `phred(...)` wrapper applied
+//! locally with bcftools' exact `-4.34294481903*ln` constant) —
+//! covering `phred(fisher(INFO/DP4))` / `fisher(INFO/ADF,INFO/ADR)` /
+//! `phred(fisher(FMT/DP4))`.
 //!
-//! Deferred (tracked in TODO.md): the remaining function engine
-//! (`ssum`/`fisher`/`phred`, arithmetic, `[*:i]`/`[*]` per-element
-//! subscripts).
+//! Deferred (tracked in TODO.md): the allele-aware multi-arg array
+//! `fisher(ADF[0,2],ADR[0,2])` semantics (`fisher.{2,5,6}.out`) and the
+//! mixed per-sample/scalar arithmetic of `fill-tags.func.1.out`.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -241,6 +246,12 @@ enum FuncKind {
     FPass,
     /// `N_PASS(EXPR)` — number of (pop) samples where EXPR is true.
     NPass,
+    /// A general expression (`phred(fisher(INFO/DP4))`, …) evaluated by
+    /// the shared filter engine — record-level for an INFO result,
+    /// per-sample for a FORMAT result. `phred(...)` is applied locally
+    /// with bcftools' exact constant (the shared engine's `PHRED`
+    /// truncates `10/ln10`).
+    Expr,
 }
 
 /// A `[INFO/|FORMAT/]DST[:CNT]=[int(|float(]<KIND>(<OPERAND>))` tag,
@@ -332,9 +343,25 @@ fn parse_func(token: &str) -> Result<Func, String> {
         }
     }
 
-    // `<KIND>(<INNER>)`.
-    if !e.ends_with(')') {
-        return Err(format!("could not parse the expression \"{e}\""));
+    // Fast paths: `sum(INFO/X|FMT/X)`, `smpl_sum(...)`,
+    // `F_PASS(EXPR)`, `N_PASS(EXPR)`. Anything else is evaluated as a
+    // general filter expression by the shared engine (`FuncKind::Expr`).
+    let known = e.ends_with(')')
+        && ["sum(", "smpl_sum(", "F_PASS(", "N_PASS("]
+            .iter()
+            .any(|p| e.starts_with(p));
+    if !known {
+        return Ok(Func {
+            dst,
+            info,
+            cnt,
+            is_int,
+            kind: FuncKind::Expr,
+            operand_info: false,
+            operand_tag: String::new(),
+            pass_expr: e.to_owned(),
+            raw: token.to_owned(),
+        });
     }
     let (kind, inner) = if let Some(r) = e.strip_prefix("sum(") {
         (FuncKind::Sum, &r[..r.len() - 1])
@@ -342,13 +369,8 @@ fn parse_func(token: &str) -> Result<Func, String> {
         (FuncKind::SmplSum, &r[..r.len() - 1])
     } else if let Some(r) = e.strip_prefix("F_PASS(") {
         (FuncKind::FPass, &r[..r.len() - 1])
-    } else if let Some(r) = e.strip_prefix("N_PASS(") {
-        (FuncKind::NPass, &r[..r.len() - 1])
     } else {
-        return Err(format!(
-            "the expression \"{e}\" is not yet ported (this slice supports \
-             int/float(sum|smpl_sum(INFO/TAG|FMT/TAG)) and F_PASS/N_PASS(EXPR))"
-        ));
+        (FuncKind::NPass, &e["N_PASS(".len()..e.len() - 1])
     };
     let inner = inner.trim();
 
@@ -394,6 +416,126 @@ fn parse_func(token: &str) -> Result<Func, String> {
         pass_expr: String::new(),
         raw: token.to_owned(),
     })
+}
+
+/// bcftools `func_phred`: `-4.34294481903 * ln(x)` (the shared filter
+/// engine's `PHRED` truncates the constant to `4.3429`, so a
+/// `phred(...)` wrapper is applied here instead).
+const PHRED_C: f64 = 4.342_944_819_03;
+
+/// First numeric scalar of a filter [`FilterValue`].
+fn value_first_number(v: &FilterValue) -> Option<f64> {
+    match v {
+        FilterValue::Number(n) => Some(*n),
+        FilterValue::List(items) => items.iter().find_map(|x| match x {
+            FilterValue::Number(n) => Some(*n),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// Build a [`FilterValue`] for a raw FORMAT/sample cell.
+fn sample_filter_value(key: &str, raw: &str) -> FilterValue {
+    if key.eq_ignore_ascii_case("GT") {
+        FilterValue::String(raw.to_owned())
+    } else if raw == "." || raw.is_empty() {
+        FilterValue::Missing
+    } else if let Ok(n) = raw.parse::<f64>() {
+        FilterValue::Number(n)
+    } else if raw.contains(',') && raw.split(',').all(|v| v.parse::<f64>().is_ok()) {
+        FilterValue::List(
+            raw.split(',')
+                .map(|v| FilterValue::Number(v.parse().unwrap()))
+                .collect(),
+        )
+    } else {
+        FilterValue::String(raw.to_owned())
+    }
+}
+
+/// Evaluate a general expression `expr` against `context`. A
+/// `phred(<INNER>)` wrapper is split off and applied locally with
+/// bcftools' exact constant (only the wrapped value goes to the shared
+/// engine). Returns the first numeric scalar.
+fn eval_general(context: &EvalContext, expr: &str, fields: &[String]) -> Option<f64> {
+    let (inner, phred) = match expr
+        .strip_prefix("phred(")
+        .or_else(|| expr.strip_prefix("PHRED("))
+    {
+        Some(r) if expr.ends_with(')') => (&r[..r.len() - 1], true),
+        _ => (expr, false),
+    };
+    let v = bcffilter::eval_expression_with(inner.trim(), context, |name, si| {
+        if si.is_some() {
+            return None;
+        }
+        // The shared engine passes `INFO/X` through verbatim; the
+        // record resolver expects the bare tag name and returns a
+        // comma INFO array as a String — re-split it into a numeric
+        // List so `fisher(INFO/DP4)` / `[0,2]` subscripts see values.
+        let n = name.strip_prefix("INFO/").unwrap_or(name);
+        match crate::commands::filter::record_lookup(n, fields) {
+            Some(FilterValue::String(s))
+                if s.contains(',') && s.split(',').all(|x| x.parse::<f64>().is_ok()) =>
+            {
+                Some(FilterValue::List(
+                    s.split(',')
+                        .map(|x| FilterValue::Number(x.parse().unwrap()))
+                        .collect(),
+                ))
+            }
+            other => other,
+        }
+    })
+    .ok()?;
+    let n = value_first_number(&v)?;
+    Some(if phred { -PHRED_C * n.ln() } else { n })
+}
+
+/// Record-level evaluation of a general expression (all samples folded
+/// into the context, like `+prune`'s `record_passes`) — INFO result.
+fn eval_record_number(cols: &[&str], expr: &str) -> Option<f64> {
+    let fields: Vec<String> = cols.iter().map(|s| (*s).to_owned()).collect();
+    let context = if fields.len() > 9 {
+        let keys: Vec<&str> = fields[8].split(':').collect();
+        fields[9..].iter().fold(EvalContext::new(), |c, s| {
+            let vals: Vec<&str> = s.split(':').collect();
+            c.with_sample(
+                keys.iter()
+                    .enumerate()
+                    .map(|(i, k)| {
+                        (
+                            (*k).to_owned(),
+                            sample_filter_value(k, vals.get(i).copied().unwrap_or(".")),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+    } else {
+        EvalContext::new()
+    };
+    eval_general(&context, expr, &fields)
+}
+
+/// Per-sample evaluation of a general expression (FORMAT result).
+fn eval_sample_number(cols: &[&str], si: usize, expr: &str) -> Option<f64> {
+    let fields: Vec<String> = cols.iter().map(|s| (*s).to_owned()).collect();
+    let keys: Vec<&str> = fields[8].split(':').collect();
+    let vals: Vec<&str> = fields[9 + si].split(':').collect();
+    let context = EvalContext::new().with_sample(
+        keys.iter()
+            .enumerate()
+            .map(|(i, k)| {
+                (
+                    (*k).to_owned(),
+                    sample_filter_value(k, vals.get(i).copied().unwrap_or(".")),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    eval_general(&context, expr, &fields)
 }
 
 /// Evaluate a per-sample filter expression for sample `si` (the
@@ -1113,6 +1255,7 @@ fn process_record(
                         Some(0.0)
                     }
                 }
+                FuncKind::Expr => eval_record_number(&f, &func.pass_expr),
                 _ => eval_sum(&f, func, pi, sample_to_pops),
             };
             set_info(
@@ -1133,6 +1276,9 @@ fn process_record(
         // `smpl_sum`: per-sample total (FORMAT result).
         let vals: Vec<String> = (0..f.len().saturating_sub(9))
             .map(|si| {
+                if func.kind == FuncKind::Expr {
+                    return fmt_num(eval_sample_number(&f, si, &func.pass_expr), func.is_int);
+                }
                 let v = sample_operand_values(&f, si, func);
                 if v.is_empty() {
                     ".".to_owned()

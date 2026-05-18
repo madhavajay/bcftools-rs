@@ -201,6 +201,17 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-17` added a `+fill-tags` general
+  `FuncKind::Expr` fallback — any non-`sum`/`F_PASS` func expression is
+  evaluated through the shared filter engine (`INFO/X` re-split into
+  numeric lists for the record resolver; a `phred(...)` wrapper applied
+  locally with bcftools' exact `-4.34294481903*ln` constant, since the
+  shared engine's `PHRED` truncates `10/ln10`). Byte-for-byte against
+  `fisher.{1,3,4}.out` (`phred(fisher(INFO/DP4))`,
+  `fisher(INFO/ADF,INFO/ADR)`, `phred(fisher(FMT/DP4))`). Remaining
+  `+fill-tags`: the allele-aware multi-arg array `fisher(ADF[0,2],…)`
+  semantics (`fisher.{2,5,6}.out`) and the mixed per-sample/scalar
+  arithmetic of `fill-tags.func.1.out`.
 - 2026-05-18: `progress/batch-16` added `+fill-tags` `END` (`INFO/END`
   else `POS+len(REF)-1`) and `TYPE` (`bcf_get_variant_types`
   REF/SNP/MNP/INDEL/OTHER/BND/OVERLAP classification) — pop-independent
@@ -1009,9 +1020,11 @@ Latest landed progress:
      (`fill-tags-func.out`, `fmissing.{1,2}.out`);
      `progress/batch-15` paren-aware `-t` splitting, unlocking
      `fill-tags-AD.{4,5}.out`; `progress/batch-16` `END`/`TYPE`
-     (`fill-tags-AN0.out`). Still to port: the `ssum`/`fisher`/`phred`/
-     arithmetic/`[*:i]`/`[*]` per-element engine —
-     `fill-tags.func.1.out`, `fisher.*.out`.
+     (`fill-tags-AN0.out`); `progress/batch-17` the general
+     `phred(fisher(...))` expr path (`fisher.{1,3,4}.out`). Still to
+     port: the allele-aware multi-arg array `fisher(ADF[0,2],…)`
+     semantics (`fisher.{2,5,6}.out`) and the mixed per-sample/scalar
+     arithmetic of `fill-tags.func.1.out` (`ssum`+`[*:i]`/`[*]`).
   4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
      `test/trio-dnm3/test.sh` fixture). **`+vrfs`** (mpileup/BAM —
      `#include mpileup2/mpileup.h`, blocked on the mpileup engine).
@@ -1075,7 +1088,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 38 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (count/HWE/F_MISSING/all/-d/VAF/END/TYPE + sum/smpl_sum/F_PASS/N_PASS/binom-func slice) |
+| `plugin` | registry + 38 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (count/HWE/F_MISSING/all/-d/VAF/END/TYPE + sum/smpl_sum/F_PASS/N_PASS/binom/phred-fisher-func slice) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -2032,7 +2045,7 @@ Current local slice:
 
 Grouped roughly by complexity / shared dependencies:
 
-- [ ] **Tag fixers** — `+fill-AN-AC`, `+fill-tags` (45k — heaviest of this group; **almost complete**: `fill-tags.{out,2,3,4,5}.out` + `fill-tags-hemi.{1,2}.out` + `fill-tags-hwe.out` + `fill-tags-VAF.out` + `fill-tags-AD.{1,2,3,4,5}.out` + `fill-tags-func.out` + `fmissing.{1,2}.out` + `fill-tags-AN0.out` pass; only the `ssum`/`fisher`/`phred`/arithmetic engine — `fill-tags.func.1.out`, `fisher.*.out` — remains), `+missing2ref`, `+tag2tag`, `+setGT`, `+add-variantkey`, `+variantkey-hex`, `+allele-length`, `+impute-info`, `+counts`, `+dosage`, `+frameshifts`, `+remove-overlaps`, `+fill-from-fasta`.
+- [ ] **Tag fixers** — `+fill-AN-AC`, `+fill-tags` (45k — heaviest of this group; **almost complete**: `fill-tags.{out,2,3,4,5}.out` + `fill-tags-hemi.{1,2}.out` + `fill-tags-hwe.out` + `fill-tags-VAF.out` + `fill-tags-AD.{1,2,3,4,5}.out` + `fill-tags-func.out` + `fmissing.{1,2}.out` + `fill-tags-AN0.out` pass; `fisher.{1,3,4}.out` pass too; only the allele-aware array-`fisher` `fisher.{2,5,6}.out` and the `ssum`/arithmetic `fill-tags.func.1.out` remain), `+missing2ref`, `+tag2tag`, `+setGT`, `+add-variantkey`, `+variantkey-hex`, `+allele-length`, `+impute-info`, `+counts`, `+dosage`, `+frameshifts`, `+remove-overlaps`, `+fill-from-fasta`.
 - [ ] **Reference fixers** — `+fixref`, `+fixploidy`.
 - [ ] **Subset/split** — `+split` (30k), `+scatter`, `+GTsubset`, `+GTisec`, `+isecGT`.
 - [ ] **Stats / reports** — `+smpl-stats`, `+indel-stats`, `+trio-stats`, `+variant-distance`, `+ad-bias`, `+af-dist`, `+check-ploidy`, `+check-sparsity`, `+vcf2table` (46k), `+vrfs` (38k).
