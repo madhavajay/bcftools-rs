@@ -1537,15 +1537,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     if plugin.name == "remove-overlaps" {
         use crate::commands::plugins::remove_overlaps::{self, Mark};
         let input = input.unwrap_or_else(|| "-".to_owned());
-        // `--missing`: scalar value used for missing QUAL in `min(QUAL)`.
-        // Default 0; the `DP` heuristic is not yet supported.
+        // `--missing` for `min(QUAL)`: a scalar value (default 0) or the
+        // `DP` max-QUAL/DP coverage-scaling heuristic.
+        let mut missing_dp = false;
         let missing_qual: f32 = match missing_expr.as_deref() {
             None => 0.0,
             Some(v) if v.eq_ignore_ascii_case("DP") => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "remove-overlaps --missing DP (max-QUAL/DP heuristic) is not supported in this slice",
-                ));
+                missing_dp = true;
+                0.0
             }
             Some(v) => v.parse::<f32>().map_err(|_| {
                 io::Error::new(
@@ -1564,6 +1563,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             reverse,
             text_list,
             missing_qual,
+            missing_dp,
         )?;
         if text_list {
             write_plugin_output(vcf.as_bytes(), output.as_deref(), OutKind::VcfText)?;
