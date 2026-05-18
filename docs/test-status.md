@@ -26,7 +26,7 @@ Status values:
 | `test_mpileup` | not-yet-ported | `mpileup` not ported. |
 | `test_naive_concat` | rust-covered | Rust integration coverage includes `--naive` and `--naive-force`; Perl slice not enabled yet. |
 | `test_plugin_scatter` | rust-covered | Rust integration coverage matches all three upstream scatter fixtures; Perl slice is not enabled in CI yet. |
-| `test_plugin_split` | rust-covered | Rust integration coverage matches the filter-free upstream split fixtures and covers `-k` tag projection plus `-Oz` BGZF VCF output; rows using `-i 'GT="alt"'` remain blocked on the filter engine. |
+| `test_plugin_split` | rust-covered | Rust integration coverage matches the filter-free upstream split fixtures, `-k` tag projection, `-Oz` BGZF VCF output, and the common `-i 'GT="alt"'` filter rows (`split.1.5.out`, `split.1.6.out`) through the shared filter engine. The `-i 'GT[0]="alt"'` per-sample-subscript row (`split.1.4.out`) remains blocked: subscripted FORMAT access in the per-output projected context is not yet resolved by the shared engine. |
 | `test_plugin_vrfs` | not-yet-ported | Plugin not ported. |
 | `test_rename_chrs` | not-yet-ported | Depends on `annotate`/`query`. |
 | `test_roh` | not-yet-ported | `roh` not ported. |

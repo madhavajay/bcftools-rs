@@ -201,6 +201,13 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/gvcfz` (repurposed) un-deferred the `+split`
+  common `-i 'GT="alt"'` filter rows now that the shared filter engine
+  resolves the `GT="alt"` class literal: added byte-for-byte integration
+  tests for `split.1.5.out` / `split.1.6.out` (10 split integration
+  tests total). The `-i 'GT[0]="alt"'` per-sample-subscript row
+  (`split.1.4.out`) stays deferred — subscripted FORMAT access in the
+  per-output projected context is the next focused filter-engine slice.
 - 2026-05-18: `progress/vcf2table-vep` added the `+vcf2table` second
   slice: `# VEP/CSQ` and `# BCSQ` tables (column names from each tag's
   `##INFO=<...,Description="...Format: a|b|c">` header, per-record
@@ -1529,12 +1536,16 @@ Current local slice:
   `-k`/`--keep-tags` INFO/FORMAT projection in the text path, `-Oz`
   BGZF VCF output, and common `-i`/`-e` record filtering through the
   shared text filter engine after per-output sample/tag projection.
-  Byte-for-byte parity with `split.1.{1,2,3,7}.out` and
+  Byte-for-byte parity with `split.1.{1,2,3,5,6,7}.out` and
   `split.2.1.out` through the harness shape that sorts output files,
-  runs `query -l`, then `view -H`. 8 integration tests in
-  `crates/bcftools-rs/tests/plugin_split.rs` + 4 unit tests.
-  Remaining: region/target restriction, BCF output, `-W` indexing, and
-  output threading.
+  runs `query -l`, then `view -H` (`split.1.{5,6}.out` exercise the
+  common `-i 'GT="alt"'` filter through the shared engine). 10
+  integration tests in `crates/bcftools-rs/tests/plugin_split.rs` + 4
+  unit tests. Remaining: the `-i 'GT[0]="alt"'` per-sample-subscript row
+  (`split.1.4.out`) — subscripted FORMAT access is not yet resolved by
+  the shared filter engine in the per-output projected context — plus
+  region/target restriction, BCF output, `-W` indexing, and output
+  threading.
 - [x] `+isecGT` (`crates/bcftools-rs/src/commands/plugins/isecgt.rs`):
   local text-backed slice of `isecGT.c`. Compares two VCF/BCF inputs
   by matching `CHROM/POS/REF/ALT`, maps samples from file A to file B
