@@ -783,9 +783,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`09a4591`) (337 lib unit tests plus
-  per-command and per-plugin integration suites; 11 `+split` integration
-  tests, 37 filter integration tests).
+  latest merged commit on `main` (`a5560c4`) (342 lib unit tests plus
+  per-command and per-plugin integration suites; 77 `query`, 11 `+split`,
+  37 filter, 2 `+gvcfz` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
 - Concrete next steps (as of PR #231, `ad09371`; refreshed after the
@@ -854,6 +854,16 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+gvcfz`, PR #233 landed; no open PR): approximately
+  51-54% complete toward the full stated goal. Movement since the prior
+  estimate is the `+gvcfz` plugin (35th) — gVCF block compression with
+  `-g` group expressions through the shared filter engine and upstream
+  `-a` allele trimming — byte-for-byte through `bcftools query` against
+  `gvcfz.1.out` and `gvcfz.2.1.out`, plus a `query %END` fallback fix.
+  35 of 41 plugins done; 6 unimplemented (all infra-coupled:
+  `+fill-tags`/`+setGT`/`+split-vep` filter-engine, `+trio-dnm3` PED,
+  `+vrfs` mpileup, `+color-chrs` HMM). Next: filter-engine completeness
+  for `+setGT`/`+split-vep`, then large-subcommand deepening.
 - 2026-05-18 (post FORMAT/GT-subscript GT-class fix, PR #229 landed; no
   open PR): approximately 50-53% complete toward the full stated goal.
   Movement since the prior estimate taught the shared filter engine that
