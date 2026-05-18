@@ -207,3 +207,22 @@ fn func_f_pass_n_pass_missing() {
         "fmissing.2.out",
     );
 }
+
+#[test]
+fn func_n_pass_subscript_and_binom() {
+    // Comma-joined func list with subscripts and `binom(...)` (whose
+    // own comma must not split the `-t` list).
+    check(
+        "fill-tags-AD.vcf",
+        &["-t", "XX=N_PASS(FMT/AD[:0]<=10),YY=N_PASS(FMT/AD[:0]>10)"],
+        "fill-tags-AD.4.out",
+    );
+    check(
+        "fill-tags-AD.vcf",
+        &[
+            "-t",
+            "good=N_PASS(binom(FMT/AD[:0],FMT/AD[:1])>=1e-5),bad=N_PASS(binom(FMT/AD[:0],FMT/AD[:1])<1e-5)",
+        ],
+        "fill-tags-AD.5.out",
+    );
+}
