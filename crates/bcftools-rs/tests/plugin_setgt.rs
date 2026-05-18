@@ -70,3 +70,42 @@ fn setgt_missing_to_ref_matches_upstream_fixture() {
         .collect();
     assert_eq!(filtered, expected);
 }
+
+#[test]
+fn setgt_query_per_sample_filter_matches_upstream_fixture() {
+    // Upstream row: in=>'setGT', out=>'setGT.1.out',
+    // args=>'-- -t q -n 0 -i \'GT~"." && FMT/DP=30 && GQ=150\''.
+    ensure_binary_built();
+    let input = fixture_path("setGT.vcf");
+    let expected = std::fs::read_to_string(fixture_path("setGT.1.out")).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+setGT",
+            "--no-version",
+            input.to_str().unwrap(),
+            "--",
+            "-t",
+            "q",
+            "-n",
+            "0",
+            "-i",
+            r#"GT~"." && FMT/DP=30 && GQ=150"#,
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "+setGT -t q failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected);
+}

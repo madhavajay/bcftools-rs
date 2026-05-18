@@ -201,6 +201,15 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/setgt-query` added the `+setGT` `-t q` target:
+  per-sample filter selection through the shared filter engine
+  (single-sample `EvalContext` + `record_lookup`, the `+split`/`+gvcfz`
+  wiring), applying `-n` to samples passing the `-i` expression.
+  Byte-for-byte against `setGT.1.out`
+  (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`); +1 unit, +1
+  integration test. Deferred: `-t q` with `-e` (per-sample exclude
+  invert) and the sample-subset `GT[@file]` / `binom()` forms
+  (`setGT.{2,3}.out`).
 - 2026-05-18: `progress/setgt` added the `+setGT` plugin (36th, first
   slice) — the filter-free target classes `-t .` / `-t ./.` / `-t ./x`
   / `-t a` with new-genotype modes `-n 0` (reference) and `-n .`
@@ -1728,20 +1737,23 @@ Current local slice:
   BCF output, `-W` indexing, and output threading.
 
 - [x] `+setGT` (`crates/bcftools-rs/src/commands/plugins/setgt.rs`):
-  first slice of `setGT.c`. Filter-free target classes `-t .` /
-  `-t ./.` / `-t ./x` / `-t a` with new-genotype modes `-n 0`
-  (reference) and `-n .` (missing); per-sample GT rewrite replaces
-  every allele of a targeted genotype, ploidy preserved and result
-  unphased, mirroring upstream `set_gt`. Emits the upstream
-  `Filled N alleles` stderr line. Byte-for-byte against
-  `missing2ref.out` (the `+setGT --no-version -- -t . -n 0` row); 5
-  unit + 1 integration test in
-  `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining: `-t q` (filter
-  engine; `setGT.{1,2,3}.out`), `-n m`/`-n M` major/minor allele
-  inference, custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
-  `setGT.3.{1..6}.out`, `setGT.2.1.out`), `-n i`/`p`/`u` phase ops,
-  `-n X` (VAF), `-t X` random, the `binom()` target, BCF output, and
-  `-W` indexing.
+  port of `setGT.c`. Target classes `-t .` / `-t ./.` / `-t ./x` /
+  `-t a` (missing/all masks) and `-t q` (samples selected by the `-i`
+  filter, evaluated per-sample through the shared filter engine — the
+  `+split`/`+gvcfz` wiring) with new-genotype modes `-n 0` (reference)
+  and `-n .` (missing); per-sample GT rewrite replaces every allele of
+  a targeted genotype, ploidy preserved and result unphased, mirroring
+  upstream `set_gt`. Emits the upstream `Filled N alleles` stderr line.
+  Byte-for-byte against `missing2ref.out`
+  (`+setGT --no-version -- -t . -n 0`) and `setGT.1.out`
+  (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`); 6 unit + 2
+  integration tests in `crates/bcftools-rs/tests/plugin_setgt.rs`.
+  Remaining: `-t q` with `-e` (per-sample exclude invert), the
+  sample-subset `GT[@file]` / `binom()` filter forms
+  (`setGT.{2,3}.out`), `-n m`/`-n M` major/minor allele inference,
+  custom `-n c:GT` (incl. `m`/`M`/`X` alleles; `setGT.3.{1..6}.out`,
+  `setGT.2.1.out`), `-n i`/`p`/`u` phase ops, `-n X` (VAF), `-t X`
+  random, the `binom()` target, BCF output, and `-W` indexing.
 
 Grouped roughly by complexity / shared dependencies:
 
