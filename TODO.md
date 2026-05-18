@@ -201,6 +201,12 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/setgt-invert` added `+setGT` `-n i`/`-n p`/
+  `-n u` genotype modes (invert allele order with separator preserved /
+  phase / unphase+sort, mirroring upstream `invert_phase_gt` /
+  `phase_gt` / `unphase_gt`). Byte-for-byte against `setGT.2.1.out`
+  (`-t a -n i`); +1 unit, +1 integration test. Remaining setGT `-n`
+  modes: `m`/`M` major/minor inference, custom `c:GT`, `X` (VAF).
 - 2026-05-18: `progress/setgt-subset` added `+setGT` `-t q`
   `TAG[@file]` sample-subset subscripts: the subscripts are stripped
   from the `-i` expression and the referenced sample-name files read,
@@ -844,8 +850,8 @@ Latest landed progress:
   5. **Deferred rows on landed plugins**: `gvcfz.2.out`
      (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     `setGT.2.1.out`/`setGT.3.{1..6}.out` (`-n m/M/c:GT/i/p/u/X`;
-     `setGT.{2,3}.out` `GT[@file]` now done),
+     `setGT.3.{1..6}.out` (`-n m/M/c:GT/X` major/minor/custom/VAF;
+     `setGT.{2,3}.out` `GT[@file]` and `setGT.2.1.out` `-n i` now done),
      `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
      `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
      'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
@@ -1809,17 +1815,20 @@ Current local slice:
   from the expression; referenced sample files read; sample selected
   only when in the subset *and* passing the cleaned per-sample
   expression), with comma FORMAT vectors bound as numeric lists so
-  `binom(AD)` works. Byte-for-byte against `missing2ref.out`
+  `binom(AD)` works. New-genotype modes also include `-n i` (invert
+  allele order, separator preserved, diploid only), `-n p` (phase),
+  `-n u` (unphase+sort), mirroring upstream `invert_phase_gt` /
+  `phase_gt` / `unphase_gt`. Byte-for-byte against `missing2ref.out`
   (`-t . -n 0`), `setGT.1.out`
   (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`), `setGT.2.out`
-  (`-t q -n . -i 'GT[@samples.txt]="het"'`), and `setGT.3.out`
-  (`… & binom(AD[@samples.txt])<0.1`); 6 unit + 4 integration tests in
+  (`-t q -n . -i 'GT[@samples.txt]="het"'`), `setGT.3.out`
+  (`… & binom(AD[@samples.txt])<0.1`), and `setGT.2.1.out`
+  (`-t a -n i`); 7 unit + 5 integration tests in
   `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining: `-t q` with
   `-e` (per-sample exclude invert), `-n m`/`-n M` major/minor allele
-  inference, custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
-  `setGT.3.{1..6}.out`, `setGT.2.1.out`), `-n i`/`p`/`u` phase ops,
-  `-n X` (VAF), `-t X` random, the `binom()` target, BCF output, and
-  `-W` indexing.
+  inference and custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
+  `setGT.3.{1..6}.out`), `-n X` (VAF), `-t X` random, the `binom()`
+  target, BCF output, and `-W` indexing.
 
 Grouped roughly by complexity / shared dependencies:
 
