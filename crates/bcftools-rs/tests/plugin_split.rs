@@ -145,6 +145,42 @@ fn split_groups_file() {
     );
 }
 
+// Upstream `test_plugin_split` rows that exercise common `-i` record
+// filtering through the shared filter engine with the `GT="alt"` class
+// literal, previously deferred while the engine landed. The
+// `GT[0]="alt"` per-sample-subscript row (`split.1.4.out`) stays
+// deferred: subscripted FORMAT access in the per-output projected
+// context is not yet resolved by the shared engine.
+#[test]
+fn split_samples_file_with_gt_alt_include() {
+    check(
+        "split.1.vcf",
+        &[
+            "-S",
+            fixture_path("split.smpl.1.3.txt").to_str().unwrap(),
+            "-i",
+            r#"GT="alt""#,
+        ],
+        "inc15",
+        "split.1.5.out",
+    );
+}
+
+#[test]
+fn split_samples_file_4_with_gt_alt_include() {
+    check(
+        "split.1.vcf",
+        &[
+            "-S",
+            fixture_path("split.smpl.1.4.txt").to_str().unwrap(),
+            "-i",
+            r#"GT="alt""#,
+        ],
+        "inc16",
+        "split.1.6.out",
+    );
+}
+
 #[test]
 fn split_sanitizes_duplicate_file_names() {
     check("split.2.vcf", &[], "sanitize", "split.2.1.out");
