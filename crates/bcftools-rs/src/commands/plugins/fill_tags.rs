@@ -27,12 +27,13 @@
 //! `fisher(...)` is handled by a faithful local port of
 //! `bcftools/filter.c` `func_fisher` (site / per-sample × 1-arg-4-value
 //! / 2-arg / 2×Number=R-with-indices / 2×Number=R-GT-allele branches),
-//! reusing the p-faithful shared `fisher_two_sided` — all six
-//! `fisher.*.out` fixtures pass.
+//! reusing the p-faithful shared `fisher_two_sided`. Other
+//! expressions (e.g. `float(FMT/AD[*:0] / ssum(FMT/AD[*]))`) go
+//! through the shared engine per sample / per record.
 //!
-//! Deferred (tracked in TODO.md): the mixed per-sample/scalar
-//! arithmetic of `fill-tags.func.1.out`
-//! (`float(FMT/AD[*:0] / ssum(FMT/AD[*]))`).
+//! **Every upstream `+fill-tags` fixture passes** (`fill-tags.*`,
+//! `fill-tags-{hemi,hwe,VAF,AD,func,AN0}.*`, `fmissing.*`,
+//! `fisher.*`, `fill-tags.func.1`).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -1460,6 +1461,10 @@ fn process_record(
         }
     }
 
+    // bcftools re-serializes INFO from parsed values; trailing
+    // whitespace in the source column (VCF disallows spaces in INFO)
+    // is dropped.
+    let info = info.trim_end().to_owned();
     f[7] = &info;
 
     // Appended FORMAT columns: `smpl_sum(...)` function tags and
@@ -1481,9 +1486,10 @@ fn process_record(
                 }
             })
             .collect();
-        if vals.iter().any(|v| v != ".") {
-            add_cols.push((func.dst.clone(), vals));
-        }
+        // Function tags (`ftf_filter_expr`) always update the FORMAT
+        // field, even when every sample is missing (unlike VAF/VAF1,
+        // which are dropped when no sample is valid).
+        add_cols.push((func.dst.clone(), vals));
     }
 
     if (want_vaf || want_vaf1)
