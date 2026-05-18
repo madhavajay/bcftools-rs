@@ -243,3 +243,24 @@ fn end_type_with_all_set() {
         "fill-tags-AN0.out",
     );
 }
+
+#[test]
+fn func_phred_fisher() {
+    // The general-expression path: phred(fisher(...)) over a 4-value
+    // INFO/DP4, INFO arrays, and a per-sample FMT/DP4.
+    check(
+        "fisher.vcf",
+        &["-t", "FT:1=phred(fisher(INFO/DP4))"],
+        "fisher.1.out",
+    );
+    check(
+        "fisher.vcf",
+        &["-t", "FT:1=phred(fisher(INFO/ADF,INFO/ADR))"],
+        "fisher.3.out",
+    );
+    check(
+        "fisher.vcf",
+        &["-t", "FMT/FT:1=phred(fisher(FMT/DP4))"],
+        "fisher.4.out",
+    );
+}
