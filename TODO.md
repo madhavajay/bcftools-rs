@@ -201,6 +201,10 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-4` added `+remove-overlaps --missing DP`
+  (per-component max-QUAL/DP coverage scaling for missing QUAL,
+  upstream `mark_expr_missing_*_`), completing `+remove-overlaps` —
+  every `remove-overlaps.*.out` fixture now passes (`3.2.out`).
 - 2026-05-18: `progress/batch-3` added `+prune` `-a count`/`-m count=N`
   cluster mode + `-k`/`--keep-sites` (the `vcfbuf` `cluster_can_flush_`
   windowed cluster-size: per-site max unfiltered count over every
@@ -880,10 +884,9 @@ Latest landed progress:
      (`+setGT` fully complete; `+fill-from-fasta aa.out` and the
      `+split.1.4` `GT[0]` subscript also already done — were stale
      deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes;
-     `+remove-overlaps -m 'min(QUAL)'` done — `2.1.out`/`3.1.out`
-     pass; `+prune` `-a count`/`-m count=` cluster mode done —
-     `prune.3.{1,2,3}.out` pass), `+remove-overlaps --missing DP`
-     heuristic (`remove-overlaps.3.2.out`),
+     `+remove-overlaps` fully done incl. `min(QUAL)`/`--missing
+     DP` — all `remove-overlaps.*.out` pass; `+prune` `-a count`/
+     `-m count=` cluster mode done — `prune.3.{1,2,3}.out` pass),
      `+smpl-stats`/`+indel-stats -i/-e` (verify against current code
      before assuming still blocked).
   6. **Unstarted subcommands** (each a major port): `call`
@@ -1465,14 +1468,16 @@ Current local slice:
   `vcfbuf` `MARK_EXPR` greedy: per connected overlap component, mark the
   lowest-QUAL record and drop its edges until no overlaps remain (the
   mark-tag `##INFO` appended last per upstream `bcf_hdr_printf`),
-  including the scalar `--missing N` value. VCF/VCF.gz/BCF and stdin
-  input; `-o`/`-O u|b|v|z` via `write_plugin_output`. Byte-for-byte
-  parity with all six `remove-overlaps.1.{1..6}.out` fixtures plus
-  `remove-overlaps.2.1.out` and `remove-overlaps.3.1.out`
-  (`-m 'min(QUAL)' -M rmme`, incl. `--missing 0`). 7 integration tests
-  in `crates/bcftools-rs/tests/plugin_remove_overlaps.rs` + 5 unit
-  tests. Remaining: `--missing DP` (max-QUAL/DP heuristic;
-  `remove-overlaps.3.2.out`) and `-i`/`-e` record filtering.
+  including both `--missing N` (scalar) and `--missing DP` (the
+  max-QUAL/DP coverage-scaling heuristic: per overlap component, scale
+  missing-QUAL records by `max_qual * dp / max_qual_dp`). VCF/VCF.gz/BCF
+  and stdin input; `-o`/`-O u|b|v|z` via `write_plugin_output`.
+  **Byte-for-byte parity with every upstream fixture**: all six
+  `remove-overlaps.1.{1..6}.out` plus `remove-overlaps.2.1.out`,
+  `remove-overlaps.3.1.out` (incl. `--missing 0`), and
+  `remove-overlaps.3.2.out` (`--missing DP`). 7 integration tests in
+  `crates/bcftools-rs/tests/plugin_remove_overlaps.rs` + 5 unit tests.
+  Remaining: only `-i`/`-e` record filtering.
 - [x] `+af-dist` (`crates/bcftools-rs/src/commands/plugins/af_dist.rs`):
   port of `af-dist.c` + the `bin.c` histogram (`bin_init`/`bin_get_idx`/
   `bin_get_value` for the `0..1` boundary case). Computes the HWE

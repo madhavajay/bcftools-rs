@@ -104,6 +104,13 @@ fn min_qual_overlap_marking() {
         &["-m", "min(QUAL)", "-M", "rmme", "--missing", "0"],
         "remove-overlaps.3.1.out",
     );
+    // Upstream row: `-m 'min(QUAL)' -M rmme --missing DP` (max-QUAL/DP
+    // coverage-scaling heuristic for missing QUAL).
+    check_in(
+        "remove-overlaps.3.vcf",
+        &["-m", "min(QUAL)", "-M", "rmme", "--missing", "DP"],
+        "remove-overlaps.3.2.out",
+    );
 }
 
 #[test]

@@ -10,12 +10,13 @@
 //!
 //! Implemented modes: `-m overlap`, `-m dup`, `-m 'min(QUAL)'`,
 //! `-M TAG`, `--reverse`, `-O t` (plain `chr<TAB>pos` site list), and
-//! the scalar `--missing N` value for `min(QUAL)`. `-m 'min(QUAL)'`
+//! both `--missing N` (scalar) and `--missing DP` (the max-QUAL/DP
+//! coverage-scaling heuristic) for `min(QUAL)`. `-m 'min(QUAL)'`
 //! greedily marks the lowest-QUAL record in each connected overlap
 //! component until no overlaps remain (upstream `vcfbuf` `MARK_EXPR`),
-//! with the mark-tag `##INFO` appended last per `bcf_hdr_printf`. The
-//! `--missing DP` max-QUAL/DP heuristic and `-i`/`-e` filtering are
-//! tracked in `TODO.md`.
+//! with the mark-tag `##INFO` appended last per `bcf_hdr_printf`. All
+//! upstream `remove-overlaps.*.out` fixtures pass byte-for-byte; only
+//! `-i`/`-e` record filtering remains (tracked in `TODO.md`).
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
@@ -67,6 +68,8 @@ struct Rec {
     imin: i64,
     /// QUAL (`None` when `.`); used by `-m 'min(QUAL)'`.
     qual: Option<f32>,
+    /// `INFO/DP` (single int); used by `--missing DP`.
+    dp: Option<i64>,
 }
 
 fn common_prefix_len_ci(a: &[u8], b: &[u8]) -> i64 {
@@ -109,6 +112,11 @@ fn parse_rec(line: &str) -> Option<Rec> {
         "." | "" => None,
         q => q.parse::<f32>().ok(),
     };
+    let dp = f.get(7).and_then(|info| {
+        info.split(';')
+            .find_map(|kv| kv.strip_prefix("DP="))
+            .and_then(|v| v.parse::<i64>().ok())
+    });
 
     Some(Rec {
         line: line.to_owned(),
@@ -117,6 +125,7 @@ fn parse_rec(line: &str) -> Option<Rec> {
         rlen,
         imin,
         qual,
+        dp,
     })
 }
 
@@ -275,6 +284,7 @@ pub fn run(
     reverse: bool,
     text_list: bool,
     missing_qual: f32,
+    missing_dp: bool,
 ) -> io::Result<String> {
     let text = read_vcf_text(input)?;
     Ok(process(
@@ -284,6 +294,7 @@ pub fn run(
         reverse,
         text_list,
         missing_qual,
+        missing_dp,
     ))
 }
 
@@ -298,6 +309,7 @@ fn min_qual_process(
     reverse: bool,
     text_list: bool,
     missing_qual: f32,
+    missing_dp: bool,
     out: &mut String,
 ) {
     let recs: Vec<Rec> = lines
@@ -306,7 +318,6 @@ fn min_qual_process(
         .filter_map(|l| parse_rec(l))
         .collect();
     let n = recs.len();
-    let value = |r: &Rec| r.qual.unwrap_or(missing_qual);
 
     // Symmetric overlap adjacency (upstream `records_overlap`: same
     // chrom and the earlier record's end >= the later record's start).
@@ -349,6 +360,36 @@ fn min_qual_process(
                 }
             }
         }
+        // Per-component overlap value (upstream `mark_expr` `overlap_t.value`).
+        // `--missing DP`: missing QUAL is scaled by coverage using the
+        // highest-QUAL record in the component (`mark_expr_missing_*_`);
+        // the earliest such record's DP is `max_qual_dp`.
+        let (mut max_qual, mut max_qual_dp) = (0.0f32, 0i64);
+        if missing_dp {
+            let mut by_idx = comp.clone();
+            by_idx.sort_unstable();
+            for &v in &by_idx {
+                if let (Some(q), Some(d)) = (recs[v].qual, recs[v].dp)
+                    && max_qual < q
+                {
+                    max_qual = q;
+                    max_qual_dp = d;
+                }
+            }
+        }
+        let value = |v: usize| -> f32 {
+            if let Some(q) = recs[v].qual {
+                return q;
+            }
+            if missing_dp
+                && max_qual_dp != 0
+                && let Some(d) = recs[v].dp
+            {
+                return max_qual * d as f32 / max_qual_dp as f32;
+            }
+            missing_qual
+        };
+
         // Live edge sets within the component.
         use std::collections::BTreeSet;
         let mut edges: std::collections::HashMap<usize, BTreeSet<usize>> = comp
@@ -359,8 +400,8 @@ fn min_qual_process(
         // Process members ascending by (value, original index).
         let mut order = comp.clone();
         order.sort_by(|&a, &b| {
-            value(&recs[a])
-                .partial_cmp(&value(&recs[b]))
+            value(a)
+                .partial_cmp(&value(b))
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.cmp(&b))
         });
@@ -419,6 +460,7 @@ fn process(
     reverse: bool,
     text_list: bool,
     missing_qual: f32,
+    missing_dp: bool,
 ) -> String {
     let lines: Vec<&str> = text.lines().collect();
 
@@ -431,7 +473,15 @@ fn process(
         if !text_list {
             emit_header_append_last(&lines, mark_tag, &mut out);
         }
-        min_qual_process(&lines, mark_tag, reverse, text_list, missing_qual, &mut out);
+        min_qual_process(
+            &lines,
+            mark_tag,
+            reverse,
+            text_list,
+            missing_qual,
+            missing_dp,
+            &mut out,
+        );
         return out;
     }
 
@@ -645,7 +695,7 @@ mod tests {
 
     #[test]
     fn overlap_remove_keeps_non_overlapping() {
-        let out = process(VCF, Mark::Overlap, None, false, false, 0.0);
+        let out = process(VCF, Mark::Overlap, None, false, false, 0.0, false);
         assert_eq!(
             data_lines(&out),
             vec![
@@ -660,7 +710,15 @@ mod tests {
 
     #[test]
     fn overlap_mark_tags_overlapping_sites() {
-        let out = process(VCF, Mark::Overlap, Some("overlap"), false, false, 0.0);
+        let out = process(
+            VCF,
+            Mark::Overlap,
+            Some("overlap"),
+            false,
+            false,
+            0.0,
+            false,
+        );
         let d = data_lines(&out);
         assert_eq!(d[0], "1\t100000\t.\tCC\tG\t.\t.\toverlap");
         assert_eq!(d[1], "1\t100001\t.\tC\tG\t.\t.\toverlap");
@@ -677,7 +735,7 @@ mod tests {
 
     #[test]
     fn overlap_reverse_keeps_only_overlapping() {
-        let out = process(VCF, Mark::Overlap, None, true, false, 0.0);
+        let out = process(VCF, Mark::Overlap, None, true, false, 0.0, false);
         let d = data_lines(&out);
         assert_eq!(
             d,
@@ -692,7 +750,7 @@ mod tests {
 
     #[test]
     fn dup_marks_same_position_only() {
-        let out = process(VCF, Mark::Dup, Some("DUP"), false, false, 0.0);
+        let out = process(VCF, Mark::Dup, Some("DUP"), false, false, 0.0, false);
         let d = data_lines(&out);
         // Different positions are not duplicates even if spans overlap.
         assert_eq!(d[0], "1\t100000\t.\tCC\tG\t.\t.\t.");
@@ -706,7 +764,7 @@ mod tests {
 
     #[test]
     fn text_list_emits_kept_sites() {
-        let out = process(VCF, Mark::Overlap, None, false, true, 0.0);
+        let out = process(VCF, Mark::Overlap, None, false, true, 0.0, false);
         assert_eq!(
             out,
             "1\t789241\n1\t789243\n1\t789243\n1\t790000\n1\t900000\n"
