@@ -1021,7 +1021,7 @@ fn binom_two_sided(a: f64, b: f64, probability: f64) -> f64 {
     (2.0 * cdf).min(1.0)
 }
 
-fn fisher_two_sided(n11: f64, n12: f64, n21: f64, n22: f64) -> f64 {
+pub(crate) fn fisher_two_sided(n11: f64, n12: f64, n21: f64, n22: f64) -> f64 {
     if [n11, n12, n21, n22].iter().any(|value| *value < 0.0) {
         return 0.0;
     }

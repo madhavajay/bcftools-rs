@@ -23,13 +23,16 @@
 //! tags. A general `FuncKind::Expr` fallback evaluates any other
 //! expression through the shared filter engine (`INFO/X` re-split into
 //! numeric lists for the resolver; a `phred(...)` wrapper applied
-//! locally with bcftools' exact `-4.34294481903*ln` constant) —
-//! covering `phred(fisher(INFO/DP4))` / `fisher(INFO/ADF,INFO/ADR)` /
-//! `phred(fisher(FMT/DP4))`.
+//! locally with bcftools' exact `-4.34294481903*ln` constant).
+//! `fisher(...)` is handled by a faithful local port of
+//! `bcftools/filter.c` `func_fisher` (site / per-sample × 1-arg-4-value
+//! / 2-arg / 2×Number=R-with-indices / 2×Number=R-GT-allele branches),
+//! reusing the p-faithful shared `fisher_two_sided` — all six
+//! `fisher.*.out` fixtures pass.
 //!
-//! Deferred (tracked in TODO.md): the allele-aware multi-arg array
-//! `fisher(ADF[0,2],ADR[0,2])` semantics (`fisher.{2,5,6}.out`) and the
-//! mixed per-sample/scalar arithmetic of `fill-tags.func.1.out`.
+//! Deferred (tracked in TODO.md): the mixed per-sample/scalar
+//! arithmetic of `fill-tags.func.1.out`
+//! (`float(FMT/AD[*:0] / ssum(FMT/AD[*]))`).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -458,7 +461,187 @@ fn sample_filter_value(key: &str, raw: &str) -> FilterValue {
 /// `phred(<INNER>)` wrapper is split off and applied locally with
 /// bcftools' exact constant (only the wrapped value goes to the shared
 /// engine). Returns the first numeric scalar.
-fn eval_general(context: &EvalContext, expr: &str, fields: &[String]) -> Option<f64> {
+/// Parse a `[INFO/|FMT/|FORMAT/]NAME[idx,idx,…]` fisher operand into
+/// `(is_info, name, indices)`. `indices` empty ⇒ whole array; a leading
+/// `:` (per-sample) is accepted and ignored (the numeric indices are
+/// the same either way).
+fn parse_fisher_operand(arg: &str) -> Option<(bool, String, Vec<usize>)> {
+    let arg = arg.trim();
+    let (is_info, rest) = if let Some(r) = arg.strip_prefix("INFO/").or(arg.strip_prefix("info/")) {
+        (true, r)
+    } else if let Some(r) = arg
+        .strip_prefix("FORMAT/")
+        .or(arg.strip_prefix("format/"))
+        .or(arg.strip_prefix("FMT/"))
+        .or(arg.strip_prefix("fmt/"))
+    {
+        (false, r)
+    } else {
+        return None;
+    };
+    let (name, idx) = match rest.split_once('[') {
+        Some((n, br)) => {
+            let inside = br.strip_suffix(']')?;
+            let inside = inside.strip_prefix(':').unwrap_or(inside);
+            let idx: Vec<usize> = inside
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().parse::<usize>())
+                .collect::<Result<_, _>>()
+                .ok()?;
+            (n, idx)
+        }
+        None => (rest, Vec::new()),
+    };
+    Some((is_info, name.to_owned(), idx))
+}
+
+/// INFO array values for `name` from the record's INFO column.
+fn info_array(fields: &[String], name: &str) -> Vec<f64> {
+    let info = fields.get(7).map(String::as_str).unwrap_or(".");
+    if info == "." {
+        return Vec::new();
+    }
+    let pfx = format!("{name}=");
+    for kv in info.split(';') {
+        if let Some(v) = kv.strip_prefix(&pfx) {
+            return v.split(',').filter_map(|x| x.parse::<f64>().ok()).collect();
+        }
+    }
+    Vec::new()
+}
+
+/// FORMAT array values for `name` in sample `si`.
+fn fmt_array(fields: &[String], si: usize, name: &str) -> Vec<f64> {
+    let Some(fmt) = fields.get(8) else {
+        return Vec::new();
+    };
+    let Some(k) = fmt.split(':').position(|x| x == name) else {
+        return Vec::new();
+    };
+    fields
+        .get(9 + si)
+        .and_then(|c| c.split(':').nth(k))
+        .map(|f| f.split(',').filter_map(|x| x.parse::<f64>().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// The two GT allele indices of sample `si` (upstream's
+/// `fisher(FORMAT/ADF,FORMAT/ADR)` allele selection).
+fn sample_gt_alleles(fields: &[String], si: usize) -> Option<(usize, usize)> {
+    let fmt = fields.get(8)?;
+    let k = fmt.split(':').position(|x| x == "GT")?;
+    let gt = fields.get(9 + si)?.split(':').nth(k)?;
+    let mut it = gt.split(['/', '|']);
+    let a = it.next()?.parse::<usize>().ok()?;
+    let b = it.next()?.parse::<usize>().ok()?;
+    Some((a, b))
+}
+
+/// Faithful `fisher(...)` per `bcftools/filter.c` `func_fisher`: the
+/// 2×2 differs by site vs per-sample and by 1-arg-4-value /
+/// 2-arg / 2×Number=R-with-indices / 2×Number=R-GT-allele branches.
+/// Returns the two-sided p (the shared `fisher_two_sided` is
+/// p-faithful; only the `phred` constant was off, applied by caller).
+fn fisher_value(argstr: &str, fields: &[String], sample: Option<usize>) -> Option<f64> {
+    // Split args on top-level (bracket depth 0) commas.
+    let mut args: Vec<String> = Vec::new();
+    let (mut cur, mut depth) = (String::new(), 0i32);
+    for c in argstr.chars() {
+        match c {
+            '[' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ']' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => args.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        args.push(cur);
+    }
+
+    let resolve = |is_info: bool, name: &str| -> Vec<f64> {
+        match sample {
+            _ if is_info => info_array(fields, name),
+            Some(si) => fmt_array(fields, si, name),
+            None => Vec::new(),
+        }
+    };
+
+    if args.len() == 1 {
+        let (is_info, name, idx) = parse_fisher_operand(&args[0])?;
+        let arr = resolve(is_info, &name);
+        let v: Vec<f64> = if idx.is_empty() {
+            arr
+        } else {
+            idx.iter()
+                .map(|&i| arr.get(i).copied())
+                .collect::<Option<Vec<f64>>>()?
+        };
+        if v.len() != 4 {
+            return None;
+        }
+        return Some(bcffilter::fisher_two_sided(v[0], v[1], v[2], v[3]));
+    }
+    if args.len() != 2 {
+        return None;
+    }
+    let (ai, an, aidx) = parse_fisher_operand(&args[0])?;
+    let (bi, bn, bidx) = parse_fisher_operand(&args[1])?;
+    let a = resolve(ai, &an);
+    let b = resolve(bi, &bn);
+
+    if !aidx.is_empty() || !bidx.is_empty() {
+        // Explicit indices on both operands.
+        let av: Vec<f64> = aidx
+            .iter()
+            .map(|&i| a.get(i).copied())
+            .collect::<Option<Vec<f64>>>()?;
+        let bv: Vec<f64> = bidx
+            .iter()
+            .map(|&i| b.get(i).copied())
+            .collect::<Option<Vec<f64>>>()?;
+        if av.len() < 2 || bv.len() < 2 {
+            return None;
+        }
+        return Some(if sample.is_none() {
+            // Site: n11=a0 n21=a1 n12=b0 n22=b1 → (n11,n12,n21,n22).
+            bcffilter::fisher_two_sided(av[0], bv[0], av[1], bv[1])
+        } else {
+            // Per-sample explicit indices: n11=a0 n12=a1 n21=b0 n22=b1.
+            bcffilter::fisher_two_sided(av[0], av[1], bv[0], bv[1])
+        });
+    }
+
+    if sample.is_none() {
+        // Site, no indices: take a[0],a[1] / b[0],b[1].
+        if a.len() < 2 || b.len() < 2 {
+            return None;
+        }
+        return Some(bcffilter::fisher_two_sided(a[0], b[0], a[1], b[1]));
+    }
+    // Per-sample, two Number=R tags, no indices: pick the sample's two
+    // GT allele indices.
+    let (i1, i2) = sample_gt_alleles(fields, sample.unwrap())?;
+    Some(bcffilter::fisher_two_sided(
+        *a.get(i1)?,
+        *a.get(i2)?,
+        *b.get(i1)?,
+        *b.get(i2)?,
+    ))
+}
+
+fn eval_general(
+    context: &EvalContext,
+    expr: &str,
+    fields: &[String],
+    sample: Option<usize>,
+) -> Option<f64> {
     let (inner, phred) = match expr
         .strip_prefix("phred(")
         .or_else(|| expr.strip_prefix("PHRED("))
@@ -466,7 +649,18 @@ fn eval_general(context: &EvalContext, expr: &str, fields: &[String]) -> Option<
         Some(r) if expr.ends_with(')') => (&r[..r.len() - 1], true),
         _ => (expr, false),
     };
-    let v = bcffilter::eval_expression_with(inner.trim(), context, |name, si| {
+    let inner = inner.trim();
+    // Faithful local `fisher(...)` (the shared engine's generic 2-arg
+    // FISHER element-mapping differs from `bcftools/filter.c`).
+    if let Some(rest) = inner
+        .strip_prefix("fisher(")
+        .or(inner.strip_prefix("FISHER("))
+        && inner.ends_with(')')
+        && let Some(p) = fisher_value(&rest[..rest.len() - 1], fields, sample)
+    {
+        return Some(if phred { -PHRED_C * p.ln() } else { p });
+    }
+    let v = bcffilter::eval_expression_with(inner, context, |name, si| {
         if si.is_some() {
             return None;
         }
@@ -516,7 +710,7 @@ fn eval_record_number(cols: &[&str], expr: &str) -> Option<f64> {
     } else {
         EvalContext::new()
     };
-    eval_general(&context, expr, &fields)
+    eval_general(&context, expr, &fields, None)
 }
 
 /// Per-sample evaluation of a general expression (FORMAT result).
@@ -535,7 +729,7 @@ fn eval_sample_number(cols: &[&str], si: usize, expr: &str) -> Option<f64> {
             })
             .collect::<Vec<_>>(),
     );
-    eval_general(&context, expr, &fields)
+    eval_general(&context, expr, &fields, Some(si))
 }
 
 /// Evaluate a per-sample filter expression for sample `si` (the
@@ -1468,7 +1662,8 @@ fn fmt_float(x: f64) -> String {
     // the f32 value, so round through f32 before formatting.
     let x = x as f32 as f64;
     if x == 0.0 {
-        return "0".to_owned();
+        // C `%g` preserves the sign of zero (`phred(-0.0)` → `-0`).
+        return if x.is_sign_negative() { "-0" } else { "0" }.to_owned();
     }
     if !x.is_finite() {
         return if x.is_nan() {

@@ -263,4 +263,22 @@ fn func_phred_fisher() {
         &["-t", "FMT/FT:1=phred(fisher(FMT/DP4))"],
         "fisher.4.out",
     );
+    check(
+        "fisher.vcf",
+        &["-t", "FT:1=phred(fisher(INFO/ADF[0,2],INFO/ADR[0,2]))"],
+        "fisher.2.out",
+    );
+    check(
+        "fisher.vcf",
+        &["-t", "FMT/FT:1=phred(fisher(FORMAT/ADF,FORMAT/ADR))"],
+        "fisher.5.out",
+    );
+    check(
+        "fisher.vcf",
+        &[
+            "-t",
+            "FMT/FT:1=phred(fisher(FORMAT/ADF[:0,1],FORMAT/ADR[:0,1]))",
+        ],
+        "fisher.6.out",
+    );
 }
