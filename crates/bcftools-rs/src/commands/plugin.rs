@@ -446,6 +446,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_format: Option<String> = None;
     let mut sv_regions: Option<String> = None;
     let mut sv_duplicate = false;
+    let mut sv_all_fields: Option<String> = None;
+    let mut sv_header_level: u8 = 0;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -668,6 +670,26 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-d" | "--duplicate" if plugin_name.as_deref() == Some("split-vep") => {
                 sv_duplicate = true;
+            }
+            "-A" | "--all-fields" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_all_fields = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--all-fields=")
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_all_fields = Some(raw["--all-fields=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-A")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_all_fields = Some(raw[2..].to_owned());
+            }
+            "-H" | "--print-header" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_header_level = 1;
+            }
+            "-HH" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_header_level = 2;
             }
             // getopt-style attached short option: `-f'%POS\t...'`.
             _ if raw.starts_with("-f")
@@ -1745,10 +1767,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             crate::commands::plugins::split_vep::Options {
                 columns: sv_columns.as_deref().unwrap_or(""),
                 select: sv_select.as_deref().unwrap_or("all:any"),
-                annotation: sv_annotation.as_deref().unwrap_or("CSQ"),
+                annotation: sv_annotation.as_deref(),
                 format: sv_format.as_deref(),
                 regions: sv_regions.as_deref(),
                 duplicate: sv_duplicate,
+                all_fields: sv_all_fields.as_deref(),
+                header_level: sv_header_level,
             },
         )?;
         write_plugin_output(out.as_bytes(), output.as_deref(), output_kind)?;

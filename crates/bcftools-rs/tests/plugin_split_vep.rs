@@ -252,3 +252,66 @@ fn format_region_and_duplicate() {
         "split-vep.10.out",
     );
 }
+
+#[test]
+fn format_raw_tag_expansion_and_headers() {
+    // `%CSQ` + `-A tab`: expand to every subfield (comma-joined across
+    // transcripts when not `-d`).
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-A", "tab"],
+        r"%POS\t%CSQ\n",
+        "split-vep.11.out",
+    );
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-A", "tab", "-d"],
+        r"%POS\t%CSQ\n",
+        "split-vep.12.out",
+    );
+    // `-H` / `-HH` header rows.
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-A", "tab", "-d", "-H"],
+        r"%POS\t%CSQ\n",
+        "split-vep.12.2.out",
+    );
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-A", "tab", "-d", "-HH"],
+        r"%POS\t%CSQ\n",
+        "split-vep.12.3.out",
+    );
+    // Custom `-A` delimiter (the POS→block separator stays the format's
+    // own TAB; the delimiter joins the expanded subfields).
+    check_f(
+        "split-vep.vcf",
+        &["-t", "1:14464", "-A", "@@@", "-d", "-H"],
+        r"%POS\t%CSQ\n",
+        "split-vep.12.4.out",
+    );
+}
+
+#[test]
+fn format_bcsq_tag_autodetect() {
+    // `-a BCSQ`, and tag auto-detection (no `-a`: CSQ absent → BCSQ).
+    check_f(
+        "split-vep.4.vcf",
+        &["-a", "BCSQ", "-A", "tab", "-d"],
+        r"%POS\t%BCSQ\n",
+        "split-vep.13.out",
+    );
+    check_f(
+        "split-vep.4.vcf",
+        &["-A", "tab", "-d"],
+        r"%POS\t%BCSQ\n",
+        "split-vep.13.out",
+    );
+    // `-s ::worst` collapses the `&`-joined Consequence subfield.
+    check_f(
+        "split-vep.4.vcf",
+        &["-A", "tab", "-d", "-s", "::worst"],
+        r"%POS\t%BCSQ\n",
+        "split-vep.13.1.out",
+    );
+}
