@@ -429,6 +429,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut split_groups_file: Option<String> = None;
     let mut split_keep_tags: Option<String> = None;
     let mut split_filter: Option<(SplitFilterMode, String)> = None;
+    // gvcfz options.
+    let mut gvcfz_group: Option<String> = None;
+    let mut gvcfz_trim_alts = false;
+    let mut gvcfz_filter: Option<(bool, String)> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -566,6 +570,31 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     SplitFilterMode::Exclude,
                     raw[2..].to_owned(),
                 )?;
+            }
+            // gvcfz: -g/--group-by EXPR, -a/--trim-alt-alleles, -i/-e EXPR.
+            "-g" | "--group-by" if plugin_name.as_deref() == Some("gvcfz") => {
+                gvcfz_group = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--group-by=") && plugin_name.as_deref() == Some("gvcfz") => {
+                gvcfz_group = Some(raw["--group-by=".len()..].to_owned());
+            }
+            _ if raw.starts_with("-g")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("gvcfz") =>
+            {
+                gvcfz_group = Some(raw[2..].to_owned());
+            }
+            "-a" | "--trim-alt-alleles" if plugin_name.as_deref() == Some("gvcfz") => {
+                gvcfz_trim_alts = true;
+            }
+            "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("gvcfz") => {
+                let exclude = raw == "-e" || raw == "--exclude";
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("gvcfz requires an expression after -i/-e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                gvcfz_filter = Some((exclude, expr));
             }
             "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
                 frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1557,6 +1586,28 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                     expr,
                 }),
         )?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "gvcfz" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(group_by) = gvcfz_group.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Missing the -g option",
+            ));
+        };
+        let vcf = crate::commands::plugins::gvcfz::run(
+            Path::new(&input),
+            crate::commands::plugins::gvcfz::Options {
+                group_by,
+                trim_alts: gvcfz_trim_alts,
+                site_filter: gvcfz_filter
+                    .as_ref()
+                    .map(|(exclude, expr)| (*exclude, expr.as_str())),
+            },
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 
