@@ -715,13 +715,19 @@ fn compares_gt_special(lhs: &Expr, rhs: &Expr) -> bool {
 }
 
 fn expr_is_gt_identifier(expr: &Expr) -> bool {
-    let Expr::Identifier(name) = expr else {
-        return false;
-    };
-    name.strip_prefix("FMT/")
-        .or_else(|| name.strip_prefix("FORMAT/"))
-        .unwrap_or(name)
-        .eq_ignore_ascii_case("GT")
+    match expr {
+        Expr::Identifier(name) => name
+            .strip_prefix("FMT/")
+            .or_else(|| name.strip_prefix("FORMAT/"))
+            .unwrap_or(name)
+            .eq_ignore_ascii_case("GT"),
+        // A subscripted genotype (`GT[0]`, `FMT/GT[*]`) still carries the
+        // GT-class comparison semantics for the selected sample(s);
+        // upstream's `filter.c` treats the indexed FORMAT/GT the same as
+        // bare GT when the RHS is a class literal.
+        Expr::Index { expr, .. } => expr_is_gt_identifier(expr),
+        _ => false,
+    }
 }
 
 fn expr_is_gt_special_literal(expr: &Expr) -> bool {
