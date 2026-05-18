@@ -201,6 +201,16 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-5` added the `+split-vep` first slice —
+  the `-c FIELD[,FIELD...] -s TR:CSQ[:PRN]` path that annotates
+  `INFO/<FIELD>` from a VEP `CSQ` (or `-a TAG`) string. Ports the
+  upstream severity scale (`default_severity()`), `csq_to_severity`
+  (lowercase, `&`-split, first scale-order substring token), transcript
+  selection (`all`/`worst`/`primary`=`CANONICAL=YES`/`pick`=`PICK=1`/
+  `mane`/`FIELD<OP>VALUE`), the `+`/`-`/`=` CSQ severity threshold, and
+  `PRN` (`all`/`worst`). Validated byte-for-byte through our own
+  `bcftools query` against `split-vep.{1,1.1,2,2.1}.out`. The `-f`
+  format engine, `-d`, `[%SAMPLE]`, `-t`, `-g`, `-S` remain deferred.
 - 2026-05-18: `progress/batch-4` added `+remove-overlaps --missing DP`
   (per-component max-QUAL/DP coverage scaling for missing QUAL,
   upstream `mark_expr_missing_*_`), completing `+remove-overlaps` —
@@ -853,7 +863,7 @@ Latest landed progress:
   37 filter, 2 `+gvcfz`, 5 `+setGT` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
-- Remaining tasks (as of PR #238, `220d8e4`; 36/41 plugins; suite fully
+- Remaining tasks (as of `progress/batch-5`; 37/41 plugins; suite fully
   green, no `#[ignore]` markers). The easy filter-free plugin slices are
   exhausted — everything below is a substantial, multi-PR effort. In
   rough priority order:
@@ -869,9 +879,14 @@ Latest landed progress:
      resolution, and per-sample eval restricted to the subset — the
      per-sample `EvalContext` fold carries **no sample identity**
      today, so sample name/index must be threaded through.
-  2. **`+split-vep`** (74k — heaviest plugin): VEP/CSQ field extraction
-     + `-c`/`-f`/`-i` expression filtering. Depends on (1) and the
-     `convert` `-f` formatter.
+  2. **`+split-vep` — remaining paths** (74k — heaviest plugin). The
+     `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation path landed in
+     `progress/batch-5` (`split-vep.{1,1.1,2,2.1}.out` pass). Still to
+     port: the `-f FMT` format-string engine (its own `convert`-like
+     formatter — `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`), `-d`
+     duplicate output, per-sample `[%SAMPLE]` blocks + `-i'GT=...'`
+     (depends on (1)), `-t`/`-T` regions, `-g`/`--gene-list`, `-A`
+     column-type/`-H` header rows, and `-S` custom severity file.
   3. **`+fill-tags`** (1084 LOC — heaviest tag-fixer): INFO/FORMAT tag
      computation (AC/AN/AF/MAF/HWE/ExcHet/…), `-t`/`-S` group support.
   4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
@@ -937,7 +952,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 36 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT` |
+| `plugin` | registry + 37 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep` (`-c`/`-s` slice) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -948,7 +963,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-36 of 41 plugin record-processing implementations done (see Wave F);
+37 of 41 plugin record-processing implementations done (see Wave F);
 9 remain.
 
 Current whole-project estimate:
@@ -1898,7 +1913,12 @@ Grouped roughly by complexity / shared dependencies:
 - [ ] **Reference fixers** — `+fixref`, `+fixploidy`.
 - [ ] **Subset/split** — `+split` (30k), `+scatter`, `+GTsubset`, `+GTisec`, `+isecGT`.
 - [ ] **Stats / reports** — `+smpl-stats`, `+indel-stats`, `+trio-stats`, `+variant-distance`, `+ad-bias`, `+af-dist`, `+check-ploidy`, `+check-sparsity`, `+vcf2table` (46k), `+vrfs` (38k).
-- [ ] **VEP-aware** — `+split-vep` (74k — the heaviest plugin by far).
+- [~] **VEP-aware** — `+split-vep` (74k — the heaviest plugin by far).
+      First slice landed: the `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation
+      path (severity scale, `csq_to_severity`, transcript selection, CSQ
+      threshold, PRN) — `split-vep.{1,1.1,2,2.1}.out` pass through our
+      `bcftools query`. Remaining: `-f` format engine, `-d`, `[%SAMPLE]`,
+      `-t`/`-T`, `-g`, `-A`/`-H`, `-S`.
 - [ ] **Trio / pedigree** — `+mendelian2` (37k), `+trio-dnm3` (105k — the single largest plugin; has its own `test/trio-dnm3/test.sh` fixture), `+trio-switch-rate`, `+parental-origin`.
 - [ ] **Sample inference** — `+guess-ploidy`, `+contrast`.
 - [ ] **Misc** — `+color-chrs` (curses-style colored output), `+prune`.

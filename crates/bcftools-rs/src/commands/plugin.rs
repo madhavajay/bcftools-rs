@@ -439,6 +439,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut setgt_target: Option<String> = None;
     let mut setgt_new: Option<String> = None;
     let mut setgt_filter: Option<(bool, String)> = None;
+    // split-vep options.
+    let mut sv_columns: Option<String> = None;
+    let mut sv_select: Option<String> = None;
+    let mut sv_annotation: Option<String> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -629,6 +633,28 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("setGT") => {
                 setgt_filter = Some((true, raw["--exclude=".len()..].to_owned()));
+            }
+            // split-vep: -c/--columns LIST, -s/--select TR:CSQ:PRN,
+            // -a/--annotation TAG.
+            "-c" | "--columns" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_columns = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-s" | "--select" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_select = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-a" | "--annotation" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_annotation = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--columns=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_columns = Some(raw["--columns=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--select=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_select = Some(raw["--select=".len()..].to_owned());
+            }
+            _ if raw.starts_with("--annotation=")
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_annotation = Some(raw["--annotation=".len()..].to_owned());
             }
             "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
                 frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1669,6 +1695,26 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 site_filter: gvcfz_filter
                     .as_ref()
                     .map(|(exclude, expr)| (*exclude, expr.as_str())),
+            },
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "split-vep" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(columns) = sv_columns.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "split-vep in this slice requires -c/--columns (the -f format-string output is not yet ported)",
+            ));
+        };
+        let vcf = crate::commands::plugins::split_vep::run(
+            Path::new(&input),
+            crate::commands::plugins::split_vep::Options {
+                columns,
+                select: sv_select.as_deref().unwrap_or("all:any"),
+                annotation: sv_annotation.as_deref().unwrap_or("CSQ"),
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;

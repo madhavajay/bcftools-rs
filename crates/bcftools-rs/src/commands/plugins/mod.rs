@@ -35,6 +35,7 @@ pub mod scatter;
 pub mod setgt;
 pub mod smpl_stats;
 pub mod split;
+pub mod split_vep;
 pub mod tag2tag;
 pub mod trio_stats;
 pub mod trio_switch_rate;
