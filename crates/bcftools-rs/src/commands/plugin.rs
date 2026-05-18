@@ -396,6 +396,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut prune_annot: Option<String> = None;
     let mut prune_max: Option<String> = None;
     let mut prune_set_filter: Option<String> = None;
+    let mut prune_filter: Option<(bool, String)> = None;
     // contrast options.
     let mut contrast_annots: Option<String> = None;
     let mut contrast_control: Option<String> = None;
@@ -907,7 +908,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 let _ = iter.next();
             }
             "-i" | "--include" | "-e" | "--exclude"
-                if !matches!(plugin_name.as_deref(), Some("missing2ref" | "contrast")) =>
+                if !matches!(
+                    plugin_name.as_deref(),
+                    Some("missing2ref" | "contrast" | "prune")
+                ) =>
             {
                 if plugin_name.as_deref() == Some("mendelian2") {
                     let mode = if raw == "-i" || raw == "--include" {
@@ -1241,6 +1245,21 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-f" | "--set-filter" if plugin_name.as_deref() == Some("prune") => {
                 prune_set_filter = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("prune") => {
+                let exclude = raw == "-e" || raw == "--exclude";
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("prune requires an expression after -i/-e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                prune_filter = Some((exclude, expr));
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("prune") => {
+                prune_filter = Some((false, raw["--include=".len()..].to_owned()));
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("prune") => {
+                prune_filter = Some((true, raw["--exclude=".len()..].to_owned()));
             }
             "-f" | "--fasta-ref" if plugin_name.as_deref() == Some("fixref") => {
                 fixref_fasta = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1985,7 +2004,16 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         };
         let mode = Mode::parse(nsites_mode.as_deref().unwrap_or("maxAF"))
             .map_err(|e| io::Error::new(io::ErrorKind::Unsupported, e))?;
-        let vcf = prune::run(Path::new(&input), win, n, mode, prune_af_tag.as_deref())?;
+        let vcf = prune::run(
+            Path::new(&input),
+            win,
+            n,
+            mode,
+            prune_af_tag.as_deref(),
+            prune_filter
+                .as_ref()
+                .map(|(exclude, expr)| (*exclude, expr.as_str())),
+        )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
