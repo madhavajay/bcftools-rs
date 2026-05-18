@@ -201,6 +201,15 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/vcf2table-vep` added the `+vcf2table` second
+  slice: `# VEP/CSQ` and `# BCSQ` tables (column names from each tag's
+  `##INFO=<...,Description="...Format: a|b|c">` header, per-record
+  all-empty-column pruning via `TableRemoveEmptyColumns`) plus the
+  `-x`/`--hide` option for the rendered tables and per-genotype class
+  filters. Byte-for-byte parity with `vcf2table.2.out`
+  (`split-vep.2 -- --hide 'INFO,URL'`) while keeping `vcf2table.1.out`
+  parity; +2 unit and +1 integration test. Both upstream `vcf2table`
+  fixtures now pass.
 - 2026-05-18: `progress/vcf2table` added the `+vcf2table` plugin (first
   slice, filter-free): renders each record as the `<<<`/`>>>` delimited
   ASCII box-table block (`# Variant`, `# INFO`, `# GENOTYPE TYPES`,
@@ -1568,25 +1577,27 @@ Current local slice:
   metric/tag selection options.
 
 - [x] `+vcf2table` (`crates/bcftools-rs/src/commands/plugins/vcf2table.rs`):
-  filter-free first slice of `vcf2table.c`. Renders each record as the
+  filter-free port of `vcf2table.c`. Renders each record as the
   `<<<`/`>>>` delimited ASCII box-table block (`# Variant`, `# INFO`,
-  `# GENOTYPE TYPES`, `# GENOTYPES`) on the non-tty `ascii=1` path
-  (upstream forces `ascii=1` whenever stdout is not a tty, which always
-  holds for captured output). Includes the upstream `findContigs`
-  genome-build detection (GRCh37/38/Rotavirus prefix, else none), the
-  `INFO` IDX rule (1-based index emitted only for multi-value tags), flag
-  INFO skipped, `vcf_format`-style padding of short FORMAT samples with
-  `.`, `end`/`length` rows for spanning variants, and the genotype-type
-  classification + count/% table. Numeric IDX/% cells use the shared
-  HTSlib `kputd` formatter. Byte-for-byte parity with `vcf2table.1.out`
-  (input `merge.4.b`) through the `test_vcf_plugin` harness shape; 5 unit
-  tests + 1 integration test in
-  `crates/bcftools-rs/tests/plugin_vcf2table.rs`. Remaining: VEP/CSQ,
-  BCSQ, ANN/SNPEFF, LOF, SpliceAI and HYPERLINKS tables; the
-  Unicode/color (tty) rendering path; genome-build hyperlink generation;
-  the `-x`/`--hide` option (its fixture `vcf2table.2.out` needs the
-  VEP/BCSQ tables); and full `vcf_format` float round-trip for arbitrary
-  INFO/FORMAT values.
+  `# VEP/CSQ`, `# BCSQ`, `# GENOTYPE TYPES`, `# GENOTYPES`) on the non-tty
+  `ascii=1` path (upstream forces `ascii=1` whenever stdout is not a tty,
+  which always holds for captured output). Includes the upstream
+  `findContigs` genome-build detection (GRCh37/38/Rotavirus prefix, else
+  none), the `INFO` IDX rule (1-based index emitted only for multi-value
+  tags), flag INFO skipped, `vcf_format`-style padding of short FORMAT
+  samples with `.`, `end`/`length` rows for spanning variants, the
+  genotype-type classification + count/% table, VEP/CSQ and BCSQ tables
+  (column names from each tag's `Format:` header description, per-record
+  all-empty-column pruning), and the `-x`/`--hide` option (rendered
+  tables + per-genotype class filters). Numeric IDX/% cells use the
+  shared HTSlib `kputd` formatter. Byte-for-byte parity with
+  `vcf2table.1.out` (input `merge.4.b`) and `vcf2table.2.out`
+  (`split-vep.2 -- --hide 'INFO,URL'`) through the `test_vcf_plugin`
+  harness shape; 7 unit tests + 2 integration tests in
+  `crates/bcftools-rs/tests/plugin_vcf2table.rs`. Remaining: ANN/SNPEFF,
+  LOF, SpliceAI and HYPERLINKS tables; the Unicode/color (tty) rendering
+  path; genome-build hyperlink generation; and full `vcf_format` float
+  round-trip for arbitrary INFO/FORMAT values.
 
 Grouped roughly by complexity / shared dependencies:
 

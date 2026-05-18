@@ -359,6 +359,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // Plugin-specific options consumed for the plugins ported so far.
     let mut direction: Option<String> = None;
     let mut tag_name: Option<String> = None;
+    let mut v2t_hide: Option<String> = None;
     let mut use_missing = false;
     let mut past_separator = false;
     let mut replace = false;
@@ -501,6 +502,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-p" | "--prefix" if plugin_name.as_deref() == Some("scatter") => {
                 sc_prefix = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            // vcf2table: -x|--hide LIST (comma-separated feature names).
+            "-x" | "--hide" if plugin_name.as_deref() == Some("vcf2table") => {
+                v2t_hide = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--hide=") && plugin_name.as_deref() == Some("vcf2table") => {
+                v2t_hide = Some(raw["--hide=".len()..].to_owned());
             }
             // split: -S FILE, -G FILE, -k LIST, -i/-e EXPR.
             "-S" | "--samples-file" if plugin_name.as_deref() == Some("split") => {
@@ -1402,7 +1410,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
 
     if plugin.name == "vcf2table" {
         let input = input.unwrap_or_else(|| "-".to_owned());
-        let report = crate::commands::plugins::vcf2table::run(Path::new(&input))?;
+        let report =
+            crate::commands::plugins::vcf2table::run(Path::new(&input), v2t_hide.as_deref())?;
         io::stdout().lock().write_all(report.as_bytes())?;
         return Ok(ExitCode::SUCCESS);
     }
