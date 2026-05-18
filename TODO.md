@@ -702,7 +702,8 @@ Latest landed progress:
 - 2026-05-16: PR #65 (`progress/fill-from-fasta`, merge commit
   `c4cc5cd`) landed `+fill-from-fasta` (`-c REF` modes) — REF fill
   from a FASTA reference, byte-for-byte against `ref.out` / `aa.2.out`
-  (the `-i` `aa.out` row deferred to the filter engine).
+  (the `-c AA -h -i 'TYPE="snp"'` `aa.out` row also passes — it was
+  later un-deferred once the shared filter engine landed `TYPE`).
 - 2026-05-16: PR #64 (`progress/gtisec`, merge commit `68cc665`)
   landed `+GTisec` — genotype-intersection subset counts in
   banker's-sequence order, byte-for-byte against
@@ -858,10 +859,11 @@ Latest landed progress:
   5. **Deferred rows on landed plugins**: `gvcfz.2.out`
      (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     (`+setGT` is now fully complete — all `setGT*.out` fixtures pass),
-     `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
-     `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
-     'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
+     (`+setGT` fully complete; `+fill-from-fasta aa.out` and the
+     `+split.1.4` `GT[0]` subscript also already done — were stale
+     deferred notes), `+remove-overlaps -m 'min(QUAL)'`, `+prune
+     -i/-e`, `+smpl-stats`/`+indel-stats -i/-e` (verify against current
+     code before assuming still blocked).
   6. **Unstarted subcommands** (each a major port): `call`
      (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
      `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
