@@ -201,6 +201,15 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/setgt-subset` added `+setGT` `-t q`
+  `TAG[@file]` sample-subset subscripts: the subscripts are stripped
+  from the `-i` expression and the referenced sample-name files read,
+  so a sample is selected only when it is in the subset *and* passes
+  the cleaned per-sample expression; comma FORMAT vectors (e.g. AD) are
+  bound as numeric lists so the engine's `binom(AD)` works. Byte-for-byte
+  against `setGT.2.out` (`-t q -n . -i 'GT[@samples.txt]="het"'`) and
+  `setGT.3.out` (`… & binom(AD[@samples.txt])<0.1`); +2 integration
+  tests. Both deferred `setGT.{2,3}.out` rows now pass.
 - 2026-05-18: `progress/setgt-query` added the `+setGT` `-t q` target:
   per-sample filter selection through the shared filter engine
   (single-sample `EvalContext` + `record_lookup`, the `+split`/`+gvcfz`
@@ -812,16 +821,17 @@ Latest landed progress:
   exhausted — everything below is a substantial, multi-PR effort. In
   rough priority order:
 
-  1. **Filter-engine `@file` sample-subset subscript** (next concrete
-     slice). `@` is currently a hard lex error (`src/filter.rs` lexer;
-     `lex("@").is_err()` test). Add: `@`+path lexing, parser for
-     `IDENT[@path]` (sample-subset `FormatIndex` variant), sample-name
-     list resolution, and per-sample eval restricted to the subset —
-     the per-sample `EvalContext` fold carries **no sample identity**
-     today, so sample name/index must be threaded through. Unblocks
-     `setGT.{2,3}.out` (`-t q -i 'GT[@samples.txt]="het"'`,
-     `… & binom(AD[@…])<0.1`; `binom()` already exists at
-     `src/filter.rs` ~998) and is also needed by `+split-vep`.
+  1. **Engine-level `@file` sample-subset subscript** (next concrete
+     slice). `@` is still a hard lex error in `src/filter.rs`
+     (`lex("@").is_err()` test). `+setGT -t q` already handles
+     `TAG[@file]` *at the plugin level* (strip + per-sample membership;
+     `setGT.{2,3}.out` pass), but a general engine-level form is still
+     needed by `+split-vep` and any subcommand `-i/-e` using
+     `TAG[@file]`. Add: `@`+path lexing, parser for `IDENT[@path]`
+     (sample-subset `FormatIndex` variant), sample-name list
+     resolution, and per-sample eval restricted to the subset — the
+     per-sample `EvalContext` fold carries **no sample identity**
+     today, so sample name/index must be threaded through.
   2. **`+split-vep`** (74k — heaviest plugin): VEP/CSQ field extraction
      + `-c`/`-f`/`-i` expression filtering. Depends on (1) and the
      `convert` `-f` formatter.
@@ -834,7 +844,8 @@ Latest landed progress:
   5. **Deferred rows on landed plugins**: `gvcfz.2.out`
      (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     `setGT.2.1.out`/`setGT.3.{1..6}.out` (`-n m/M/c:GT/i/p/u/X`),
+     `setGT.2.1.out`/`setGT.3.{1..6}.out` (`-n m/M/c:GT/i/p/u/X`;
+     `setGT.{2,3}.out` `GT[@file]` now done),
      `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
      `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
      'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
@@ -1783,16 +1794,21 @@ Current local slice:
   and `-n .` (missing); per-sample GT rewrite replaces every allele of
   a targeted genotype, ploidy preserved and result unphased, mirroring
   upstream `set_gt`. Emits the upstream `Filled N alleles` stderr line.
-  Byte-for-byte against `missing2ref.out`
-  (`+setGT --no-version -- -t . -n 0`) and `setGT.1.out`
-  (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`); 6 unit + 2
-  integration tests in `crates/bcftools-rs/tests/plugin_setgt.rs`.
-  Remaining: `-t q` with `-e` (per-sample exclude invert), the
-  sample-subset `GT[@file]` / `binom()` filter forms
-  (`setGT.{2,3}.out`), `-n m`/`-n M` major/minor allele inference,
-  custom `-n c:GT` (incl. `m`/`M`/`X` alleles; `setGT.3.{1..6}.out`,
-  `setGT.2.1.out`), `-n i`/`p`/`u` phase ops, `-n X` (VAF), `-t X`
-  random, the `binom()` target, BCF output, and `-W` indexing.
+  `-t q` also supports `TAG[@file]` sample-subset subscripts (stripped
+  from the expression; referenced sample files read; sample selected
+  only when in the subset *and* passing the cleaned per-sample
+  expression), with comma FORMAT vectors bound as numeric lists so
+  `binom(AD)` works. Byte-for-byte against `missing2ref.out`
+  (`-t . -n 0`), `setGT.1.out`
+  (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`), `setGT.2.out`
+  (`-t q -n . -i 'GT[@samples.txt]="het"'`), and `setGT.3.out`
+  (`… & binom(AD[@samples.txt])<0.1`); 6 unit + 4 integration tests in
+  `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining: `-t q` with
+  `-e` (per-sample exclude invert), `-n m`/`-n M` major/minor allele
+  inference, custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
+  `setGT.3.{1..6}.out`, `setGT.2.1.out`), `-n i`/`p`/`u` phase ops,
+  `-n X` (VAF), `-t X` random, the `binom()` target, BCF output, and
+  `-W` indexing.
 
 Grouped roughly by complexity / shared dependencies:
 

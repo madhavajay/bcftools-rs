@@ -109,3 +109,54 @@ fn setgt_query_per_sample_filter_matches_upstream_fixture() {
         .collect();
     assert_eq!(filtered, expected);
 }
+
+fn run_setgt_subset(out_fixture: &str, expr: &str) {
+    ensure_binary_built();
+    let input = fixture_path("setGT.2.vcf");
+    let samples = fixture_path("setGT.samples.txt");
+    let expr = expr.replace("{S}", samples.to_str().unwrap());
+    let expected = std::fs::read_to_string(fixture_path(out_fixture)).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+setGT",
+            "--no-version",
+            input.to_str().unwrap(),
+            "--",
+            "-t",
+            "q",
+            "-n",
+            ".",
+            "-i",
+            &expr,
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "+setGT -t q [@file] failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected);
+}
+
+#[test]
+fn setgt_query_sample_subset_het_matches_upstream_fixture() {
+    // in=>'setGT.2', out=>'setGT.2.out',
+    // args=>'-- -t q -n . -i \'GT[@.../setGT.samples.txt]="het"\''.
+    run_setgt_subset("setGT.2.out", r#"GT[@{S}]="het""#);
+}
+
+#[test]
+fn setgt_query_sample_subset_het_binom_matches_upstream_fixture() {
+    // in=>'setGT.2', out=>'setGT.3.out', adds & binom(AD[@file])<0.1.
+    run_setgt_subset("setGT.3.out", r#"GT[@{S}]="het" & binom(AD[@{S}])<0.1"#);
+}
