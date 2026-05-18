@@ -771,9 +771,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`a0298ee`) (337 lib unit tests plus
-  per-command and per-plugin integration suites; 10 `+split` integration
-  tests).
+  latest merged commit on `main` (`09a4591`) (337 lib unit tests plus
+  per-command and per-plugin integration suites; 11 `+split` integration
+  tests, 37 filter integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
 - Next local-only queue:
@@ -821,6 +821,16 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post FORMAT/GT-subscript GT-class fix, PR #229 landed; no
+  open PR): approximately 50-53% complete toward the full stated goal.
+  Movement since the prior estimate taught the shared filter engine that
+  a subscripted FORMAT/GT (`Expr::Index` over a GT identifier) carries
+  the same GT-class comparison semantics as bare `GT`, un-deferring the
+  last `+split` common-filter row `split.1.4.out` (`-i 'GT[0]="alt"'`);
+  all upstream `+split` filter rows now pass (11 `+split` + 37 filter
+  integration tests). The estimate band is unchanged: the dominant
+  remaining weight is the large subcommands and the broader filter
+  engine. 34 of 41 plugins done.
 - 2026-05-18 (post `+split` `GT="alt"` filter rows, PR #227 landed; no
   open PR): approximately 50-53% complete toward the full stated goal.
   Movement since the prior estimate un-defers the `+split`
