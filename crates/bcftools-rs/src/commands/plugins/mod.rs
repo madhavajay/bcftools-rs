@@ -39,3 +39,4 @@ pub mod trio_switch_rate;
 pub mod variant_distance;
 pub mod variantkey;
 pub mod variantkey_hex;
+pub mod vcf2table;
