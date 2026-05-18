@@ -10,9 +10,11 @@
 //! port `calc_hwe` (Wigginton 2005). Tags are written in the upstream
 //! fixed order and floats use C `%g`/6 over the f32-stored value.
 //!
-//! Deferred (tracked in TODO.md): `END`/`TYPE`, `FORMAT/VAF`/`VAF1`
-//! values (their `##FORMAT` headers are emitted under `all`), and the
-//! `TAG:Num=EXPR` function engine
+//! `FORMAT/VAF`+`VAF1` are computed from `FORMAT/AD` (upstream
+//! `process_vaf_vaf1`), independent of `GT`.
+//!
+//! Deferred (tracked in TODO.md): `END`/`TYPE` and the `TAG:Num=EXPR`
+//! function engine
 //! (`sum`/`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/`phred`/…).
 
 use std::collections::HashMap;
@@ -39,6 +41,8 @@ enum Tag {
     AcHemi,
     Hwe,
     ExcHet,
+    Vaf,
+    Vaf1,
 }
 
 /// Fixed upstream `process_fmt` write order: the `F_MISSING` func is
@@ -76,7 +80,10 @@ const ALL_TAGS: &[Tag] = &[
 ];
 
 fn parse_tag(name: &str) -> Result<Tag, String> {
-    let n = name.strip_prefix("INFO/").unwrap_or(name);
+    let n = name
+        .strip_prefix("INFO/")
+        .or_else(|| name.strip_prefix("FORMAT/"))
+        .unwrap_or(name);
     match n.to_ascii_uppercase().as_str() {
         "NS" => Ok(Tag::Ns),
         "AN" => Ok(Tag::An),
@@ -89,6 +96,8 @@ fn parse_tag(name: &str) -> Result<Tag, String> {
         "HWE" => Ok(Tag::Hwe),
         "EXCHET" => Ok(Tag::ExcHet),
         "F_MISSING" => Ok(Tag::FMissing),
+        "VAF" => Ok(Tag::Vaf),
+        "VAF1" => Ok(Tag::Vaf1),
         _ => Err(format!(
             "the tag \"{name}\" is not yet ported (this slice supports \
              AN,AC,AC_Hom,AC_Het,AC_Hemi,AF,MAF,NS,HWE,ExcHet,F_MISSING,all)"
@@ -145,6 +154,16 @@ impl Tag {
             Tag::ExcHet => (
                 "ExcHet",
                 "##INFO=<ID=ExcHet{S},Number=A,Type=Float,Description=\"Test excess heterozygosity{IN}; 1=good, 0=bad\">",
+            ),
+            // FORMAT tags — handled by the dedicated VAF step, never via
+            // the INFO `HDR_ORDER`/`WRITE_ORDER` paths.
+            Tag::Vaf => (
+                "VAF",
+                "##FORMAT=<ID=VAF,Number=A,Type=Float,Description=\"The fraction of reads with alternate allele (nALT/nSumAll)\">",
+            ),
+            Tag::Vaf1 => (
+                "VAF1",
+                "##FORMAT=<ID=VAF1,Number=1,Type=Float,Description=\"The fraction of reads with alternate alleles (nSumALT/nSumAll)\">",
             ),
         }
     }
@@ -222,6 +241,11 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             io::ErrorKind::InvalidInput,
             "fill-tags: empty tag list",
         ));
+    }
+    let want_vaf = want.contains(&Tag::Vaf);
+    let want_vaf1 = want.contains(&Tag::Vaf1);
+    if want_vaf || want_vaf1 {
+        vaf_hdr = true;
     }
 
     // `-S` population map: name -> comma list; preserve first-seen order.
@@ -349,6 +373,8 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             &sample_to_pops,
             &want,
             opts.drop_missing,
+            want_vaf,
+            want_vaf1,
             &mut hwe_buf,
             &mut gt_warned,
         ));
@@ -376,6 +402,8 @@ fn process_record(
     sample_to_pops: &[Vec<usize>],
     want: &[Tag],
     drop_missing: bool,
+    want_vaf: bool,
+    want_vaf1: bool,
     hwe_buf: &mut Vec<f64>,
     gt_warned: &mut bool,
 ) -> String {
@@ -389,225 +417,316 @@ fn process_record(
         1 + f[4].split(',').count()
     };
 
-    // Locate GT in FORMAT.
+    // Locate GT in FORMAT. The genotype-derived tags need it, but the
+    // FORMAT/VAF step (below) does not, so a GT-less record still flows
+    // through (upstream `process_vaf_vaf1` is independent of GT).
     let gt_idx = f[8].split(':').position(|k| k == "GT");
-    let Some(gt_idx) = gt_idx else {
-        if !*gt_warned {
-            *gt_warned = true;
-        }
-        return line.to_owned();
-    };
-
-    // Per-pop, per-allele counts + ns.
-    let mut counts: Vec<Vec<Counts>> = pops
-        .iter()
-        .map(|_| vec![Counts::default(); n_allele])
-        .collect();
-    let mut ns: Vec<i64> = vec![0; pops.len()];
-    // F_MISSING bookkeeping: samples mapped to a pop, and those whose
-    // GT contains any missing allele (`GT="mis"`).
-    let mut npop_smpl: Vec<i64> = vec![0; pops.len()];
-    let mut nmiss: Vec<i64> = vec![0; pops.len()];
-
-    for (si, sample) in f[9..].iter().enumerate() {
-        let gt = sample.split(':').nth(gt_idx).unwrap_or(".");
-        let smpl_pops = sample_to_pops.get(si).map(Vec::as_slice).unwrap_or(&[]);
-        let mut distinct: Vec<usize> = Vec::new();
-        let mut nals = 0usize;
-        let mut islots = 0usize;
-        let mut any_missing_allele = false;
-        for tok in gt.split(['/', '|']) {
-            islots += 1;
-            if tok == "." || tok.is_empty() {
-                any_missing_allele = true;
-                continue; // missing allele
-            }
-            let Ok(idx) = tok.parse::<usize>() else {
-                continue;
-            };
-            if idx >= n_allele {
-                continue;
-            }
-            nals += 1;
-            if !distinct.contains(&idx) {
-                distinct.push(idx);
-            }
-        }
-        for &pi in smpl_pops {
-            npop_smpl[pi] += 1;
-            if any_missing_allele {
-                nmiss[pi] += 1;
-            }
-        }
-        if nals == 0 {
-            continue; // missing genotype
-        }
-        let is_hom = distinct.len() == 1;
-        // Upstream classification (BRANCH_INT): a partially-missing GT is
-        // hemizygous, or — under `-d` — counted via `nac` (`is_half`);
-        // a single-allele genotype is hemizygous.
-        let (is_half, is_hemi) = if nals != islots {
-            if drop_missing {
-                (true, false)
-            } else {
-                (false, true)
-            }
-        } else if nals == 1 {
-            (false, true)
-        } else {
-            (false, false)
-        };
-
-        for &pi in smpl_pops {
-            for &a in &distinct {
-                let c = &mut counts[pi][a];
-                if is_half {
-                    c.nac += 1;
-                } else if !is_hom {
-                    c.nhet += 1;
-                } else if !is_hemi {
-                    c.nhom += 2;
-                } else {
-                    c.nhemi += 1;
-                }
-            }
-            ns[pi] += 1;
-        }
+    if gt_idx.is_none() && !*gt_warned {
+        *gt_warned = true;
     }
 
-    // Build INFO key=value additions in the fixed write order.
     let mut info = f[7].to_owned();
-    for &tag in WRITE_ORDER {
-        if !want.contains(&tag) {
-            continue;
+    // Genotype-derived INFO tags: only when FORMAT/GT is present.
+    if let Some(gt_idx) = gt_idx {
+        // Per-pop, per-allele counts + ns.
+        let mut counts: Vec<Vec<Counts>> = pops
+            .iter()
+            .map(|_| vec![Counts::default(); n_allele])
+            .collect();
+        let mut ns: Vec<i64> = vec![0; pops.len()];
+        // F_MISSING bookkeeping: samples mapped to a pop, and those whose
+        // GT contains any missing allele (`GT="mis"`).
+        let mut npop_smpl: Vec<i64> = vec![0; pops.len()];
+        let mut nmiss: Vec<i64> = vec![0; pops.len()];
+
+        for (si, sample) in f[9..].iter().enumerate() {
+            let gt = sample.split(':').nth(gt_idx).unwrap_or(".");
+            let smpl_pops = sample_to_pops.get(si).map(Vec::as_slice).unwrap_or(&[]);
+            let mut distinct: Vec<usize> = Vec::new();
+            let mut nals = 0usize;
+            let mut islots = 0usize;
+            let mut any_missing_allele = false;
+            for tok in gt.split(['/', '|']) {
+                islots += 1;
+                if tok == "." || tok.is_empty() {
+                    any_missing_allele = true;
+                    continue; // missing allele
+                }
+                let Ok(idx) = tok.parse::<usize>() else {
+                    continue;
+                };
+                if idx >= n_allele {
+                    continue;
+                }
+                nals += 1;
+                if !distinct.contains(&idx) {
+                    distinct.push(idx);
+                }
+            }
+            for &pi in smpl_pops {
+                npop_smpl[pi] += 1;
+                if any_missing_allele {
+                    nmiss[pi] += 1;
+                }
+            }
+            if nals == 0 {
+                continue; // missing genotype
+            }
+            let is_hom = distinct.len() == 1;
+            // Upstream classification (BRANCH_INT): a partially-missing GT is
+            // hemizygous, or — under `-d` — counted via `nac` (`is_half`);
+            // a single-allele genotype is hemizygous.
+            let (is_half, is_hemi) = if nals != islots {
+                if drop_missing {
+                    (true, false)
+                } else {
+                    (false, true)
+                }
+            } else if nals == 1 {
+                (false, true)
+            } else {
+                (false, false)
+            };
+
+            for &pi in smpl_pops {
+                for &a in &distinct {
+                    let c = &mut counts[pi][a];
+                    if is_half {
+                        c.nac += 1;
+                    } else if !is_hom {
+                        c.nhet += 1;
+                    } else if !is_hemi {
+                        c.nhom += 2;
+                    } else {
+                        c.nhemi += 1;
+                    }
+                }
+                ns[pi] += 1;
+            }
         }
-        for (pi, p) in pops.iter().enumerate() {
-            let c = &counts[pi];
-            let total = |a: usize| c[a].nhet + c[a].nhom + c[a].nhemi + c[a].nac;
-            match tag {
-                Tag::FMissing => {
-                    let denom = npop_smpl[pi];
-                    let v = if denom == 0 {
-                        0.0
-                    } else {
-                        nmiss[pi] as f64 / denom as f64
-                    };
-                    set_info(&mut info, &format!("F_MISSING{}", p.suffix), &fmt_float(v));
-                }
-                Tag::Hwe | Tag::ExcHet => {
-                    let key = format!(
-                        "{}{}",
-                        if tag == Tag::Hwe { "HWE" } else { "ExcHet" },
-                        p.suffix
-                    );
-                    if n_allele <= 1 {
-                        del_info(&mut info, &key);
-                        continue;
-                    }
-                    let mut nref_tot = c[0].nhom;
-                    for ci in c.iter().take(n_allele) {
-                        nref_tot += ci.nhet;
-                    }
-                    let vals: Vec<String> = (1..n_allele)
-                        .map(|j| {
-                            let nref = nref_tot - c[j].nhet;
-                            let nalt = c[j].nhet + c[j].nhom;
-                            let nhet = c[j].nhet;
-                            let (hwe, exc) = if nref > 0 && nalt > 0 {
-                                calc_hwe(nref, nalt, nhet, hwe_buf)
-                            } else {
-                                (1.0, 1.0)
-                            };
-                            fmt_float(if tag == Tag::Hwe { hwe } else { exc })
-                        })
-                        .collect();
-                    set_info(&mut info, &key, &vals.join(","));
-                }
-                Tag::Ns => {
-                    set_info(&mut info, &format!("NS{}", p.suffix), &ns[pi].to_string());
-                }
-                Tag::An => {
-                    let an: i64 = (0..n_allele).map(total).sum();
-                    set_info(&mut info, &format!("AN{}", p.suffix), &an.to_string());
-                }
-                // Number=A / Number=1-second tags: when there is no ALT
-                // allele upstream's `bcf_update_info_*` is called with 0
-                // values, which deletes the tag.
-                Tag::Ac => {
-                    let key = format!("AC{}", p.suffix);
-                    if n_allele > 1 {
-                        let v: Vec<String> = (1..n_allele).map(|a| total(a).to_string()).collect();
-                        set_info(&mut info, &key, &v.join(","));
-                    } else {
-                        del_info(&mut info, &key);
-                    }
-                }
-                Tag::AcHet => {
-                    let key = format!("AC_Het{}", p.suffix);
-                    if n_allele > 1 {
-                        let v: Vec<String> = (1..n_allele).map(|a| c[a].nhet.to_string()).collect();
-                        set_info(&mut info, &key, &v.join(","));
-                    } else {
-                        del_info(&mut info, &key);
-                    }
-                }
-                Tag::AcHom => {
-                    let key = format!("AC_Hom{}", p.suffix);
-                    if n_allele > 1 {
-                        let v: Vec<String> = (1..n_allele).map(|a| c[a].nhom.to_string()).collect();
-                        set_info(&mut info, &key, &v.join(","));
-                    } else {
-                        del_info(&mut info, &key);
-                    }
-                }
-                Tag::AcHemi => {
-                    let key = format!("AC_Hemi{}", p.suffix);
-                    if n_allele > 1 {
-                        let v: Vec<String> =
-                            (1..n_allele).map(|a| c[a].nhemi.to_string()).collect();
-                        set_info(&mut info, &key, &v.join(","));
-                    } else {
-                        del_info(&mut info, &key);
-                    }
-                }
-                Tag::Af | Tag::Maf => {
-                    let key = format!("{}{}", if tag == Tag::Af { "AF" } else { "MAF" }, p.suffix);
-                    if n_allele <= 1 {
-                        del_info(&mut info, &key);
-                        continue;
-                    }
-                    let mut fr: Vec<f64> = (0..n_allele).map(|a| total(a) as f64).collect();
-                    let an: f64 = fr.iter().sum();
-                    let missing = an == 0.0;
-                    if !missing {
-                        for x in &mut fr {
-                            *x /= an;
-                        }
-                    }
-                    if tag == Tag::Af {
-                        let v: Vec<String> = fr[1..]
-                            .iter()
-                            .map(|&x| if missing { ".".into() } else { fmt_float(x) })
-                            .collect();
-                        set_info(&mut info, &key, &v.join(","));
-                    } else {
-                        // MAF: second most common allele frequency.
-                        if !missing {
-                            fr.sort_by(|a, b| b.partial_cmp(a).unwrap());
-                        }
-                        let maf = if missing {
-                            ".".into()
+
+        // Build INFO key=value additions in the fixed write order.
+        for &tag in WRITE_ORDER {
+            if !want.contains(&tag) {
+                continue;
+            }
+            for (pi, p) in pops.iter().enumerate() {
+                let c = &counts[pi];
+                let total = |a: usize| c[a].nhet + c[a].nhom + c[a].nhemi + c[a].nac;
+                match tag {
+                    Tag::FMissing => {
+                        let denom = npop_smpl[pi];
+                        let v = if denom == 0 {
+                            0.0
                         } else {
-                            fmt_float(fr[1])
+                            nmiss[pi] as f64 / denom as f64
                         };
-                        set_info(&mut info, &key, &maf);
+                        set_info(&mut info, &format!("F_MISSING{}", p.suffix), &fmt_float(v));
                     }
+                    Tag::Hwe | Tag::ExcHet => {
+                        let key = format!(
+                            "{}{}",
+                            if tag == Tag::Hwe { "HWE" } else { "ExcHet" },
+                            p.suffix
+                        );
+                        if n_allele <= 1 {
+                            del_info(&mut info, &key);
+                            continue;
+                        }
+                        let mut nref_tot = c[0].nhom;
+                        for ci in c.iter().take(n_allele) {
+                            nref_tot += ci.nhet;
+                        }
+                        let vals: Vec<String> = (1..n_allele)
+                            .map(|j| {
+                                let nref = nref_tot - c[j].nhet;
+                                let nalt = c[j].nhet + c[j].nhom;
+                                let nhet = c[j].nhet;
+                                let (hwe, exc) = if nref > 0 && nalt > 0 {
+                                    calc_hwe(nref, nalt, nhet, hwe_buf)
+                                } else {
+                                    (1.0, 1.0)
+                                };
+                                fmt_float(if tag == Tag::Hwe { hwe } else { exc })
+                            })
+                            .collect();
+                        set_info(&mut info, &key, &vals.join(","));
+                    }
+                    Tag::Ns => {
+                        set_info(&mut info, &format!("NS{}", p.suffix), &ns[pi].to_string());
+                    }
+                    Tag::An => {
+                        let an: i64 = (0..n_allele).map(total).sum();
+                        set_info(&mut info, &format!("AN{}", p.suffix), &an.to_string());
+                    }
+                    // Number=A / Number=1-second tags: when there is no ALT
+                    // allele upstream's `bcf_update_info_*` is called with 0
+                    // values, which deletes the tag.
+                    Tag::Ac => {
+                        let key = format!("AC{}", p.suffix);
+                        if n_allele > 1 {
+                            let v: Vec<String> =
+                                (1..n_allele).map(|a| total(a).to_string()).collect();
+                            set_info(&mut info, &key, &v.join(","));
+                        } else {
+                            del_info(&mut info, &key);
+                        }
+                    }
+                    Tag::AcHet => {
+                        let key = format!("AC_Het{}", p.suffix);
+                        if n_allele > 1 {
+                            let v: Vec<String> =
+                                (1..n_allele).map(|a| c[a].nhet.to_string()).collect();
+                            set_info(&mut info, &key, &v.join(","));
+                        } else {
+                            del_info(&mut info, &key);
+                        }
+                    }
+                    Tag::AcHom => {
+                        let key = format!("AC_Hom{}", p.suffix);
+                        if n_allele > 1 {
+                            let v: Vec<String> =
+                                (1..n_allele).map(|a| c[a].nhom.to_string()).collect();
+                            set_info(&mut info, &key, &v.join(","));
+                        } else {
+                            del_info(&mut info, &key);
+                        }
+                    }
+                    Tag::AcHemi => {
+                        let key = format!("AC_Hemi{}", p.suffix);
+                        if n_allele > 1 {
+                            let v: Vec<String> =
+                                (1..n_allele).map(|a| c[a].nhemi.to_string()).collect();
+                            set_info(&mut info, &key, &v.join(","));
+                        } else {
+                            del_info(&mut info, &key);
+                        }
+                    }
+                    Tag::Af | Tag::Maf => {
+                        let key =
+                            format!("{}{}", if tag == Tag::Af { "AF" } else { "MAF" }, p.suffix);
+                        if n_allele <= 1 {
+                            del_info(&mut info, &key);
+                            continue;
+                        }
+                        let mut fr: Vec<f64> = (0..n_allele).map(|a| total(a) as f64).collect();
+                        let an: f64 = fr.iter().sum();
+                        let missing = an == 0.0;
+                        if !missing {
+                            for x in &mut fr {
+                                *x /= an;
+                            }
+                        }
+                        if tag == Tag::Af {
+                            let v: Vec<String> = fr[1..]
+                                .iter()
+                                .map(|&x| if missing { ".".into() } else { fmt_float(x) })
+                                .collect();
+                            set_info(&mut info, &key, &v.join(","));
+                        } else {
+                            // MAF: second most common allele frequency.
+                            if !missing {
+                                fr.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                            }
+                            let maf = if missing {
+                                ".".into()
+                            } else {
+                                fmt_float(fr[1])
+                            };
+                            set_info(&mut info, &key, &maf);
+                        }
+                    }
+                    // FORMAT tags — emitted by the dedicated VAF step below,
+                    // never through the per-pop INFO loop.
+                    Tag::Vaf | Tag::Vaf1 => {}
                 }
             }
         }
-    }
+    } // end `if let Some(gt_idx)` (genotype-derived INFO tags)
 
     f[7] = &info;
+
+    // FORMAT/VAF + VAF1 (upstream `process_vaf_vaf1`): per sample,
+    // `VAF[j] = AD[j+1]/sum(AD)` (Number=A) and `VAF1 = (sum-AD[0])/sum`
+    // (Number=1). Added only when at least one sample has a complete
+    // numeric `FORMAT/AD`; otherwise the columns are omitted.
+    let new_format: String;
+    let new_samples: Vec<String>;
+    if (want_vaf || want_vaf1)
+        && n_allele > 1
+        && let Some(ad_idx) = f[8].split(':').position(|k| k == "AD")
+    {
+        {
+            let mut sample_vaf: Vec<(String, String)> = Vec::new();
+            let mut any_valid = false;
+            for col in &f[9..] {
+                let ad = col.split(':').nth(ad_idx).unwrap_or(".");
+                let parsed: Option<Vec<i64>> = if ad == "." || ad.is_empty() {
+                    None
+                } else {
+                    let v: Vec<&str> = ad.split(',').collect();
+                    if v.len() == n_allele && v.iter().all(|x| x.parse::<i64>().is_ok()) {
+                        Some(v.iter().map(|x| x.parse().unwrap()).collect())
+                    } else {
+                        None
+                    }
+                };
+                match parsed {
+                    Some(ad) => {
+                        any_valid = true;
+                        let sum: i64 = ad.iter().sum();
+                        let vaf = (1..n_allele)
+                            .map(|j| {
+                                if sum != 0 {
+                                    fmt_float(ad[j] as f64 / sum as f64)
+                                } else {
+                                    "0".to_owned()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let vaf1 = if sum != 0 {
+                            fmt_float((sum - ad[0]) as f64 / sum as f64)
+                        } else {
+                            "0".to_owned()
+                        };
+                        sample_vaf.push((vaf, vaf1));
+                    }
+                    None => sample_vaf.push((".".to_owned(), ".".to_owned())),
+                }
+            }
+            if any_valid {
+                let mut fmt = f[8].to_owned();
+                if want_vaf {
+                    fmt.push_str(":VAF");
+                }
+                if want_vaf1 {
+                    fmt.push_str(":VAF1");
+                }
+                new_format = fmt;
+                new_samples = f[9..]
+                    .iter()
+                    .zip(sample_vaf.iter())
+                    .map(|(col, (vaf, vaf1))| {
+                        let mut s = (*col).to_owned();
+                        if want_vaf {
+                            s.push(':');
+                            s.push_str(vaf);
+                        }
+                        if want_vaf1 {
+                            s.push(':');
+                            s.push_str(vaf1);
+                        }
+                        s
+                    })
+                    .collect();
+                f[8] = &new_format;
+                for (col, ns) in f[9..].iter_mut().zip(new_samples.iter()) {
+                    *col = ns.as_str();
+                }
+            }
+        }
+    }
 
     // bcftools re-serializes the record; a lone `.` sample column
     // expands to one `.` per FORMAT subfield.

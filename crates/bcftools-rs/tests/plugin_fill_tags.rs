@@ -101,3 +101,13 @@ fn default_all_tag_set_with_hwe_exchet() {
 fn drop_missing_flag() {
     check("fill-tags-hemi.vcf", &["-d"], "fill-tags-hemi.2.out");
 }
+
+#[test]
+fn format_vaf_vaf1() {
+    // FORMAT/VAF + VAF1 from FORMAT/AD, no GT in the record.
+    check(
+        "fill-tags-VAF.vcf",
+        &["-t", "VAF,VAF1"],
+        "fill-tags-VAF.out",
+    );
+}
