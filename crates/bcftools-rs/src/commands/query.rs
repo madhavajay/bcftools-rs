@@ -50,14 +50,14 @@ struct Args {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RegionFilterSpec {
+pub(crate) struct RegionFilterSpec {
     raw: String,
     is_file: bool,
     exclude: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FilterSpec {
+pub(crate) struct FilterSpec {
     raw: String,
     exclude: bool,
 }
@@ -312,12 +312,26 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-struct QueryFormatOptions<'a> {
-    sample_list: Option<&'a str>,
-    sample_list_is_file: bool,
-    header_level: u8,
-    region_spec: Option<&'a RegionFilterSpec>,
-    filter_spec: Option<&'a FilterSpec>,
+pub(crate) struct QueryFormatOptions<'a> {
+    pub(crate) sample_list: Option<&'a str>,
+    pub(crate) sample_list_is_file: bool,
+    pub(crate) header_level: u8,
+    pub(crate) region_spec: Option<&'a RegionFilterSpec>,
+    pub(crate) filter_spec: Option<&'a FilterSpec>,
+}
+
+impl QueryFormatOptions<'_> {
+    /// Plain `-f` rendering with no sample/region/`-i`-`-e` restriction —
+    /// used by in-process callers (e.g. `+split-vep -f`).
+    pub(crate) fn plain() -> Self {
+        QueryFormatOptions {
+            sample_list: None,
+            sample_list_is_file: false,
+            header_level: 0,
+            region_spec: None,
+            filter_spec: None,
+        }
+    }
 }
 
 fn query_format_from_path<W: Write>(
@@ -345,7 +359,7 @@ fn vcf_text_from_path(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
-fn query_format_text<W: Write>(
+pub(crate) fn query_format_text<W: Write>(
     text: &str,
     format: &str,
     options: &QueryFormatOptions<'_>,

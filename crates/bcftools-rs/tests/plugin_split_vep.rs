@@ -119,3 +119,117 @@ fn worst_missense_threshold_prn_worst_query_filter() {
         "split-vep.2.1.out",
     );
 }
+
+/// `+split-vep <in> [extra args] -f <fmt>` — the text-output path.
+/// Upstream `test_vcf_plugin` compares after `grep -v ^##bcftools_`,
+/// which is a no-op for `-f` rendered text.
+fn check_f(input: &str, extra: &[&str], fmt: &str, expected_fixture: &str) {
+    ensure_binary_built();
+    let input = fixture_path(input);
+    let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+    let mut full = vec!["+split-vep", input.to_str().unwrap()];
+    full.extend_from_slice(extra);
+    let farg = format!("-f{fmt}");
+    full.push(&farg);
+    let out = Command::new(bin_path())
+        .args(&full)
+        .output()
+        .expect("spawn +split-vep -f");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{full:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        expected,
+        "mismatch for {full:?}"
+    );
+}
+
+#[test]
+fn format_worst_missense() {
+    check_f(
+        "split-vep.vcf",
+        &["-s", "worst:missense+"],
+        r"%POS\t%Consequence\n",
+        "split-vep.2.out",
+    );
+    check_f(
+        "split-vep.vcf",
+        &["-s", "worst:missense+:worst"],
+        r"%POS\t%Consequence\n",
+        "split-vep.2.1.out",
+    );
+}
+
+#[test]
+fn format_primary_missense() {
+    check_f(
+        "split-vep.vcf",
+        &["-s", "primary:missense+"],
+        r"%POS\t%Consequence\n",
+        "split-vep.3.out",
+    );
+    check_f(
+        "split-vep.vcf",
+        &["-s", "primary:missense+:worst"],
+        r"%POS\t%Consequence\n",
+        "split-vep.3.1.out",
+    );
+    // No CSQ field referenced: nannot==0, severity-pass gate only.
+    check_f(
+        "split-vep.vcf",
+        &["-s", "primary:missense+"],
+        r"%POS\n",
+        "split-vep.4.out",
+    );
+}
+
+#[test]
+fn format_csq_subfield_vs_real_info() {
+    // `%AF` resolves to the CSQ subfield (rows with empty AF dropped).
+    check_f(
+        "split-vep.2.vcf",
+        &["-s", "worst"],
+        r"%POS\t%AF\n",
+        "split-vep.5.out",
+    );
+    // `-a BCSQ` has no `AF` subfield → `%AF` falls back to real INFO/AF.
+    check_f(
+        "split-vep.2.vcf",
+        &["-s", "worst", "-a", "BCSQ"],
+        r"%POS\t%AF\n",
+        "split-vep.6.out",
+    );
+    // `%INFO/AF` is always the real INFO tag, never the CSQ subfield.
+    check_f(
+        "split-vep.2.vcf",
+        &["-s", "worst"],
+        r"%POS\t%INFO/AF\n",
+        "split-vep.6.out",
+    );
+    check_f(
+        "split-vep.2.vcf",
+        &["-s", "worst", "-a", "BCSQ"],
+        r"%POS\t%INFO/AF\n",
+        "split-vep.6.out",
+    );
+}
+
+#[test]
+fn format_worst_unfiltered() {
+    check_f(
+        "split-vep.3.vcf",
+        &["-s", "worst"],
+        r"%POS\t%Consequence\n",
+        "split-vep.7.out",
+    );
+    check_f(
+        "split-vep.3.vcf",
+        &["-s", "worst::worst"],
+        r"%POS\t%Consequence\n",
+        "split-vep.7.1.out",
+    );
+}
