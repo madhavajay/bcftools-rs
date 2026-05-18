@@ -160,3 +160,40 @@ fn setgt_query_sample_subset_het_binom_matches_upstream_fixture() {
     // in=>'setGT.2', out=>'setGT.3.out', adds & binom(AD[@file])<0.1.
     run_setgt_subset("setGT.3.out", r#"GT[@{S}]="het" & binom(AD[@{S}])<0.1"#);
 }
+
+#[test]
+fn setgt_invert_phase_matches_upstream_fixture() {
+    // Upstream row: in=>'setGT.2', out=>'setGT.2.1.out',
+    // args=>'-- -t a -n i' (invert allele order, separator preserved).
+    ensure_binary_built();
+    let input = fixture_path("setGT.2.vcf");
+    let expected = std::fs::read_to_string(fixture_path("setGT.2.1.out")).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "+setGT",
+            "--no-version",
+            input.to_str().unwrap(),
+            "--",
+            "-t",
+            "a",
+            "-n",
+            "i",
+        ])
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "+setGT -t a -n i failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected);
+}

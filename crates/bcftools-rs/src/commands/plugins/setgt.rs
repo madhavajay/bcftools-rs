@@ -15,10 +15,15 @@
 //! upstream `GT[@file]="het"` / `binom(AD[@file])` semantics; comma
 //! FORMAT vectors are bound as numeric lists so `binom(AD)` works).
 //!
+//! New-genotype modes also include `-n i` (invert allele order,
+//! separator preserved, diploid only), `-n p` (phase: all separators
+//! `|`), and `-n u` (unphase: all `/`, alleles sorted ascending),
+//! mirroring upstream `invert_phase_gt` / `phase_gt` / `unphase_gt`.
+//!
 //! Deferred to later slices (tracked in TODO.md): `-t q` with `-e`
 //! (per-sample exclude invert), `-t X` random, `-n` major/minor allele
-//! inference (`m`/`M`), custom `c:GT`, `-n i/p/u` phase ops, `-n X`
-//! (VAF), and the `binom()` *target* (`-t binom`).
+//! inference (`m`/`M`), custom `c:GT`, `-n X` (VAF), and the `binom()`
+//! *target* (`-t binom`).
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -43,6 +48,12 @@ struct TgtMask {
 enum NewGt {
     Ref,
     Missing,
+    /// `i` — invert allele order (diploid only), separator preserved.
+    Invert,
+    /// `p` — phase: every separator becomes `|`.
+    Phase,
+    /// `u` — unphase: every separator becomes `/`, alleles sorted.
+    Unphase,
 }
 
 /// Which genotypes `-t` targets.
@@ -81,6 +92,12 @@ fn parse_target(spec: &str) -> Option<Target> {
 }
 
 fn parse_new(spec: &str) -> Option<NewGt> {
+    match spec {
+        "i" => return Some(NewGt::Invert),
+        "p" => return Some(NewGt::Phase),
+        "u" => return Some(NewGt::Unphase),
+        _ => {}
+    }
     // Upstream: any '.' in the arg => GT_MISSING; "0" => GT_REF.
     if spec.contains('.') {
         return Some(NewGt::Missing);
@@ -233,17 +250,65 @@ fn mask_targets(gt: &str, tgt: TgtMask) -> bool {
 /// Upstream `set_gt`: replace every allele with the new allele, ploidy
 /// preserved, output unphased. Updates the changed-allele counter.
 fn rewrite_allele(gt: &str, new: NewGt, nchanged: &mut u64) -> String {
-    let alleles: Vec<&str> = gt.split(['/', '|']).collect();
+    // Alleles plus the separators preceding alleles 1..n (the VCF phase
+    // markers); `set_gt` modes ignore separators (always unphased),
+    // phase modes preserve/rewrite them.
+    let mut alleles: Vec<String> = Vec::new();
+    let mut seps: Vec<char> = Vec::new();
+    let mut cur = String::new();
+    for c in gt.chars() {
+        if c == '/' || c == '|' {
+            alleles.push(std::mem::take(&mut cur));
+            seps.push(c);
+        } else {
+            cur.push(c);
+        }
+    }
+    alleles.push(cur);
     let ploidy = alleles.len().max(1);
-    let new_allele = match new {
-        NewGt::Ref => "0",
-        NewGt::Missing => ".",
+
+    let rebuilt = match new {
+        NewGt::Ref | NewGt::Missing => {
+            let a = if matches!(new, NewGt::Ref) { "0" } else { "." };
+            vec![a; ploidy].join("/")
+        }
+        NewGt::Invert => {
+            // Upstream `invert_phase_gt`: diploid only; swap the two
+            // alleles, keep the separator (= allele[1]'s phase).
+            if alleles.len() != 2 {
+                gt.to_owned()
+            } else {
+                format!("{}{}{}", alleles[1], seps[0], alleles[0])
+            }
+        }
+        NewGt::Phase => join_with(&alleles, '|'),
+        NewGt::Unphase => {
+            let mut sorted = alleles.clone();
+            sorted.sort_by_key(|a| allele_key(a));
+            join_with(&sorted, '/')
+        }
     };
-    let rebuilt = vec![new_allele; ploidy].join("/");
     if rebuilt != gt {
-        *nchanged += alleles.iter().filter(|a| **a != new_allele).count() as u64;
+        *nchanged += ploidy as u64;
     }
     rebuilt
+}
+
+/// Sort key for unphase: missing (`.`) sorts first, then numeric
+/// ascending (mirrors upstream insertion-sort on the bcf-encoded GT).
+fn allele_key(a: &str) -> (u8, i64) {
+    match a.parse::<i64>() {
+        Ok(n) => (1, n),
+        Err(_) => (0, 0),
+    }
+}
+
+fn join_with(alleles: &[String], sep: char) -> String {
+    alleles
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(&sep.to_string())
 }
 
 /// Evaluate the `-i` expression for sample `si` (upstream `-t q`
@@ -434,5 +499,21 @@ mod tests {
         let expr = r#"GT~"." && FMT/DP=30 && GQ=150"#;
         assert!(sample_passes(&fields, 0, expr).unwrap());
         assert!(!sample_passes(&fields, 1, expr).unwrap());
+    }
+
+    #[test]
+    fn invert_phase_unphase_modes() {
+        let mut c = 0;
+        // invert: diploid only, separator preserved.
+        assert_eq!(rewrite_allele("0|1", NewGt::Invert, &mut c), "1|0");
+        assert_eq!(rewrite_allele("1|0", NewGt::Invert, &mut c), "0|1");
+        assert_eq!(rewrite_allele("0/1", NewGt::Invert, &mut c), "1/0");
+        assert_eq!(rewrite_allele("0|0", NewGt::Invert, &mut c), "0|0");
+        assert_eq!(rewrite_allele("1", NewGt::Invert, &mut c), "1"); // haploid
+        // phase: all separators -> '|'.
+        assert_eq!(rewrite_allele("0/1", NewGt::Phase, &mut c), "0|1");
+        // unphase: '/' separators + alleles sorted ascending.
+        assert_eq!(rewrite_allele("1|0", NewGt::Unphase, &mut c), "0/1");
+        assert_eq!(rewrite_allele("1|1", NewGt::Unphase, &mut c), "1/1");
     }
 }
