@@ -146,11 +146,24 @@ fn split_groups_file() {
 }
 
 // Upstream `test_plugin_split` rows that exercise common `-i` record
-// filtering through the shared filter engine with the `GT="alt"` class
-// literal, previously deferred while the engine landed. The
-// `GT[0]="alt"` per-sample-subscript row (`split.1.4.out`) stays
-// deferred: subscripted FORMAT access in the per-output projected
-// context is not yet resolved by the shared engine.
+// filtering through the shared filter engine: the `GT="alt"` class
+// literal and the `GT[0]="alt"` per-sample subscript (subscripted
+// FORMAT/GT carries the same GT-class semantics as bare GT).
+#[test]
+fn split_samples_file_with_gt0_alt_include() {
+    check(
+        "split.1.vcf",
+        &[
+            "-S",
+            fixture_path("split.smpl.1.3.txt").to_str().unwrap(),
+            "-i",
+            r#"GT[0]="alt""#,
+        ],
+        "inc14",
+        "split.1.4.out",
+    );
+}
+
 #[test]
 fn split_samples_file_with_gt_alt_include() {
     check(
