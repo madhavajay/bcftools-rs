@@ -1,5 +1,7 @@
 # bcftools-rs
 
+[![CI](https://github.com/madhavajay/bcftools-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/madhavajay/bcftools-rs/actions/workflows/ci.yml)
+
 `bcftools-rs` is a pure-Rust port of [`bcftools`](https://github.com/samtools/bcftools).
 The goal is full subcommand and plugin parity with the upstream C program,
 verified against the upstream `test/test.pl` suite plus Rust-native unit and
