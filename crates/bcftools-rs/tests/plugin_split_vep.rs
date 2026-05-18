@@ -315,3 +315,16 @@ fn format_bcsq_tag_autodetect() {
         "split-vep.13.1.out",
     );
 }
+
+#[test]
+fn format_per_sample_block_with_filter() {
+    // Per-sample `[%SAMPLE]` block + `-i 'GT="alt"'` — the split-vep
+    // filter is handed to the query engine, which also drives per-sample
+    // inclusion.
+    check_f(
+        "split-vep.3.vcf",
+        &["-s", "worst", "-i", r#"GT="alt""#],
+        r"[%POS\t%SAMPLE\t%GT\t%Consequence\n]",
+        "split-vep.8.out",
+    );
+}
