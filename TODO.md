@@ -201,6 +201,19 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/vcf2table` added the `+vcf2table` plugin (first
+  slice, filter-free): renders each record as the `<<<`/`>>>` delimited
+  ASCII box-table block (`# Variant`, `# INFO`, `# GENOTYPE TYPES`,
+  `# GENOTYPES`) on the non-tty `ascii=1` path, with upstream genome-build
+  detection, the `INFO` IDX rule (1-based index only for multi-value
+  tags), `vcf_format`-style padding of short FORMAT samples with `.`, and
+  the genotype-type classification/counting. The numeric IDX/% cells use
+  the shared HTSlib `kputd` formatter. Byte-for-byte parity with
+  `vcf2table.1.out` (input `merge.4.b`) via the upstream
+  `test_vcf_plugin` harness shape; 5 unit + 1 integration test. Remaining:
+  VEP/CSQ, BCSQ, ANN/SNPEFF, LOF, SpliceAI, HYPERLINKS tables, the
+  Unicode/color (tty) path, build hyperlink generation, and the
+  `-x`/`--hide` option (its fixture `vcf2table.2.out` needs VEP/BCSQ).
 - 2026-05-18: `progress/impute-info` added the `+impute-info` plugin
   (filter-free): the IMPUTE2 `INFO/INFO` info score computed from
   `FORMAT/GP` biallelic-diploid genotype probabilities, with per-sample
@@ -768,7 +781,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 33 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info` |
+| `plugin` | registry + 33 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -779,8 +792,8 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-33 of 41 plugin record-processing implementations done (see Wave F);
-12 remain.
+34 of 41 plugin record-processing implementations done (see Wave F);
+11 remain.
 
 Current whole-project estimate:
 
@@ -1090,7 +1103,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 8 remaining unimplemented plugins and many still-open plugin
+dump). The 7 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1544,6 +1557,27 @@ Current local slice:
   in `crates/bcftools-rs/tests/plugin_impute_info.rs`. Remaining: BCF
   output, `-Ou` piping, and the (commented-out upstream) `-i`/`-t`
   metric/tag selection options.
+
+- [x] `+vcf2table` (`crates/bcftools-rs/src/commands/plugins/vcf2table.rs`):
+  filter-free first slice of `vcf2table.c`. Renders each record as the
+  `<<<`/`>>>` delimited ASCII box-table block (`# Variant`, `# INFO`,
+  `# GENOTYPE TYPES`, `# GENOTYPES`) on the non-tty `ascii=1` path
+  (upstream forces `ascii=1` whenever stdout is not a tty, which always
+  holds for captured output). Includes the upstream `findContigs`
+  genome-build detection (GRCh37/38/Rotavirus prefix, else none), the
+  `INFO` IDX rule (1-based index emitted only for multi-value tags), flag
+  INFO skipped, `vcf_format`-style padding of short FORMAT samples with
+  `.`, `end`/`length` rows for spanning variants, and the genotype-type
+  classification + count/% table. Numeric IDX/% cells use the shared
+  HTSlib `kputd` formatter. Byte-for-byte parity with `vcf2table.1.out`
+  (input `merge.4.b`) through the `test_vcf_plugin` harness shape; 5 unit
+  tests + 1 integration test in
+  `crates/bcftools-rs/tests/plugin_vcf2table.rs`. Remaining: VEP/CSQ,
+  BCSQ, ANN/SNPEFF, LOF, SpliceAI and HYPERLINKS tables; the
+  Unicode/color (tty) rendering path; genome-build hyperlink generation;
+  the `-x`/`--hide` option (its fixture `vcf2table.2.out` needs the
+  VEP/BCSQ tables); and full `vcf_format` float round-trip for arbitrary
+  INFO/FORMAT values.
 
 Grouped roughly by complexity / shared dependencies:
 
