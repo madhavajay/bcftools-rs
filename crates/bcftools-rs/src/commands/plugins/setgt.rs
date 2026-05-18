@@ -8,11 +8,17 @@
 //! (ploidy preserved, result unphased), so a partially-missing `./1`
 //! becomes `0/0` under `-n 0`.
 //!
+//! `-t q` also supports `TAG[@file]` sample-subset subscripts: the
+//! subscripts are stripped from the expression and the referenced
+//! sample-name files read, so a sample is selected only when it is in
+//! the subset *and* passes the cleaned per-sample expression (matching
+//! upstream `GT[@file]="het"` / `binom(AD[@file])` semantics; comma
+//! FORMAT vectors are bound as numeric lists so `binom(AD)` works).
+//!
 //! Deferred to later slices (tracked in TODO.md): `-t q` with `-e`
-//! (per-sample exclude invert), the sample-subset `GT[@file]` /
-//! `binom()` forms (`setGT.{2,3}.out`), `-t X` random, `-n` major/minor
-//! allele inference (`m`/`M`), custom `c:GT`, `-n i/p/u` phase ops,
-//! `-n X` (VAF), and the `binom()` target.
+//! (per-sample exclude invert), `-t X` random, `-n` major/minor allele
+//! inference (`m`/`M`), custom `c:GT`, `-n i/p/u` phase ops, `-n X`
+//! (VAF), and the `binom()` *target* (`-t binom`).
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -135,12 +141,34 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
         )
     })?;
 
+    // For `-t q`, strip any `TAG[@file]` sample-subset subscripts from
+    // the expression and read the union of the referenced sample names.
+    // A sample is then selected only if it is in that subset *and*
+    // passes the (subscript-stripped) per-sample expression — matching
+    // upstream `GT[@file]=...` semantics.
+    let (clean_expr, subset) = match filter {
+        Some(expr) => {
+            let (cleaned, paths) = strip_sample_subsets(expr);
+            let subset = if paths.is_empty() {
+                None
+            } else {
+                Some(read_sample_names(&paths)?)
+            };
+            (Some(cleaned), subset)
+        }
+        None => (None, None),
+    };
+
     let text = read_vcf_text(input)?;
     let mut out = String::with_capacity(text.len());
     let mut nchanged: u64 = 0;
+    let mut samples: Vec<String> = Vec::new();
 
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
+            if let Some(rest) = line.strip_prefix("#CHROM") {
+                samples = rest.split('\t').skip(9).map(str::to_owned).collect();
+            }
             out.push_str(line);
             out.push('\n');
             continue;
@@ -161,7 +189,15 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
                     let do_set = match target {
                         Target::Mask(m) => mask_targets(&sub[gi], m),
                         Target::Query => {
-                            sample_passes(&owned, si, filter.expect("query needs filter"))?
+                            let in_subset = subset
+                                .as_ref()
+                                .is_none_or(|s| samples.get(si).is_some_and(|n| s.contains(n)));
+                            in_subset
+                                && sample_passes(
+                                    &owned,
+                                    si,
+                                    clean_expr.as_deref().expect("query needs filter"),
+                                )?
                         }
                     };
                     if do_set {
@@ -230,6 +266,14 @@ fn sample_passes(fields: &[String], si: usize, expr: &str) -> io::Result<bool> {
                     FilterValue::Missing
                 } else if let Ok(n) = raw.parse::<f64>() {
                     FilterValue::Number(n)
+                } else if raw.contains(',') && raw.split(',').all(|v| v.parse::<f64>().is_ok()) {
+                    // Vector FORMAT value (e.g. AD `9,1`) — a numeric
+                    // list so `binom(AD)` etc. see the components.
+                    FilterValue::List(
+                        raw.split(',')
+                            .map(|v| FilterValue::Number(v.parse().unwrap()))
+                            .collect(),
+                    )
                 } else {
                     FilterValue::String(raw.to_owned())
                 };
@@ -246,6 +290,45 @@ fn sample_passes(fields: &[String], si: usize, expr: &str) -> io::Result<bool> {
         })?
         .truthy(),
     )
+}
+
+/// Removes every `[@path]` sample-subset subscript from `expr`,
+/// returning the cleaned expression and the referenced file paths.
+/// `GT[@f]="het"` → (`GT="het"`, [f]); `binom(AD[@f])` → (`binom(AD)`).
+fn strip_sample_subsets(expr: &str) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(expr.len());
+    let mut paths = Vec::new();
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'['
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'@'
+            && let Some(close) = expr[i..].find(']')
+        {
+            paths.push(expr[i + 2..i + close].to_owned());
+            i += close + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    (out, paths)
+}
+
+/// Reads the union of sample names from one or more sample files
+/// (first whitespace token per non-empty line).
+fn read_sample_names(paths: &[String]) -> io::Result<std::collections::HashSet<String>> {
+    let mut set = std::collections::HashSet::new();
+    for p in paths {
+        let text = fs::read_to_string(p)?;
+        for line in text.lines() {
+            if let Some(name) = line.split_whitespace().next() {
+                set.insert(name.to_owned());
+            }
+        }
+    }
+    Ok(set)
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
