@@ -60,6 +60,33 @@ fn check(input: &str, plugin_args: &[&str], expected_fixture: &str) {
     assert_eq!(filtered, expected, "mismatch for {full:?}");
 }
 
+/// Like [`check`] but drops all `#`-prefixed lines, mirroring the
+/// upstream `| grep -v ^#` harness filter (the `fmissing.*` rows).
+fn check_nohdr(input: &str, plugin_args: &[&str], expected_fixture: &str) {
+    ensure_binary_built();
+    let input = fixture_path(input);
+    let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+    let mut full = vec!["+fill-tags", "--no-version", input.to_str().unwrap(), "--"];
+    full.extend_from_slice(plugin_args);
+    let out = Command::new(bin_path())
+        .args(&full)
+        .output()
+        .expect("spawn +fill-tags");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{full:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected, "mismatch for {full:?}");
+}
+
 #[test]
 fn count_tags_merge_a() {
     check(
@@ -144,5 +171,39 @@ fn func_with_population_grouping() {
             smpl.to_str().unwrap(),
         ],
         "fill-tags.5.out",
+    );
+}
+
+#[test]
+fn func_f_pass() {
+    // F_PASS(EXPR): fraction of samples where the per-sample filter
+    // expression holds (full output, no `grep`).
+    check(
+        "fill-tags-hwe.vcf",
+        &["-t", r#"XX:1=F_PASS(GT="alt")"#],
+        "fill-tags-func.out",
+    );
+}
+
+#[test]
+fn func_f_pass_n_pass_missing() {
+    let smpl = fixture_path("fmissing.txt");
+    let s = smpl.to_str().unwrap();
+    // `-t F_MISSING` (builtin), the `F_PASS(GT="mis")` func form, and
+    // `int(N_PASS(GT="mis"))` — the harness compares after `grep -v ^#`.
+    check_nohdr(
+        "fmissing.vcf",
+        &["-S", s, "-t", "F_MISSING"],
+        "fmissing.1.out",
+    );
+    check_nohdr(
+        "fmissing.vcf",
+        &["-S", s, "-t", r#"F_MISSING:1=F_PASS(GT="mis")"#],
+        "fmissing.1.out",
+    );
+    check_nohdr(
+        "fmissing.vcf",
+        &["-S", s, "-t", r#"N_MISSING:1=int(N_PASS(GT="mis"))"#],
+        "fmissing.2.out",
     );
 }
