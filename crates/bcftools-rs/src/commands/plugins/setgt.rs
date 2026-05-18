@@ -15,15 +15,19 @@
 //! upstream `GT[@file]="het"` / `binom(AD[@file])` semantics; comma
 //! FORMAT vectors are bound as numeric lists so `binom(AD)` works).
 //!
-//! New-genotype modes also include `-n i` (invert allele order,
-//! separator preserved, diploid only), `-n p` (phase: all separators
-//! `|`), and `-n u` (unphase: all `/`, alleles sorted ascending),
-//! mirroring upstream `invert_phase_gt` / `phase_gt` / `unphase_gt`.
+//! New-genotype modes: `-n i` (invert allele order, separator
+//! preserved, diploid only), `-n p` (phase), `-n u` (unphase+sort),
+//! `-n M`/`pM` and `-n m`/`pm` (major/minor allele from FMT/GT allele
+//! counts, keeping ploidy), and `-n c:GT` custom specs (literal /
+//! `m` minor / `M` major alleles, ploidy override, out-of-range →
+//! missing-unphased), mirroring upstream `invert_phase_gt` /
+//! `phase_gt` / `unphase_gt` / `bcf_calc_ac` / `set_gt_custom`. The
+//! PASS FILTER header is inserted on write when absent, as bcftools
+//! does. All upstream `setGT*.out` fixtures pass byte-for-byte.
 //!
-//! Deferred to later slices (tracked in TODO.md): `-t q` with `-e`
-//! (per-sample exclude invert), `-t X` random, `-n` major/minor allele
-//! inference (`m`/`M`), custom `c:GT`, `-n X` (VAF), and the `binom()`
-//! *target* (`-t binom`).
+//! Deferred (tracked in TODO.md; no upstream fixture): `-t q` with
+//! `-e` (per-sample exclude invert), `-t X` random, `-n X` (VAF), and
+//! the `binom()` *target* (`-t binom`).
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -44,7 +48,7 @@ struct TgtMask {
     all: bool,     // `a`
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum NewGt {
     Ref,
     Missing,
@@ -54,6 +58,88 @@ enum NewGt {
     Phase,
     /// `u` — unphase: every separator becomes `/`, alleles sorted.
     Unphase,
+    /// `M`/`pM` — major allele (from FMT/GT allele counts), bool=phased.
+    Major(bool),
+    /// `m`/`pm` — minor (2nd most common) allele, bool=phased.
+    Minor(bool),
+    /// `c:GT` — custom genotype spec; ploidy overrides the sample's.
+    Custom(Vec<CustomTok>),
+}
+
+/// One position of a `-n c:GT` spec: which allele, and whether the
+/// separator *before* it is phased (`phased` is false for position 0).
+#[derive(Clone, Copy)]
+struct CustomTok {
+    allele: CustomAllele,
+    phased: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CustomAllele {
+    Lit(usize),
+    Major,
+    Minor,
+    Missing,
+}
+
+/// Per-record allele statistics (upstream `bcf_calc_ac`,`BCF_UN_FMT`):
+/// allele count from genotypes, plus derived major/minor allele index.
+struct AlleleStats {
+    n_allele: usize,
+    major: usize,
+    minor: usize,
+}
+
+fn allele_stats(fields: &[String], gt_idx: usize) -> AlleleStats {
+    let n_allele = match fields.get(4).map(String::as_str) {
+        Some(".") | Some("") | None => 1,
+        Some(alt) => 1 + alt.split(',').count(),
+    };
+    let mut ac = vec![0i64; n_allele];
+    for sample in &fields[9..] {
+        if let Some(gt) = sample.split(':').nth(gt_idx) {
+            for a in gt.split(['/', '|']) {
+                if let Ok(idx) = a.parse::<usize>()
+                    && idx < n_allele
+                {
+                    ac[idx] += 1;
+                }
+            }
+        }
+    }
+    // Upstream: strict `>` so the first (lowest-index) max wins.
+    let mut major = 0;
+    let mut max_ac = -1i64;
+    for (i, &c) in ac.iter().enumerate() {
+        if c > max_ac {
+            max_ac = c;
+            major = i;
+        }
+    }
+    // Upstream minor: imax = argmax; imax2 = best index != imax.
+    let mut imax = 0;
+    for i in 1..n_allele {
+        if ac[imax] < ac[i] {
+            imax = i;
+        }
+    }
+    let mut imax2 = if imax > 0 {
+        0
+    } else if n_allele > 1 {
+        1
+    } else {
+        0
+    };
+    for i in 0..n_allele {
+        if i != imax && ac[imax2] < ac[i] {
+            imax2 = i;
+        }
+    }
+    AlleleStats {
+        n_allele,
+        major,
+        minor: imax2,
+    }
 }
 
 /// Which genotypes `-t` targets.
@@ -96,7 +182,14 @@ fn parse_new(spec: &str) -> Option<NewGt> {
         "i" => return Some(NewGt::Invert),
         "p" => return Some(NewGt::Phase),
         "u" => return Some(NewGt::Unphase),
+        "M" => return Some(NewGt::Major(false)),
+        "pM" => return Some(NewGt::Major(true)),
+        "m" => return Some(NewGt::Minor(false)),
+        "pm" => return Some(NewGt::Minor(true)),
         _ => {}
+    }
+    if let Some(g) = spec.strip_prefix("c:") {
+        return parse_custom(g).map(NewGt::Custom);
     }
     // Upstream: any '.' in the arg => GT_MISSING; "0" => GT_REF.
     if spec.contains('.') {
@@ -106,6 +199,40 @@ fn parse_new(spec: &str) -> Option<NewGt> {
         "0" => Some(NewGt::Ref),
         _ => None,
     }
+}
+
+/// Parse a `c:GT` spec into tokens (e.g. `0/1/1`, `m|M`, `1|1`).
+/// `phased[i>=1]` reflects the separator preceding token `i`.
+fn parse_custom(spec: &str) -> Option<Vec<CustomTok>> {
+    let mut toks = Vec::new();
+    let mut cur = String::new();
+    let mut sep_phased = false; // separator before the *current* token
+    let mut first = true;
+    let push = |cur: &mut String, phased: bool, toks: &mut Vec<CustomTok>| -> Option<()> {
+        let allele = match cur.as_str() {
+            "M" => CustomAllele::Major,
+            "m" => CustomAllele::Minor,
+            "." => CustomAllele::Missing,
+            s => CustomAllele::Lit(s.parse::<usize>().ok()?),
+        };
+        toks.push(CustomTok { allele, phased });
+        cur.clear();
+        Some(())
+    };
+    for c in spec.chars() {
+        if c == '/' || c == '|' {
+            push(&mut cur, !first && sep_phased, &mut toks)?;
+            first = false;
+            sep_phased = c == '|';
+        } else {
+            cur.push(c);
+        }
+    }
+    push(&mut cur, !first && sep_phased, &mut toks)?;
+    if toks.is_empty() {
+        return None;
+    }
+    Some(toks)
 }
 
 pub struct Options<'a> {
@@ -180,6 +307,11 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
     let mut out = String::with_capacity(text.len());
     let mut nchanged: u64 = 0;
     let mut samples: Vec<String> = Vec::new();
+    // bcftools inserts the PASS filter header on write when absent.
+    let has_pass = text
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .any(|l| l.starts_with("##FILTER=<ID=PASS,"));
 
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -188,6 +320,9 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
             }
             out.push_str(line);
             out.push('\n');
+            if !has_pass && line.starts_with("##fileformat=") {
+                out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+            }
             continue;
         }
         let mut f: Vec<&str> = line.split('\t').collect();
@@ -200,6 +335,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
         let mut rebuilt: Vec<String> = Vec::new();
         if let Some(gi) = gt_idx {
             let owned: Vec<String> = f.iter().map(|s| (*s).to_owned()).collect();
+            let stats = allele_stats(&owned, gi);
             for (si, sample) in f[9..].iter().enumerate() {
                 let mut sub: Vec<String> = sample.split(':').map(str::to_owned).collect();
                 if gi < sub.len() {
@@ -218,7 +354,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
                         }
                     };
                     if do_set {
-                        sub[gi] = rewrite_allele(&sub[gi], new, &mut nchanged);
+                        sub[gi] = rewrite_allele(&sub[gi], &new, &stats, &mut nchanged);
                     }
                 }
                 rebuilt.push(sub.join(":"));
@@ -249,7 +385,7 @@ fn mask_targets(gt: &str, tgt: TgtMask) -> bool {
 
 /// Upstream `set_gt`: replace every allele with the new allele, ploidy
 /// preserved, output unphased. Updates the changed-allele counter.
-fn rewrite_allele(gt: &str, new: NewGt, nchanged: &mut u64) -> String {
+fn rewrite_allele(gt: &str, new: &NewGt, stats: &AlleleStats, nchanged: &mut u64) -> String {
     // Alleles plus the separators preceding alleles 1..n (the VCF phase
     // markers); `set_gt` modes ignore separators (always unphased),
     // phase modes preserve/rewrite them.
@@ -266,6 +402,13 @@ fn rewrite_allele(gt: &str, new: NewGt, nchanged: &mut u64) -> String {
     }
     alleles.push(cur);
     let ploidy = alleles.len().max(1);
+
+    // `M`/`m`: keep ploidy, every allele = major/minor index, all
+    // separators phased or unphased. Index always < n_allele.
+    let uniform = |idx: usize, phased: bool| -> String {
+        let sep = if phased { '|' } else { '/' };
+        vec![idx.to_string(); ploidy].join(&sep.to_string())
+    };
 
     let rebuilt = match new {
         NewGt::Ref | NewGt::Missing => {
@@ -286,6 +429,36 @@ fn rewrite_allele(gt: &str, new: NewGt, nchanged: &mut u64) -> String {
             let mut sorted = alleles.clone();
             sorted.sort_by_key(|a| allele_key(a));
             join_with(&sorted, '/')
+        }
+        NewGt::Major(phased) => uniform(stats.major, *phased),
+        NewGt::Minor(phased) => uniform(stats.minor, *phased),
+        NewGt::Custom(toks) => {
+            // Ploidy overrides the sample's; an out-of-range allele
+            // index becomes missing (upstream `new_allele >= nals`).
+            let mut s = String::new();
+            for (i, t) in toks.iter().enumerate() {
+                let idx = match t.allele {
+                    CustomAllele::Lit(n) => Some(n),
+                    CustomAllele::Major => Some(stats.major),
+                    CustomAllele::Minor => Some(stats.minor),
+                    CustomAllele::Missing => None,
+                };
+                let resolved = idx.filter(|&n| n < stats.n_allele);
+                if i > 0 {
+                    // A missing allele is `bcf_gt_missing` (unphased), so
+                    // it is always written with `/` regardless of spec.
+                    s.push(if t.phased && resolved.is_some() {
+                        '|'
+                    } else {
+                        '/'
+                    });
+                }
+                match resolved {
+                    Some(n) => s.push_str(&n.to_string()),
+                    None => s.push('.'),
+                }
+            }
+            s
         }
     };
     if rebuilt != gt {
@@ -444,7 +617,12 @@ mod tests {
             return None;
         }
         let mut c = 0;
-        Some(rewrite_allele(gt, parse_new(n).unwrap(), &mut c))
+        let stats = AlleleStats {
+            n_allele: 2,
+            major: 0,
+            minor: 1,
+        };
+        Some(rewrite_allele(gt, &parse_new(n).unwrap(), &stats, &mut c))
     }
 
     #[test]
@@ -484,9 +662,11 @@ mod tests {
     #[test]
     fn unsupported_modes_rejected() {
         assert!(parse_target("X").is_none());
-        assert!(parse_new("pM").is_none());
-        assert!(parse_new("c:1").is_none());
+        assert!(parse_new("X").is_none());
+        assert!(parse_new("c:").is_none());
         assert!(matches!(parse_target("q"), Some(Target::Query)));
+        assert!(matches!(parse_new("pM"), Some(NewGt::Major(true))));
+        assert!(matches!(parse_new("c:1"), Some(NewGt::Custom(_))));
     }
 
     #[test]
@@ -504,16 +684,47 @@ mod tests {
     #[test]
     fn invert_phase_unphase_modes() {
         let mut c = 0;
+        let s = AlleleStats {
+            n_allele: 2,
+            major: 1,
+            minor: 0,
+        };
         // invert: diploid only, separator preserved.
-        assert_eq!(rewrite_allele("0|1", NewGt::Invert, &mut c), "1|0");
-        assert_eq!(rewrite_allele("1|0", NewGt::Invert, &mut c), "0|1");
-        assert_eq!(rewrite_allele("0/1", NewGt::Invert, &mut c), "1/0");
-        assert_eq!(rewrite_allele("0|0", NewGt::Invert, &mut c), "0|0");
-        assert_eq!(rewrite_allele("1", NewGt::Invert, &mut c), "1"); // haploid
-        // phase: all separators -> '|'.
-        assert_eq!(rewrite_allele("0/1", NewGt::Phase, &mut c), "0|1");
-        // unphase: '/' separators + alleles sorted ascending.
-        assert_eq!(rewrite_allele("1|0", NewGt::Unphase, &mut c), "0/1");
-        assert_eq!(rewrite_allele("1|1", NewGt::Unphase, &mut c), "1/1");
+        assert_eq!(rewrite_allele("0|1", &NewGt::Invert, &s, &mut c), "1|0");
+        assert_eq!(rewrite_allele("1|0", &NewGt::Invert, &s, &mut c), "0|1");
+        assert_eq!(rewrite_allele("0/1", &NewGt::Invert, &s, &mut c), "1/0");
+        assert_eq!(rewrite_allele("0|0", &NewGt::Invert, &s, &mut c), "0|0");
+        assert_eq!(rewrite_allele("1", &NewGt::Invert, &s, &mut c), "1");
+        assert_eq!(rewrite_allele("0/1", &NewGt::Phase, &s, &mut c), "0|1");
+        assert_eq!(rewrite_allele("1|0", &NewGt::Unphase, &s, &mut c), "0/1");
+        assert_eq!(rewrite_allele("1|1", &NewGt::Unphase, &s, &mut c), "1/1");
+    }
+
+    #[test]
+    fn major_minor_custom_modes() {
+        let mut c = 0;
+        let s = AlleleStats {
+            n_allele: 3,
+            major: 2,
+            minor: 1,
+        };
+        // pM: keep ploidy, every allele = major, phased.
+        assert_eq!(
+            rewrite_allele("0/0", &NewGt::Major(true), &s, &mut c),
+            "2|2"
+        );
+        assert_eq!(rewrite_allele("1", &NewGt::Minor(true), &s, &mut c), "1");
+        // custom c:"m|M" -> minor|major.
+        let cm = parse_new("c:m|M").unwrap();
+        assert_eq!(rewrite_allele("0/0", &cm, &s, &mut c), "1|2");
+        // custom c:0/1/1 (triploid); out-of-range -> '.'.
+        let c3 = parse_new("c:0/1/1").unwrap();
+        assert_eq!(rewrite_allele("0/0", &c3, &s, &mut c), "0/1/1");
+        let s1 = AlleleStats {
+            n_allele: 1,
+            major: 0,
+            minor: 0,
+        };
+        assert_eq!(rewrite_allele("0/0", &c3, &s1, &mut c), "0/./.");
     }
 }

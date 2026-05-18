@@ -201,6 +201,14 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/setgt-custom` added `+setGT` `-n M`/`pM`,
+  `-n m`/`pm` (major/minor allele from FMT/GT allele counts, ploidy
+  preserved) and `-n c:GT` custom specs (literal / `m` / `M` alleles,
+  ploidy override, out-of-range → missing-unphased), plus PASS-FILTER
+  header insertion on write when absent. **`+setGT` is now fully
+  complete** — byte-for-byte against every upstream fixture
+  (`missing2ref.out`, `setGT.{1,2,3}.out`, `setGT.2.1.out`,
+  `setGT.3.{1..6}.out`); 10 unit + 6 integration tests.
 - 2026-05-18: `progress/setgt-invert` added `+setGT` `-n i`/`-n p`/
   `-n u` genotype modes (invert allele order with separator preserved /
   phase / unphase+sort, mirroring upstream `invert_phase_gt` /
@@ -850,8 +858,7 @@ Latest landed progress:
   5. **Deferred rows on landed plugins**: `gvcfz.2.out`
      (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
      `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     `setGT.3.{1..6}.out` (`-n m/M/c:GT/X` major/minor/custom/VAF;
-     `setGT.{2,3}.out` `GT[@file]` and `setGT.2.1.out` `-n i` now done),
+     (`+setGT` is now fully complete — all `setGT*.out` fixtures pass),
      `+fill-from-fasta` `aa.out` (`-c AA -h` + `-i 'TYPE="snp"'`),
      `+split.1.4`-style deeper subscripts, `+remove-overlaps -m
      'min(QUAL)'`, `+prune -i/-e`, `+smpl-stats`/`+indel-stats -i/-e`.
@@ -1826,20 +1833,23 @@ Current local slice:
   from the expression; referenced sample files read; sample selected
   only when in the subset *and* passing the cleaned per-sample
   expression), with comma FORMAT vectors bound as numeric lists so
-  `binom(AD)` works. New-genotype modes also include `-n i` (invert
-  allele order, separator preserved, diploid only), `-n p` (phase),
-  `-n u` (unphase+sort), mirroring upstream `invert_phase_gt` /
-  `phase_gt` / `unphase_gt`. Byte-for-byte against `missing2ref.out`
-  (`-t . -n 0`), `setGT.1.out`
+  `binom(AD)` works. New-genotype modes: `-n i` (invert, separator
+  preserved, diploid only), `-n p` (phase), `-n u` (unphase+sort),
+  `-n M`/`pM` and `-n m`/`pm` (major/minor allele from FMT/GT allele
+  counts, ploidy preserved), and `-n c:GT` custom specs (literal /
+  `m` / `M` alleles, ploidy override, out-of-range → missing-unphased),
+  mirroring upstream `invert_phase_gt`/`phase_gt`/`unphase_gt`/
+  `bcf_calc_ac`/`set_gt_custom`; PASS FILTER header inserted on write
+  when absent. **Fully complete** — byte-for-byte against every
+  upstream fixture: `missing2ref.out` (`-t . -n 0`), `setGT.1.out`
   (`-t q -n 0 -i 'GT~"." && FMT/DP=30 && GQ=150'`), `setGT.2.out`
   (`-t q -n . -i 'GT[@samples.txt]="het"'`), `setGT.3.out`
-  (`… & binom(AD[@samples.txt])<0.1`), and `setGT.2.1.out`
-  (`-t a -n i`); 7 unit + 5 integration tests in
-  `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining: `-t q` with
-  `-e` (per-sample exclude invert), `-n m`/`-n M` major/minor allele
-  inference and custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
-  `setGT.3.{1..6}.out`), `-n X` (VAF), `-t X` random, the `binom()`
-  target, BCF output, and `-W` indexing.
+  (`… & binom(AD[@samples.txt])<0.1`), `setGT.2.1.out` (`-t a -n i`),
+  and `setGT.3.{1..6}.out` (`-t a -n pM/pm/c:1/c:1|1/c:m|M/c:0/1/1`);
+  10 unit + 6 integration tests in
+  `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining (no upstream
+  fixture): `-t q` with `-e` (per-sample exclude invert), `-n X` (VAF),
+  `-t X` random, the `binom()` *target*, BCF output, and `-W` indexing.
 
 Grouped roughly by complexity / shared dependencies:
 
