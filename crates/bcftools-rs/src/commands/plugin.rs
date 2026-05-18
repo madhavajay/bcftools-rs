@@ -443,6 +443,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut sv_columns: Option<String> = None;
     let mut sv_select: Option<String> = None;
     let mut sv_annotation: Option<String> = None;
+    let mut sv_format: Option<String> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -644,6 +645,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-a" | "--annotation" if plugin_name.as_deref() == Some("split-vep") => {
                 sv_annotation = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            "-f" | "--format" if plugin_name.as_deref() == Some("split-vep") => {
+                sv_format = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--format=") && plugin_name.as_deref() == Some("split-vep") => {
+                sv_format = Some(raw["--format=".len()..].to_owned());
+            }
+            // getopt-style attached short option: `-f'%POS\t...'`.
+            _ if raw.starts_with("-f")
+                && raw.len() > 2
+                && plugin_name.as_deref() == Some("split-vep") =>
+            {
+                sv_format = Some(raw[2..].to_owned());
             }
             _ if raw.starts_with("--columns=") && plugin_name.as_deref() == Some("split-vep") => {
                 sv_columns = Some(raw["--columns=".len()..].to_owned());
@@ -1703,21 +1717,22 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
 
     if plugin.name == "split-vep" {
         let input = input.unwrap_or_else(|| "-".to_owned());
-        let Some(columns) = sv_columns.as_deref() else {
+        if sv_columns.is_none() && sv_format.is_none() {
             return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "split-vep in this slice requires -c/--columns (the -f format-string output is not yet ported)",
+                io::ErrorKind::InvalidInput,
+                "Expected -c or -f option",
             ));
-        };
-        let vcf = crate::commands::plugins::split_vep::run(
+        }
+        let out = crate::commands::plugins::split_vep::run(
             Path::new(&input),
             crate::commands::plugins::split_vep::Options {
-                columns,
+                columns: sv_columns.as_deref().unwrap_or(""),
                 select: sv_select.as_deref().unwrap_or("all:any"),
                 annotation: sv_annotation.as_deref().unwrap_or("CSQ"),
+                format: sv_format.as_deref(),
             },
         )?;
-        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        write_plugin_output(out.as_bytes(), output.as_deref(), output_kind)?;
         return Ok(ExitCode::SUCCESS);
     }
 

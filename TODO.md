@@ -201,6 +201,20 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-6` added the `+split-vep -f FMT`
+  text-output path. Upstream uses `convert_init`; we reuse our own
+  `bcftools query` format engine (`query_format_text`, now
+  `pub(crate)`): the CSQ subfields referenced by `%TOKEN` in the format
+  string are transiently annotated as INFO (same `process_record` as
+  `-c`), the format string is rendered over that VCF, and (matching
+  upstream's `-f` default `--drop-sites`) records with no
+  severity-passing transcript — or, when CSQ subfields are requested,
+  whose every requested annotation is missing — are dropped. `%INFO/X`
+  stays an explicit real-INFO reference (never a CSQ subfield).
+  Byte-for-byte against `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`
+  (incl. the `%AF` CSQ-subfield vs `-a BCSQ`/`%INFO/AF` real-tag
+  cases). Still deferred: `-d`, `[%SAMPLE]`, `-t`/`-T`, `-g`,
+  `-A`/`-H`, `-S`.
 - 2026-05-18: `progress/batch-5` added the `+split-vep` first slice —
   the `-c FIELD[,FIELD...] -s TR:CSQ[:PRN]` path that annotates
   `INFO/<FIELD>` from a VEP `CSQ` (or `-a TAG`) string. Ports the
@@ -881,12 +895,14 @@ Latest landed progress:
      today, so sample name/index must be threaded through.
   2. **`+split-vep` — remaining paths** (74k — heaviest plugin). The
      `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation path landed in
-     `progress/batch-5` (`split-vep.{1,1.1,2,2.1}.out` pass). Still to
-     port: the `-f FMT` format-string engine (its own `convert`-like
-     formatter — `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`), `-d`
-     duplicate output, per-sample `[%SAMPLE]` blocks + `-i'GT=...'`
-     (depends on (1)), `-t`/`-T` regions, `-g`/`--gene-list`, `-A`
-     column-type/`-H` header rows, and `-S` custom severity file.
+     `progress/batch-5` (`split-vep.{1,1.1,2,2.1}.out`), and the
+     `-f FMT` text path in `progress/batch-6` (reusing our query
+     formatter; `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`). Still to
+     port: `-d` duplicate output, per-sample `[%SAMPLE]` blocks +
+     `-i'GT=...'` (depends on (1)), `-t`/`-T` regions, `-g`/
+     `--gene-list`, `-A` column-type/`-H`/`-HH` header rows
+     (`split-vep.{8,9,10,11,12,12.2,12.3,12.4,13,13.1}.out`), and
+     `-S` custom severity file.
   3. **`+fill-tags`** (1084 LOC — heaviest tag-fixer): INFO/FORMAT tag
      computation (AC/AN/AF/MAF/HWE/ExcHet/…), `-t`/`-S` group support.
   4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
@@ -952,7 +968,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 37 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep` (`-c`/`-s` slice) |
+| `plugin` | registry + 37 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep` (`-c`/`-s`/`-f` slice) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -1914,11 +1930,12 @@ Grouped roughly by complexity / shared dependencies:
 - [ ] **Subset/split** — `+split` (30k), `+scatter`, `+GTsubset`, `+GTisec`, `+isecGT`.
 - [ ] **Stats / reports** — `+smpl-stats`, `+indel-stats`, `+trio-stats`, `+variant-distance`, `+ad-bias`, `+af-dist`, `+check-ploidy`, `+check-sparsity`, `+vcf2table` (46k), `+vrfs` (38k).
 - [~] **VEP-aware** — `+split-vep` (74k — the heaviest plugin by far).
-      First slice landed: the `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation
-      path (severity scale, `csq_to_severity`, transcript selection, CSQ
-      threshold, PRN) — `split-vep.{1,1.1,2,2.1}.out` pass through our
-      `bcftools query`. Remaining: `-f` format engine, `-d`, `[%SAMPLE]`,
-      `-t`/`-T`, `-g`, `-A`/`-H`, `-S`.
+      Landed: the `-c FIELD -s TR:CSQ[:PRN]` INFO-annotation path
+      (severity scale, `csq_to_severity`, transcript selection, CSQ
+      threshold, PRN) — `split-vep.{1,1.1,2,2.1}.out`; and the `-f FMT`
+      text path (reusing our query formatter, upstream `--drop-sites`
+      default) — `split-vep.{2,2.1,3,3.1,4,5,6,7,7.1}.out`. Remaining:
+      `-d`, `[%SAMPLE]`, `-t`/`-T`, `-g`, `-A`/`-H`, `-S`.
 - [ ] **Trio / pedigree** — `+mendelian2` (37k), `+trio-dnm3` (105k — the single largest plugin; has its own `test/trio-dnm3/test.sh` fixture), `+trio-switch-rate`, `+parental-origin`.
 - [ ] **Sample inference** — `+guess-ploidy`, `+contrast`.
 - [ ] **Misc** — `+color-chrs` (curses-style colored output), `+prune`.

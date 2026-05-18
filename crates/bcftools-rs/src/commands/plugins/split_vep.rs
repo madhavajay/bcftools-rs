@@ -268,9 +268,18 @@ pub struct Options<'a> {
     pub select: &'a str,
     /// `-a`/`--annotation` INFO tag (default `CSQ`).
     pub annotation: &'a str,
+    /// `-f`/`--format` query-style format string. When set, the plugin
+    /// emits rendered text (records with no severity-passing transcript
+    /// are dropped) instead of an annotated VCF, mirroring upstream's
+    /// `convert_init` text path.
+    pub format: Option<&'a str>,
 }
 
-/// Reads the input VCF/BCF and returns the `-c`-annotated VCF text.
+/// Reads the input VCF/BCF and returns either the `-c`-annotated VCF
+/// text or, when `-f` is given, the rendered text output (upstream's
+/// `convert_init` path: non-matching sites are dropped, and the format
+/// string is rendered by our own `bcftools query` engine over the
+/// transiently annotated VCF).
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let text = read_vcf_text(input)?;
     let tag = opts.annotation;
@@ -292,17 +301,36 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let sel = parse_select(opts.select, &sev)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("split-vep: {e}")))?;
 
-    // `-c` annot columns -> (tag name, csq field index).
-    let mut annots: Vec<(String, usize)> = Vec::new();
+    // Fields to annotate as transient INFO: the explicit `-c` columns,
+    // plus any CSQ subfield referenced by a `%TOKEN` in the `-f` format
+    // string (upstream parses the same set out of the format string).
+    let mut names: Vec<String> = Vec::new();
     for c in opts.columns.split(',').filter(|c| !c.is_empty()) {
-        let idx = field_idx(c).ok_or_else(|| {
-            io::Error::new(
+        if field_idx(c).is_none() {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("the field \"{c}\" is not present in INFO/{tag}"),
-            )
-        })?;
-        annots.push((c.to_owned(), idx));
+            ));
+        }
+        if !names.iter().any(|n| n == c) {
+            names.push(c.to_owned());
+        }
     }
+    if let Some(fmt) = opts.format {
+        for tok in format_field_tokens(fmt) {
+            if fields.iter().any(|f| f == &tok) && !names.iter().any(|n| n == &tok) {
+                names.push(tok);
+            }
+        }
+    }
+    let annots: Vec<(String, usize)> = names
+        .iter()
+        .map(|n| (n.clone(), field_idx(n).unwrap()))
+        .collect();
+
+    // Drop non-matching sites only in `-f` (text) mode; the `-c` VCF
+    // path keeps every record (annotation just absent when unmatched).
+    let drop_unmatched = opts.format.is_some();
 
     let mut out = String::with_capacity(text.len());
     let mut hdr_done = false;
@@ -323,12 +351,63 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         if line.trim().is_empty() {
             continue;
         }
-        out.push_str(&process_record(
-            line, tag, &fields, csq_idx, &sel, &annots, &mut sev,
-        ));
+        let (rendered, passed, all_missing) =
+            process_record(line, tag, &fields, csq_idx, &sel, &annots, &mut sev);
+        // Upstream `-f` default is `--drop-sites`: skip a record that has
+        // no severity-passing transcript, or (when CSQ subfields are
+        // requested) whose every requested annotation is missing.
+        if drop_unmatched && (!passed || (!annots.is_empty() && all_missing)) {
+            continue;
+        }
+        out.push_str(&rendered);
         out.push('\n');
     }
-    Ok(out)
+
+    match opts.format {
+        None => Ok(out),
+        Some(fmt) => {
+            let mut buf: Vec<u8> = Vec::with_capacity(out.len());
+            crate::commands::query::query_format_text(
+                &out,
+                fmt,
+                &crate::commands::query::QueryFormatOptions::plain(),
+                &mut buf,
+            )?;
+            String::from_utf8(buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        }
+    }
+}
+
+/// Identifiers referenced by `%NAME` / `%INFO/NAME` tokens in a query
+/// format string (used to decide which CSQ subfields to annotate).
+fn format_field_tokens(fmt: &str) -> Vec<String> {
+    let bytes = fmt.as_bytes();
+    let mut toks = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let mut j = i + 1;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'/')
+            {
+                j += 1;
+            }
+            if j > i + 1 {
+                let name = &fmt[i + 1..j];
+                // `%INFO/X` is an explicit real-INFO reference (resolved
+                // by the query engine), never a CSQ-subfield request, so
+                // it must not trigger transient CSQ annotation.
+                if !name.starts_with("INFO/") {
+                    toks.push(name.to_owned());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    toks
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -340,16 +419,16 @@ fn process_record(
     sel: &Select,
     annots: &[(String, usize)],
     sev: &mut Severity,
-) -> String {
+) -> (String, bool, bool) {
     let mut f: Vec<String> = line.split('\t').map(str::to_owned).collect();
     if f.len() < 8 {
-        return line.to_owned();
+        return (line.to_owned(), false, true);
     }
     let csq_str = f[7]
         .split(';')
         .find_map(|kv| kv.strip_prefix(&format!("{tag}=")));
     let Some(csq_str) = csq_str else {
-        return line.to_owned(); // no CSQ: emit unchanged
+        return (line.to_owned(), false, true); // no CSQ: emit unchanged
     };
 
     // transcripts -> field vectors
@@ -392,6 +471,9 @@ fn process_record(
     // the CSQ severity threshold.
     let mut acc: Vec<Vec<String>> = vec![Vec::new(); annots.len()];
     let mut severity_pass = false;
+    // Upstream `all_missing`: every requested annotation empty across all
+    // severity-passing transcripts (record dropped in the `-f` path).
+    let mut all_missing = true;
     for &ti in &selected {
         let tr = &transcripts[ti];
         let csq = tr.get(csq_idx).copied().unwrap_or("");
@@ -401,6 +483,9 @@ fn process_record(
         severity_pass = true;
         for (ai, (_, idx)) in annots.iter().enumerate() {
             let raw = tr.get(*idx).copied().unwrap_or("");
+            if !raw.is_empty() {
+                all_missing = false;
+            }
             let val = if *idx == csq_idx && sel.prn == PrnCsq::Worst {
                 rewrite_worst(raw, sev)
             } else {
@@ -418,7 +503,7 @@ fn process_record(
             }
         }
     }
-    f.join("\t")
+    (f.join("\t"), severity_pass, all_missing)
 }
 
 fn csq_severity_pass(csq: &str, sel: &Select, sev: &mut Severity) -> bool {
