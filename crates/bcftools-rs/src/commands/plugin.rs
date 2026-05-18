@@ -1392,6 +1392,14 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if plugin.name == "impute-info" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let out = crate::commands::plugins::impute_info::run(Path::new(&input))?;
+        write_plugin_output(out.vcf.as_bytes(), output.as_deref(), output_kind)?;
+        io::stderr().lock().write_all(out.stderr.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     if plugin.name == "variant-distance" {
         use crate::commands::plugins::variant_distance::{self, Direction};
         let input = input.unwrap_or_else(|| "-".to_owned());

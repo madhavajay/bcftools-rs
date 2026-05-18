@@ -22,6 +22,7 @@ pub mod frameshifts;
 pub mod gtisec;
 pub mod gtsubset;
 pub mod guess_ploidy;
+pub mod impute_info;
 pub mod indel_stats;
 pub mod isecgt;
 pub mod mendelian2;
