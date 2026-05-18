@@ -764,8 +764,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`263b560`) (337 lib unit tests plus
-  per-command and per-plugin integration suites).
+  latest merged commit on `main` (`a0298ee`) (337 lib unit tests plus
+  per-command and per-plugin integration suites; 10 `+split` integration
+  tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
 - Next local-only queue:
@@ -813,6 +814,15 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+split` `GT="alt"` filter rows, PR #227 landed; no
+  open PR): approximately 50-53% complete toward the full stated goal.
+  Movement since the prior estimate un-defers the `+split`
+  `-i 'GT="alt"'` rows (`split.1.5`/`1.6`) — the shared filter engine
+  resolves the `GT="alt"` class literal — with byte-for-byte
+  integration tests (10 `+split` integration tests). The estimate band
+  is unchanged. The next focused filter-engine slice is subscripted
+  FORMAT access (`GT[0]="alt"`, `split.1.4.out`) in the per-output
+  projected context. 34 of 41 plugins done.
 - 2026-05-18 (post `+vcf2table` VEP/CSQ+BCSQ slice, PR #225 landed; no
   open PR): approximately 50-53% complete toward the full stated goal.
   Movement since the prior estimate completes `+vcf2table` — the
