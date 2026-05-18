@@ -60,6 +60,52 @@ fn check(args: &[&str], expected_fixture: &str) {
     assert_eq!(filtered, expected, "mismatch for {full:?}");
 }
 
+fn check_in(input_fixture: &str, args: &[&str], expected_fixture: &str) {
+    ensure_binary_built();
+    let input = fixture_path(input_fixture);
+    let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+    let mut full = vec!["+remove-overlaps", input.to_str().unwrap(), "--"];
+    full.extend_from_slice(args);
+    let out = Command::new(bin_path())
+        .args(&full)
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{full:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let filtered: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected, "mismatch for {full:?}");
+}
+
+#[test]
+fn min_qual_overlap_marking() {
+    // Upstream rows: in=>'remove-overlaps.2'→2.1.out, 'remove-overlaps.3'
+    // →3.1.out (also with --missing 0), `-m 'min(QUAL)' -M rmme`.
+    check_in(
+        "remove-overlaps.2.vcf",
+        &["-m", "min(QUAL)", "-M", "rmme"],
+        "remove-overlaps.2.1.out",
+    );
+    check_in(
+        "remove-overlaps.3.vcf",
+        &["-m", "min(QUAL)", "-M", "rmme"],
+        "remove-overlaps.3.1.out",
+    );
+    check_in(
+        "remove-overlaps.3.vcf",
+        &["-m", "min(QUAL)", "-M", "rmme", "--missing", "0"],
+        "remove-overlaps.3.1.out",
+    );
+}
+
 #[test]
 fn overlap_remove() {
     check(&["-m", "overlap"], "remove-overlaps.1.1.out");
