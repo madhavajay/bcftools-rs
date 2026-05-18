@@ -201,6 +201,11 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/batch-3` added `+prune` `-a count`/`-m count=N`
+  cluster mode + `-k`/`--keep-sites` (the `vcfbuf` `cluster_can_flush_`
+  windowed cluster-size: per-site max unfiltered count over every
+  `-w`-bp window; `-a count`→`INFO/CLUSTER_SIZE`, `-m count=N`→drop
+  clusters > N). Byte-for-byte against `prune.3.{1,2,3}.out`.
 - 2026-05-18: `progress/batch-2` added `+remove-overlaps -m 'min(QUAL)'`
   — the `vcfbuf` `MARK_EXPR` greedy (per connected overlap component,
   mark the lowest-QUAL record and drop its edges until no overlaps
@@ -876,10 +881,11 @@ Latest landed progress:
      `+split.1.4` `GT[0]` subscript also already done — were stale
      deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes;
      `+remove-overlaps -m 'min(QUAL)'` done — `2.1.out`/`3.1.out`
-     pass), `+remove-overlaps --missing DP` heuristic
-     (`remove-overlaps.3.2.out`), `+prune` `-a count`/`-m count=`
-     cluster mode (`prune.3.*`), `+smpl-stats`/`+indel-stats -i/-e`
-     (verify against current code before assuming still blocked).
+     pass; `+prune` `-a count`/`-m count=` cluster mode done —
+     `prune.3.{1,2,3}.out` pass), `+remove-overlaps --missing DP`
+     heuristic (`remove-overlaps.3.2.out`),
+     `+smpl-stats`/`+indel-stats -i/-e` (verify against current code
+     before assuming still blocked).
   6. **Unstarted subcommands** (each a major port): `call`
      (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
      `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
@@ -1538,10 +1544,14 @@ Current local slice:
   MaxR2`), `prune.1.3.out` (`-m 0.5`), `prune.1.4.out` (maxAF
   `--AF-tag`), `prune.1.5.out` (`-i 'GT="alt"'` discards REF-only
   sites before windowing — common filter through the shared engine),
-  `prune.1.6.out` (1st), and `prune.2.1.out` (20-sample). 7 integration
-  tests in `crates/bcftools-rs/tests/plugin_prune.rs` + 4 unit tests.
-  Remaining: `-a count`/`-m count=` cluster mode (`prune.3.*`) and
-  `-N rand` (`hts_drand48` parity).
+  `prune.1.6.out` (1st), `prune.2.1.out` (20-sample), **and the
+  `vcfbuf` `cluster_can_flush_` count mode**: `-a count` annotates
+  `INFO/CLUSTER_SIZE` (max unfiltered-site count over every `-w`-bp
+  window containing the site), `-m count=N` drops clusters of > N
+  sites, `-k`/`--keep-sites` emits `-i`/`-e`-filtered sites unchanged
+  and excluded from counts (`prune.3.{1,2,3}.out`). 8 integration tests
+  in `crates/bcftools-rs/tests/plugin_prune.rs` + 4 unit tests.
+  Remaining: `-N rand` (`hts_drand48` parity).
 - [x] `+dosage` (`crates/bcftools-rs/src/commands/plugins/dosage.rs`):
   port of `dosage.c`. `-t PL,GL,GT` ordered handlers (first applicable
   wins, header-gated for PL/GL); PL/GL dosages from diploid GL-ordered
