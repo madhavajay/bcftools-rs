@@ -397,6 +397,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut prune_max: Option<String> = None;
     let mut prune_set_filter: Option<String> = None;
     let mut prune_filter: Option<(bool, String)> = None;
+    let mut prune_keep_sites = false;
     // contrast options.
     let mut contrast_annots: Option<String> = None;
     let mut contrast_control: Option<String> = None;
@@ -1246,6 +1247,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             "-f" | "--set-filter" if plugin_name.as_deref() == Some("prune") => {
                 prune_set_filter = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
+            "-k" | "--keep-sites" if plugin_name.as_deref() == Some("prune") => {
+                prune_keep_sites = true;
+            }
             "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("prune") => {
                 let exclude = raw == "-e" || raw == "--exclude";
                 let expr = iter
@@ -1946,6 +1950,38 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             None => 0,
         };
+
+        // Cluster path: `-a count` (annotate CLUSTER_SIZE) or
+        // `-m count=N` (drop clusters of > N sites within `-w` bp).
+        let want_count_annot = prune_annot
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("count"));
+        let count_max = prune_max
+            .as_deref()
+            .and_then(|m| m.strip_prefix("count="))
+            .map(|n| {
+                n.parse::<i64>().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Could not parse: --max count={n}"),
+                    )
+                })
+            })
+            .transpose()?;
+        if want_count_annot || count_max.is_some() {
+            let vcf = prune::run_cluster(
+                Path::new(&input),
+                win,
+                want_count_annot,
+                count_max,
+                prune_keep_sites,
+                prune_filter
+                    .as_ref()
+                    .map(|(exclude, expr)| (*exclude, expr.as_str())),
+            )?;
+            write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
 
         // LD path: `-a`/`--annotate` or `-m`/`--max`.
         if prune_annot.is_some() || prune_max.is_some() {

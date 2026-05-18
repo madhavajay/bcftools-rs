@@ -79,6 +79,49 @@ fn prune_include_filter_discards_ref_only_sites() {
     );
 }
 
+fn check3(args: &[&str], expected_fixture: &str) {
+    ensure_binary_built();
+    let input = fixture_path("prune.3.vcf");
+    let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
+    let mut full = vec!["+prune", input.to_str().unwrap()];
+    full.extend_from_slice(args);
+    let out = Command::new(bin_path())
+        .args(&full)
+        .output()
+        .expect("spawn bcftools");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{full:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let filtered: String = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with("##bcftools_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(filtered, expected, "mismatch for {full:?}");
+}
+
+#[test]
+fn prune_cluster_count_modes() {
+    // Upstream rows in=>'prune.3': `-a count` (CLUSTER_SIZE annot, with
+    // and without `-k`) and `-m count=2` (drop clusters > 2 sites).
+    check3(
+        &["-w", "3bp", "-a", "count", "-i", "XX!=0", "-k"],
+        "prune.3.1.out",
+    );
+    check3(
+        &["-w", "3bp", "-a", "count", "-i", "XX!=0"],
+        "prune.3.2.out",
+    );
+    check3(
+        &["-w", "3bp", "-m", "count=2", "-i", "XX!=0"],
+        "prune.3.3.out",
+    );
+}
+
 fn check_in(input: &str, args: &[&str], expected_fixture: &str) {
     ensure_binary_built();
     let input = fixture_path(input);

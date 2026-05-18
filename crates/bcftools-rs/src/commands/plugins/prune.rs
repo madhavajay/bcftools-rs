@@ -337,6 +337,141 @@ fn emit_header(lines: &[&str], out: &mut String) {
 }
 
 // ---------------------------------------------------------------------------
+// Cluster (`-a count` / `-m count=N`) path: vcfbuf `cluster_can_flush_`.
+// ---------------------------------------------------------------------------
+
+/// `+prune -a count` (annotate `INFO/CLUSTER_SIZE`) and/or
+/// `-m count=N` (drop clusters of more than N sites within `-w` bp).
+/// A site's cluster size is the max, over every `-w`-bp window
+/// containing it, of the number of *unfiltered* sites in that window
+/// (upstream `vcfbuf` `cluster_can_flush_`). `-i`/`-e` selects the
+/// unfiltered sites; `keep_sites` (`-k`) emits filtered sites
+/// unchanged (and excluded from counts) instead of discarding them.
+pub fn run_cluster(
+    input: &Path,
+    win: i64,
+    annotate: bool,
+    max_cluster: Option<i64>,
+    keep_sites: bool,
+    filter: Option<(bool, &str)>,
+) -> io::Result<String> {
+    let text = read_vcf_text(input)?;
+    let lines: Vec<&str> = text.lines().collect();
+    let win_bp = -win; // upstream `-w INT bp` => negative span window
+
+    // Parse data records: (chrom, pos1-based, line, filtered?).
+    struct CRec {
+        chrom: String,
+        pos: i64,
+        line: String,
+        filtered: bool,
+    }
+    let mut recs: Vec<CRec> = Vec::new();
+    for line in &lines {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let Ok(pos) = f[1].parse::<i64>() else {
+            continue;
+        };
+        let filtered = match filter {
+            Some((exclude, expr)) => !record_passes(line, exclude, expr),
+            None => false,
+        };
+        recs.push(CRec {
+            chrom: f[0].to_owned(),
+            pos,
+            line: (*line).to_owned(),
+            filtered,
+        });
+    }
+
+    // size[i] = max over all windows [b..e) containing i of the count
+    // of unfiltered sites in that window (upstream sliding window).
+    let n = recs.len();
+    let mut size = vec![0i64; n];
+    let mut b = 0;
+    while b < n {
+        let mut e = b + 1;
+        // upstream: keep while `pos[e]-pos[b]+1 <= -win` (== `< win_bp`).
+        while e < n && recs[e].chrom == recs[b].chrom && recs[e].pos - recs[b].pos < win_bp {
+            e += 1;
+        }
+        let nbuf = (b..e).filter(|&x| !recs[x].filtered).count() as i64;
+        for s in size.iter_mut().take(e).skip(b) {
+            if *s < nbuf {
+                *s = nbuf;
+            }
+        }
+        b += 1;
+    }
+
+    let mut out = String::with_capacity(text.len() + 256);
+    let fileformat = lines.iter().position(|l| l.starts_with("##fileformat="));
+    let has_pass = lines.iter().any(|l| l.starts_with("##FILTER=<ID=PASS,"));
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.starts_with('#') {
+            break;
+        }
+        if line.starts_with("#CHROM") {
+            if annotate {
+                // Upstream prints the raw (negative) `ld_win` value here.
+                out.push_str(&format!(
+                    "##INFO=<ID=CLUSTER_SIZE,Number=1,Type=Integer,Description=\"The number of variants within {win} bp of the site\">\n"
+                ));
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if Some(idx) == fileformat && !has_pass {
+            out.push_str("##FILTER=<ID=PASS,Description=\"All filters passed\">\n");
+        }
+    }
+
+    for (i, r) in recs.iter().enumerate() {
+        if r.filtered {
+            if keep_sites {
+                out.push_str(&r.line);
+                out.push('\n');
+            }
+            continue;
+        }
+        if let Some(maxc) = max_cluster {
+            // `-m count=N`: remove clusters of MORE THAN N sites.
+            if size[i] > maxc {
+                continue;
+            }
+            out.push_str(&r.line);
+            out.push('\n');
+        } else if annotate {
+            let mut f: Vec<&str> = r.line.split('\t').collect();
+            let info = if f[7] == "." || f[7].is_empty() {
+                format!("CLUSTER_SIZE={}", size[i])
+            } else {
+                format!("{};CLUSTER_SIZE={}", f[7], size[i])
+            };
+            let joined = {
+                f[7] = &info;
+                f.join("\t")
+            };
+            out.push_str(&joined);
+            out.push('\n');
+        } else {
+            out.push_str(&r.line);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // LD (`-a`/`-m`) path: vcfbuf _calc_r2_ld + vcfbuf_ld + prune.c driver
 // ---------------------------------------------------------------------------
 
