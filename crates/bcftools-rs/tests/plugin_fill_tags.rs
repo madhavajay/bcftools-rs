@@ -111,3 +111,38 @@ fn format_vaf_vaf1() {
         "fill-tags-VAF.out",
     );
 }
+
+#[test]
+fn func_sum_smpl_sum() {
+    // The TAG:Num=EXPR engine: int(sum(...)) / int(smpl_sum(...)).
+    check(
+        "fill-tags-AD.vcf",
+        &["-t", "INFO/DP:1=int(sum(FMT/AD))"],
+        "fill-tags-AD.1.out",
+    );
+    check(
+        "fill-tags-AD.vcf",
+        &["-t", "INFO/DP:1=int(sum(INFO/AD))"],
+        "fill-tags-AD.2.out",
+    );
+    check(
+        "fill-tags-AD.vcf",
+        &["-t", "FORMAT/DP:1=int(smpl_sum(FMT/AD))"],
+        "fill-tags-AD.3.out",
+    );
+}
+
+#[test]
+fn func_with_population_grouping() {
+    let smpl = fixture_path("fill-tags.3.smpl");
+    check(
+        "view.vcf",
+        &[
+            "-t",
+            "DP:1=int(sum(FORMAT/DP))",
+            "-S",
+            smpl.to_str().unwrap(),
+        ],
+        "fill-tags.5.out",
+    );
+}
