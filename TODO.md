@@ -776,6 +776,27 @@ Latest landed progress:
   tests, 37 filter integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
+- Concrete next steps (as of PR #231, `ad09371`; refreshed after the
+  2026-05-18 +impute-info / +vcf2table / +split-filter / filter-subscript
+  session): every remaining unimplemented plugin is infra-coupled (no
+  filter-free plugin slice remains), and the suite is fully green with no
+  `#[ignore]` markers. The highest-value remaining items are, in order:
+  1. **Filter engine completeness** — the shared engine (`src/filter.rs`,
+     ~2200 LOC) already handles GT class literals incl. subscripts,
+     FORMAT vector predicates, `TYPE`/`ALT="*"`, scalar INFO/FORMAT
+     comparisons. Extend toward the constructs the remaining plugins need
+     (`+setGT`, `+split-vep` expressions, `+gvcfz` `-g` group filters,
+     `remove-overlaps -m 'min(QUAL)'`, `prune -i/-e`). Each plugin then
+     becomes a bounded, fixture-backed slice.
+  2. **`+gvcfz`** (35th plugin): its `-g` group expressions
+     (`GT!="alt"`, `GQ>10`) are now engine-supported; remaining work is
+     the block-compression algorithm + the `| query` fixture coupling.
+  3. Deepen the large subcommand first-slices (`merge`, `consensus`,
+     `annotate`, `norm`) and tighten `concat`/`filter`/`stats`/`isec`/
+     `query`/`view`/`reheader`/`convert` edge cases.
+  NB: several per-entry "Remaining" notes are stale — verify against the
+  current code/tests before assuming a gap (e.g. query `TYPE`,
+  `ALT="*"`, FORMAT subscripts already work and are tested).
 - Next local-only queue:
   continue extending the `merge` slice toward full synced-reader alignment,
   allele unification, and `-m none|snps|indels|both|all|id`; deepen the
