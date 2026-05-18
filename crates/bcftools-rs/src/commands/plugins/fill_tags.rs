@@ -18,9 +18,13 @@
 //! the shared filter engine), plus the `Added by +fill-tags
 //! expression …` header.
 //!
-//! Deferred (tracked in TODO.md): `END`/`TYPE`, and the remaining
-//! function engine (`ssum`/`fisher`/`binom`/`phred`, arithmetic,
-//! `[*:i]` subscripts).
+//! `END` (`INFO/END` else `POS+len(REF)-1`) and `TYPE`
+//! (`bcf_get_variant_types` classification) are pop-independent site
+//! tags.
+//!
+//! Deferred (tracked in TODO.md): the remaining function engine
+//! (`ssum`/`fisher`/`phred`, arithmetic, `[*:i]`/`[*]` per-element
+//! subscripts).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -46,6 +50,8 @@ enum Tag {
     AcHom,
     AcHemi,
     Hwe,
+    End,
+    Type,
     ExcHet,
     Vaf,
     Vaf1,
@@ -65,6 +71,8 @@ const WRITE_ORDER: &[Tag] = &[
     Tag::AcHemi,
     Tag::Hwe,
     Tag::ExcHet,
+    Tag::End,
+    Tag::Type,
 ];
 
 /// The `all` / default (no `-t`) tag set in this slice. Upstream `all`
@@ -102,6 +110,8 @@ fn parse_tag(name: &str) -> Result<Tag, String> {
         "HWE" => Ok(Tag::Hwe),
         "EXCHET" => Ok(Tag::ExcHet),
         "F_MISSING" => Ok(Tag::FMissing),
+        "END" => Ok(Tag::End),
+        "TYPE" => Ok(Tag::Type),
         "VAF" => Ok(Tag::Vaf),
         "VAF1" => Ok(Tag::Vaf1),
         _ => Err(format!(
@@ -161,6 +171,16 @@ impl Tag {
                 "ExcHet",
                 "##INFO=<ID=ExcHet{S},Number=A,Type=Float,Description=\"Test excess heterozygosity{IN}; 1=good, 0=bad\">",
             ),
+            // `END`/`TYPE` are pop-independent (upstream `bcf_hdr_printf`,
+            // not the `hdr_append` macro): emitted only for the global pop.
+            Tag::End => (
+                "END",
+                "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant\">",
+            ),
+            Tag::Type => (
+                "TYPE",
+                "##INFO=<ID=TYPE,Number=.,Type=String,Description=\"Variant type\">",
+            ),
             // FORMAT tags — handled by the dedicated VAF step, never via
             // the INFO `HDR_ORDER`/`WRITE_ORDER` paths.
             Tag::Vaf => (
@@ -191,6 +211,8 @@ const HDR_ORDER: &[Tag] = &[
     Tag::Af,
     Tag::Maf,
     Tag::Hwe,
+    Tag::End,
+    Tag::Type,
     Tag::ExcHet,
 ];
 
@@ -490,6 +512,77 @@ fn eval_sum(
     if any { Some(acc) } else { None }
 }
 
+/// `INFO/END` if present, else `POS + len(REF) - 1` (upstream
+/// `rec->pos + rec->rlen`).
+fn variant_end(cols: &[&str]) -> i64 {
+    let pos: i64 = cols.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+    let info = cols.get(7).copied().unwrap_or(".");
+    if info != "." {
+        for kv in info.split(';') {
+            if let Some(v) = kv.strip_prefix("END")
+                && let Some(n) = v.strip_prefix('=').and_then(|x| x.parse::<i64>().ok())
+            {
+                return n;
+            }
+        }
+    }
+    let reflen = cols.get(3).map(|r| r.len() as i64).unwrap_or(1);
+    pos + reflen - 1
+}
+
+/// `bcf_get_variant_types`: per-ALT classification, bits OR-ed and
+/// emitted as `REF,SNP,MNP,INDEL,OTHER,BND,OVERLAP` (only the set ones).
+fn variant_type(cols: &[&str]) -> Option<String> {
+    const REF: u32 = 1;
+    const SNP: u32 = 1 << 1;
+    const MNP: u32 = 1 << 2;
+    const INDEL: u32 = 1 << 3;
+    const OTHER: u32 = 1 << 4;
+    const BND: u32 = 1 << 5;
+    const OVERLAP: u32 = 1 << 6;
+    let r = cols.get(3).copied().unwrap_or("");
+    let alt = cols.get(4).copied().unwrap_or(".");
+    let mut bits = 0u32;
+    if alt == "." {
+        bits |= REF;
+    } else {
+        for a in alt.split(',') {
+            if a == "*" {
+                bits |= OVERLAP;
+            } else if a.contains('[') || a.contains(']') {
+                bits |= BND;
+            } else if a.starts_with('<') {
+                bits |= OTHER;
+            } else if a == r {
+                bits |= REF;
+            } else if a.len() == r.len() {
+                bits |= if a.len() == 1 { SNP } else { MNP };
+            } else {
+                bits |= INDEL;
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    for (bit, name) in [
+        (REF, "REF"),
+        (SNP, "SNP"),
+        (MNP, "MNP"),
+        (INDEL, "INDEL"),
+        (OTHER, "OTHER"),
+        (BND, "BND"),
+        (OVERLAP, "OVERLAP"),
+    ] {
+        if bits & bit != 0 {
+            parts.push(name);
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(","))
+    }
+}
+
 /// `int32_from_double`: bcftools truncates toward zero; a missing value
 /// renders as `.`.
 fn fmt_num(v: Option<f64>, is_int: bool) -> String {
@@ -625,6 +718,10 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
                     continue;
                 }
                 for p in &pops {
+                    // END/TYPE are pop-independent — only the global pop.
+                    if matches!(tag, Tag::End | Tag::Type) && !p.suffix.is_empty() {
+                        continue;
+                    }
                     let id = format!("{}{}", tag.base_id(), p.suffix);
                     if declared.iter().any(|d| d == &id) {
                         continue;
@@ -968,6 +1065,19 @@ fn process_record(
                                 fmt_float(fr[1])
                             };
                             set_info(&mut info, &key, &maf);
+                        }
+                    }
+                    // Pop-independent site tags: only the global pop.
+                    Tag::End => {
+                        if p.suffix.is_empty() {
+                            set_info(&mut info, "END", &variant_end(&f).to_string());
+                        }
+                    }
+                    Tag::Type => {
+                        if p.suffix.is_empty()
+                            && let Some(t) = variant_type(&f)
+                        {
+                            set_info(&mut info, "TYPE", &t);
                         }
                     }
                     // FORMAT tags — emitted by the dedicated VAF step below,
@@ -1357,7 +1467,10 @@ mod tests {
         assert!(matches!(parse_tag("HWE"), Ok(Tag::Hwe)));
         assert!(matches!(parse_tag("ExcHet"), Ok(Tag::ExcHet)));
         assert!(matches!(parse_tag("F_MISSING"), Ok(Tag::FMissing)));
-        // The function engine / END / TYPE remain unported.
-        assert!(parse_tag("TYPE").is_err());
+        assert!(matches!(parse_tag("END"), Ok(Tag::End)));
+        assert!(matches!(parse_tag("INFO/TYPE"), Ok(Tag::Type)));
+        assert!(matches!(parse_tag("VAF1"), Ok(Tag::Vaf1)));
+        // Unknown / not-yet-ported names still error.
+        assert!(parse_tag("NONESUCH").is_err());
     }
 }

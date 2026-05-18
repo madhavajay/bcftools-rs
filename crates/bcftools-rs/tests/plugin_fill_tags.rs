@@ -226,3 +226,20 @@ fn func_n_pass_subscript_and_binom() {
         "fill-tags-AD.5.out",
     );
 }
+
+#[test]
+fn end_type_with_all_set() {
+    // `-t all,END,TYPE,F_MISSING` — same output for an input that
+    // pre-declares every tag (`fill-tags-rw`) and one that declares
+    // only NS/AN/AF/AC (`fill-tags-AN0`).
+    check(
+        "fill-tags-rw.vcf",
+        &["-t", "all,END,TYPE,F_MISSING"],
+        "fill-tags-AN0.out",
+    );
+    check(
+        "fill-tags-AN0.vcf",
+        &["-t", "all,END,TYPE,F_MISSING"],
+        "fill-tags-AN0.out",
+    );
+}
