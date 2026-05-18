@@ -282,3 +282,14 @@ fn func_phred_fisher() {
         "fisher.6.out",
     );
 }
+
+#[test]
+fn func_per_sample_arithmetic() {
+    // `float(FMT/AD[*:0] / ssum(FMT/AD[*]))` — per-sample AD[0] over
+    // the sample's AD total. Harness compares after `grep -v ^#`.
+    check_nohdr(
+        "query.func.1.vcf",
+        &["-t", "FMT/AB:1=float(FMT/AD[*:0] / ssum(FMT/AD[*]))"],
+        "fill-tags.func.1.out",
+    );
+}
