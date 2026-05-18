@@ -39,12 +39,7 @@ fn check(input: &str, plugin_args: &[&str], expected_fixture: &str) {
     let input = fixture_path(input);
     let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
 
-    let mut full = vec![
-        "+fill-tags",
-        "--no-version",
-        input.to_str().unwrap(),
-        "--",
-    ];
+    let mut full = vec!["+fill-tags", "--no-version", input.to_str().unwrap(), "--"];
     full.extend_from_slice(plugin_args);
     let out = Command::new(bin_path())
         .args(&full)
