@@ -436,6 +436,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     // setGT options.
     let mut setgt_target: Option<String> = None;
     let mut setgt_new: Option<String> = None;
+    let mut setgt_filter: Option<(bool, String)> = None;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -611,6 +612,21 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             _ if raw.starts_with("--new-gt=") && plugin_name.as_deref() == Some("setGT") => {
                 setgt_new = Some(raw["--new-gt=".len()..].to_owned());
+            }
+            "-i" | "--include" | "-e" | "--exclude" if plugin_name.as_deref() == Some("setGT") => {
+                let exclude = raw == "-e" || raw == "--exclude";
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| io::Error::other("setGT requires an expression after -i/-e"))?
+                    .to_string_lossy()
+                    .into_owned();
+                setgt_filter = Some((exclude, expr));
+            }
+            _ if raw.starts_with("--include=") && plugin_name.as_deref() == Some("setGT") => {
+                setgt_filter = Some((false, raw["--include=".len()..].to_owned()));
+            }
+            _ if raw.starts_with("--exclude=") && plugin_name.as_deref() == Some("setGT") => {
+                setgt_filter = Some((true, raw["--exclude=".len()..].to_owned()));
             }
             "-e" | "--exons" if plugin_name.as_deref() == Some("frameshifts") => {
                 frameshifts_exons = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1643,7 +1659,13 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
         };
         let (vcf, nchanged) = crate::commands::plugins::setgt::run(
             Path::new(&input),
-            crate::commands::plugins::setgt::Options { target, new_gt },
+            crate::commands::plugins::setgt::Options {
+                target,
+                new_gt,
+                filter: setgt_filter
+                    .as_ref()
+                    .map(|(exclude, expr)| (*exclude, expr.as_str())),
+            },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
         writeln!(io::stderr().lock(), "Filled {nchanged} alleles")?;

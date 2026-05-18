@@ -1,16 +1,18 @@
 //! `bcftools +setGT` (upstream `bcftools/plugins/setGT.c`).
 //!
-//! First slice: the filter-free target classes `-t .` / `-t ./.` /
-//! `-t ./x` / `-t a` with the simple new-genotype modes `-n 0`
-//! (reference) and `-n .` (missing). Per upstream `set_gt`, every
-//! allele of a targeted sample genotype is replaced (ploidy preserved,
-//! result unphased), so a partially-missing `./1` becomes `0/0` under
-//! `-n 0`.
+//! Target classes `-t .` / `-t ./.` / `-t ./x` / `-t a` (missing/all
+//! masks) and `-t q` (samples selected by the `-i` filter, evaluated
+//! per-sample through the shared filter engine), with new-genotype
+//! modes `-n 0` (reference) and `-n .` (missing). Per upstream
+//! `set_gt`, every allele of a targeted sample genotype is replaced
+//! (ploidy preserved, result unphased), so a partially-missing `./1`
+//! becomes `0/0` under `-n 0`.
 //!
-//! Deferred to later slices (tracked in TODO.md): `-t q` (filter
-//! engine), `-t X` random, `-n` major/minor allele inference (`m`/`M`),
-//! custom `c:GT`, `-n i/p/u` phase ops, `-n X` (VAF), and the `binom()`
-//! target. Those upstream rows stay deferred.
+//! Deferred to later slices (tracked in TODO.md): `-t q` with `-e`
+//! (per-sample exclude invert), the sample-subset `GT[@file]` /
+//! `binom()` forms (`setGT.{2,3}.out`), `-t X` random, `-n` major/minor
+//! allele inference (`m`/`M`), custom `c:GT`, `-n i/p/u` phase ops,
+//! `-n X` (VAF), and the `binom()` target.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -20,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::vcf_compat::normalize_vcf_text;
 
 /// Target-genotype class mask (upstream `tgt_mask`).
@@ -36,27 +39,37 @@ enum NewGt {
     Missing,
 }
 
+/// Which genotypes `-t` targets.
+#[derive(Clone, Copy)]
+enum Target {
+    /// `.` / `./.` / `./x` / `a` — a missing/all class mask.
+    Mask(TgtMask),
+    /// `q` — samples selected by the `-i`/`-e` filter expression.
+    Query,
+}
+
 /// Parse `-t`; returns `None` for the still-deferred classes
-/// (`q`/`X`/binom) so the caller can surface a clear error.
-fn parse_target(spec: &str) -> Option<TgtMask> {
+/// (`X` random / `binom`) so the caller can surface a clear error.
+fn parse_target(spec: &str) -> Option<Target> {
     match spec {
-        "." => Some(TgtMask {
+        "q" | "?" => Some(Target::Query),
+        "." => Some(Target::Mask(TgtMask {
             missing: true,
             partial: true,
             all: false,
-        }),
-        "./x" => Some(TgtMask {
+        })),
+        "./x" => Some(Target::Mask(TgtMask {
             partial: true,
             ..TgtMask::default()
-        }),
-        "./." => Some(TgtMask {
+        })),
+        "./." => Some(Target::Mask(TgtMask {
             missing: true,
             ..TgtMask::default()
-        }),
-        "a" => Some(TgtMask {
+        })),
+        "a" => Some(Target::Mask(TgtMask {
             all: true,
             ..TgtMask::default()
-        }),
+        })),
         _ => None,
     }
 }
@@ -75,19 +88,43 @@ fn parse_new(spec: &str) -> Option<NewGt> {
 pub struct Options<'a> {
     pub target: &'a str,
     pub new_gt: &'a str,
+    /// `-i`/`-e` expression as `(exclude, expr)`; required for `-t q`.
+    pub filter: Option<(bool, &'a str)>,
 }
 
 /// Reads the input VCF/BCF and returns the genotype-rewritten VCF text.
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
-    let tgt = parse_target(opts.target).ok_or_else(|| {
+    let target = parse_target(opts.target).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Unsupported,
             format!(
-                "setGT -t '{}' is not supported in this slice (only ., ./., ./x, a)",
+                "setGT -t '{}' is not supported in this slice (only ., ./., ./x, a, q)",
                 opts.target
             ),
         )
     })?;
+    let filter = match (&target, opts.filter) {
+        (Target::Query, Some((false, expr))) => Some(expr),
+        (Target::Query, Some((true, _))) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "setGT -t q with -e (exclude) is not supported in this slice",
+            ));
+        }
+        (Target::Query, None) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected -i/-e with -t q",
+            ));
+        }
+        (Target::Mask(_), Some(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected -t q with -i/-e",
+            ));
+        }
+        (Target::Mask(_), None) => None,
+    };
     let new = parse_new(opts.new_gt).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::Unsupported,
@@ -117,12 +154,19 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
         let gt_idx = f[8].split(':').position(|k| k == "GT");
         let mut rebuilt: Vec<String> = Vec::new();
         if let Some(gi) = gt_idx {
-            for sample in &f[9..] {
+            let owned: Vec<String> = f.iter().map(|s| (*s).to_owned()).collect();
+            for (si, sample) in f[9..].iter().enumerate() {
                 let mut sub: Vec<String> = sample.split(':').map(str::to_owned).collect();
-                if gi < sub.len()
-                    && let Some(newgt) = rewrite_gt(&sub[gi], tgt, new, &mut nchanged)
-                {
-                    sub[gi] = newgt;
+                if gi < sub.len() {
+                    let do_set = match target {
+                        Target::Mask(m) => mask_targets(&sub[gi], m),
+                        Target::Query => {
+                            sample_passes(&owned, si, filter.expect("query needs filter"))?
+                        }
+                    };
+                    if do_set {
+                        sub[gi] = rewrite_allele(&sub[gi], new, &mut nchanged);
+                    }
                 }
                 rebuilt.push(sub.join(":"));
             }
@@ -136,35 +180,72 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<(String, u64)> {
     Ok((out, nchanged))
 }
 
-/// Returns the rewritten GT string if this sample is targeted, else
-/// `None`. Mirrors upstream `set_gt`: all alleles → the new allele,
-/// ploidy preserved, output unphased.
-fn rewrite_gt(gt: &str, tgt: TgtMask, new: NewGt, nchanged: &mut u64) -> Option<String> {
+/// Whether a mask target (`.`/`./.`/`./x`/`a`) selects this genotype.
+fn mask_targets(gt: &str, tgt: TgtMask) -> bool {
     let alleles: Vec<&str> = gt.split(['/', '|']).collect();
     let ploidy = alleles.len();
     if ploidy == 0 {
-        return None;
+        return false;
     }
     let nmiss = alleles
         .iter()
         .filter(|a| **a == "." || a.is_empty())
         .count();
+    tgt.all || (tgt.partial && nmiss > 0) || (tgt.missing && ploidy == nmiss)
+}
 
-    let do_set = tgt.all || (tgt.partial && nmiss > 0) || (tgt.missing && ploidy == nmiss);
-    if !do_set {
-        return None;
-    }
-
+/// Upstream `set_gt`: replace every allele with the new allele, ploidy
+/// preserved, output unphased. Updates the changed-allele counter.
+fn rewrite_allele(gt: &str, new: NewGt, nchanged: &mut u64) -> String {
+    let alleles: Vec<&str> = gt.split(['/', '|']).collect();
+    let ploidy = alleles.len().max(1);
     let new_allele = match new {
         NewGt::Ref => "0",
         NewGt::Missing => ".",
     };
     let rebuilt = vec![new_allele; ploidy].join("/");
     if rebuilt != gt {
-        // upstream counts changed alleles, not samples
         *nchanged += alleles.iter().filter(|a| **a != new_allele).count() as u64;
     }
-    Some(rebuilt)
+    rebuilt
+}
+
+/// Evaluate the `-i` expression for sample `si` (upstream `-t q`
+/// per-sample `smpl_pass`): a single-sample [`EvalContext`] over that
+/// sample's FORMAT values, falling back to record-level lookups for
+/// site fields (CHROM/POS/QUAL/INFO/…).
+fn sample_passes(fields: &[String], si: usize, expr: &str) -> io::Result<bool> {
+    let format_keys: Vec<&str> = fields[8].split(':').collect();
+    let sample = &fields[9 + si];
+    let values: Vec<&str> = sample.split(':').collect();
+    let context = EvalContext::new().with_sample(
+        format_keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let raw = values.get(i).copied().unwrap_or(".");
+                let value = if key.eq_ignore_ascii_case("GT") {
+                    FilterValue::String(raw.to_owned())
+                } else if raw == "." || raw.is_empty() {
+                    FilterValue::Missing
+                } else if let Ok(n) = raw.parse::<f64>() {
+                    FilterValue::Number(n)
+                } else {
+                    FilterValue::String(raw.to_owned())
+                };
+                ((*key).to_owned(), value)
+            })
+            .collect::<Vec<_>>(),
+    );
+    Ok(
+        bcffilter::eval_expression_with(expr, &context, |name, sample_index| {
+            if sample_index.is_some() {
+                return None;
+            }
+            crate::commands::filter::record_lookup(name, fields)
+        })?
+        .truthy(),
+    )
 }
 
 fn read_vcf_text(path: &Path) -> io::Result<String> {
@@ -208,8 +289,14 @@ mod tests {
     use super::*;
 
     fn rw(gt: &str, t: &str, n: &str) -> Option<String> {
+        let Target::Mask(m) = parse_target(t).unwrap() else {
+            panic!("rw helper expects a mask target");
+        };
+        if !mask_targets(gt, m) {
+            return None;
+        }
         let mut c = 0;
-        rewrite_gt(gt, parse_target(t).unwrap(), parse_new(n).unwrap(), &mut c)
+        Some(rewrite_allele(gt, parse_new(n).unwrap(), &mut c))
     }
 
     #[test]
@@ -248,8 +335,21 @@ mod tests {
 
     #[test]
     fn unsupported_modes_rejected() {
-        assert!(parse_target("q").is_none());
+        assert!(parse_target("X").is_none());
         assert!(parse_new("pM").is_none());
         assert!(parse_new("c:1").is_none());
+        assert!(matches!(parse_target("q"), Some(Target::Query)));
+    }
+
+    #[test]
+    fn query_per_sample_filter() {
+        // FORMAT GT:GQ:DP; only the sample matching the expression sets.
+        let fields: Vec<String> = "1\t3177144\t.\tG\tT\t.\t.\t.\tGT:GQ:DP\t./.:150:30\t0/1:99:30"
+            .split('\t')
+            .map(str::to_owned)
+            .collect();
+        let expr = r#"GT~"." && FMT/DP=30 && GQ=150"#;
+        assert!(sample_passes(&fields, 0, expr).unwrap());
+        assert!(!sample_passes(&fields, 1, expr).unwrap());
     }
 }
