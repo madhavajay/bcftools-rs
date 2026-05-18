@@ -201,6 +201,17 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/impute-info` added the `+impute-info` plugin
+  (filter-free): the IMPUTE2 `INFO/INFO` info score computed from
+  `FORMAT/GP` biallelic-diploid genotype probabilities, with per-sample
+  renormalization, missing/short-vector handling, `bcf_hdr_append`-style
+  `##INFO` header insertion, existing-`INFO`-key replacement, and the
+  upstream stderr total/added/skipped summary plus first-occurrence
+  warnings. The score is computed in `f64`, stored as `f32`, and
+  serialized through the shared HTSlib `kputd` formatter. Upstream
+  `test.pl` has no `impute-info` row, so coverage is 8 unit tests +
+  2 synthetic integration tests in
+  `crates/bcftools-rs/tests/plugin_impute_info.rs`.
 - 2026-05-18: PR #219 (`progress/split-common-filter`, merge commit
   `2a374ef`) added common `+split -i` / `-e` record filtering through
   the shared text filter engine after per-output sample/tag projection,
@@ -757,7 +768,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 32 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity` |
+| `plugin` | registry + 33 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -768,8 +779,8 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-32 of 41 plugin record-processing implementations done (see Wave F);
-13 remain.
+33 of 41 plugin record-processing implementations done (see Wave F);
+12 remain.
 
 Current whole-project estimate:
 
@@ -1071,7 +1082,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 9 remaining unimplemented plugins and many still-open plugin
+dump). The 8 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1509,6 +1520,22 @@ Current local slice:
   Remaining: true indexed tabix/BCF iterator behavior, exact upstream
   region-list label/ordering parity, GT storage-type edge cases, and
   stdin-with-region diagnostics.
+
+- [x] `+impute-info` (`crates/bcftools-rs/src/commands/plugins/impute_info.rs`):
+  filter-free port of `impute-info.c`. Adds the IMPUTE2 `INFO/INFO` info
+  score from `FORMAT/GP` biallelic-diploid genotype probabilities
+  (per-sample renormalization; missing / short-vector entries treated as
+  0, matching the upstream BRANCH macro), with `bcf_hdr_append`-style
+  `##INFO` header insertion after the last `##INFO` line, replacement of
+  any existing `INFO=` key, and the upstream stderr
+  total/info-added/no-tag/not-biallelic-diploid summary plus
+  first-occurrence warnings. Score computed in `f64`, stored as `f32`,
+  serialized via the shared HTSlib `kputd` formatter. VCF/VCF.gz/BCF
+  input normalized through the existing text-view path. Upstream has no
+  `test.pl` row; covered by 8 unit tests + 2 synthetic integration tests
+  in `crates/bcftools-rs/tests/plugin_impute_info.rs`. Remaining: BCF
+  output, `-Ou` piping, and the (commented-out upstream) `-i`/`-t`
+  metric/tag selection options.
 
 Grouped roughly by complexity / shared dependencies:
 
