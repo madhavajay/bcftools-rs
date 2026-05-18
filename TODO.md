@@ -811,9 +811,9 @@ Latest landed progress:
   and report stale green results that fail CI. Per-suite test counts are kept
   current in each command/plugin snapshot bullet rather than enumerated here
   (that enumeration drifted repeatedly); the workspace is green as of the
-  latest merged commit on `main` (`8c9a833`) (348 lib unit tests plus
+  latest merged commit on `main` (`f47bac1`) (348 lib unit tests plus
   per-command and per-plugin integration suites; 77 `query`, 11 `+split`,
-  37 filter, 2 `+gvcfz`, 2 `+setGT` integration tests).
+  37 filter, 2 `+gvcfz`, 4 `+setGT` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
 - Remaining tasks (as of PR #238, `220d8e4`; 36/41 plugins; suite fully
@@ -913,6 +913,17 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 Current whole-project estimate:
 
+- 2026-05-18 (post `+setGT` `TAG[@file]`, PR #240 landed; no open PR):
+  approximately 53-56% complete toward the full stated goal. Movement
+  since the prior estimate adds `+setGT -t q` `TAG[@file]` sample-subset
+  subscripts (plugin-level strip + per-sample membership; comma FORMAT
+  vectors as numeric lists for `binom(AD)`), un-deferring `setGT.2.out`
+  and `setGT.3.out` (all setGT `-t .`/`-t q` upstream fixtures now
+  pass). 36 of 41 plugins done; 5 unimplemented (`+fill-tags`/
+  `+split-vep` filter-engine, `+trio-dnm3` PED, `+vrfs` mpileup,
+  `+color-chrs` HMM). Next: engine-level `@file` (for `+split-vep`),
+  then `+split-vep`/`+fill-tags`, the deferred `gvcfz.2.out` /
+  `setGT.*` `-n` modes, and large-subcommand deepening.
 - 2026-05-18 (post `+setGT -t q`, PR #237 landed; no open PR):
   approximately 52-55% complete toward the full stated goal. Movement
   since the prior estimate adds the `+setGT -t q` per-sample filter
