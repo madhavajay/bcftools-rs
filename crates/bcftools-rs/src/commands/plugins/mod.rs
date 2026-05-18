@@ -32,6 +32,7 @@ pub mod parental_origin;
 pub mod prune;
 pub mod remove_overlaps;
 pub mod scatter;
+pub mod setgt;
 pub mod smpl_stats;
 pub mod split;
 pub mod tag2tag;

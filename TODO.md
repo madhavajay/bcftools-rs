@@ -201,6 +201,16 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-18: `progress/setgt` added the `+setGT` plugin (36th, first
+  slice) — the filter-free target classes `-t .` / `-t ./.` / `-t ./x`
+  / `-t a` with new-genotype modes `-n 0` (reference) and `-n .`
+  (missing), faithfully replacing every allele of a targeted sample
+  (ploidy preserved, result unphased) per upstream `set_gt`.
+  Byte-for-byte against `missing2ref.out` (the
+  `+setGT --no-version -- -t . -n 0` upstream row); 5 unit + 1
+  integration test. Deferred: `-t q` (filter engine), major/minor
+  (`-n m/M`), custom (`-n c:GT`), phase ops (`-n i/p/u`), VAF (`-n X`),
+  random (`-t X`), and the `binom()` target.
 - 2026-05-18: `progress/gvcfz` added the `+gvcfz` plugin (35th) — gVCF
   block compression by `-g` group expressions, evaluated through the
   shared filter engine (same wiring as `+split`), with `-a` allele
@@ -838,7 +848,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 35 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz` |
+| `plugin` | registry + 36 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT` |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -849,8 +859,8 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `view` | broad slice | `commands/view.rs` — 64-bit BCF pipe parity pending |
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
-35 of 41 plugin record-processing implementations done (see Wave F);
-10 remain.
+36 of 41 plugin record-processing implementations done (see Wave F);
+9 remain.
 
 Current whole-project estimate:
 
@@ -1208,7 +1218,7 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 6 remaining unimplemented plugins and many still-open plugin
+dump). The 5 remaining unimplemented plugins and many still-open plugin
 subfeatures are heavier and coupled to shared infra still in progress: the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
@@ -1707,6 +1717,22 @@ Current local slice:
   the `FLT:-` catch-all path for `-a`-collapsed multiallelic block
   representatives (a `gq_key`/`bcf_update_alleles` interaction); plus
   BCF output, `-W` indexing, and output threading.
+
+- [x] `+setGT` (`crates/bcftools-rs/src/commands/plugins/setgt.rs`):
+  first slice of `setGT.c`. Filter-free target classes `-t .` /
+  `-t ./.` / `-t ./x` / `-t a` with new-genotype modes `-n 0`
+  (reference) and `-n .` (missing); per-sample GT rewrite replaces
+  every allele of a targeted genotype, ploidy preserved and result
+  unphased, mirroring upstream `set_gt`. Emits the upstream
+  `Filled N alleles` stderr line. Byte-for-byte against
+  `missing2ref.out` (the `+setGT --no-version -- -t . -n 0` row); 5
+  unit + 1 integration test in
+  `crates/bcftools-rs/tests/plugin_setgt.rs`. Remaining: `-t q` (filter
+  engine; `setGT.{1,2,3}.out`), `-n m`/`-n M` major/minor allele
+  inference, custom `-n c:GT` (incl. `m`/`M`/`X` alleles;
+  `setGT.3.{1..6}.out`, `setGT.2.1.out`), `-n i`/`p`/`u` phase ops,
+  `-n X` (VAF), `-t X` random, the `binom()` target, BCF output, and
+  `-W` indexing.
 
 Grouped roughly by complexity / shared dependencies:
 
