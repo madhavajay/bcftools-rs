@@ -11,11 +11,15 @@
 //! fixed order and floats use C `%g`/6 over the f32-stored value.
 //!
 //! `FORMAT/VAF`+`VAF1` are computed from `FORMAT/AD` (upstream
-//! `process_vaf_vaf1`), independent of `GT`.
+//! `process_vaf_vaf1`), independent of `GT`. The `TAG:Num=EXPR`
+//! function engine is partially ported:
+//! `[int|float](sum|smpl_sum(INFO/X|FMT/X))` with per-pop INFO output
+//! and per-sample FORMAT output, plus the `Added by +fill-tags
+//! expression …` header.
 //!
-//! Deferred (tracked in TODO.md): `END`/`TYPE` and the `TAG:Num=EXPR`
-//! function engine
-//! (`sum`/`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/`phred`/…).
+//! Deferred (tracked in TODO.md): `END`/`TYPE`, and the remaining
+//! function engine (`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/`phred`,
+//! arithmetic, `[*:i]` subscripts).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -203,6 +207,196 @@ struct Pop {
     suffix: String,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum FuncKind {
+    /// `sum(X)` — scalar total over (pop) samples and all values.
+    Sum,
+    /// `smpl_sum(X)` — per-sample total (a FORMAT result).
+    SmplSum,
+}
+
+/// A `[INFO/|FORMAT/]DST[:CNT]=[int(|float(]<KIND>(<OPERAND>))` tag,
+/// the subset of upstream's `ftf_filter_expr` engine this slice ports.
+struct Func {
+    dst: String,
+    /// `true` → INFO result, `false` → FORMAT result.
+    info: bool,
+    /// `Some(n)` → `Number=n` (`:CNT`), `None` → `Number=.`.
+    cnt: Option<i64>,
+    is_int: bool,
+    kind: FuncKind,
+    /// Operand: `true` = `INFO/<tag>`, `false` = `FORMAT/<tag>`.
+    operand_info: bool,
+    operand_tag: String,
+    /// The original `-t` token (for the `Added by +fill-tags
+    /// expression …` header description).
+    raw: String,
+}
+
+fn parse_func(token: &str) -> Result<Func, String> {
+    let (lhs, expr) = token
+        .split_once('=')
+        .ok_or_else(|| format!("could not parse \"{token}\""))?;
+    let (info, name) = if let Some(r) = lhs
+        .strip_prefix("INFO/")
+        .or_else(|| lhs.strip_prefix("info/"))
+    {
+        (true, r)
+    } else if let Some(r) = lhs
+        .strip_prefix("FORMAT/")
+        .or_else(|| lhs.strip_prefix("format/"))
+        .or_else(|| lhs.strip_prefix("FMT/"))
+        .or_else(|| lhs.strip_prefix("fmt/"))
+    {
+        (false, r)
+    } else {
+        (true, lhs)
+    };
+    let (dst, cnt) = match name.split_once(':') {
+        Some((d, c)) => (
+            d.to_owned(),
+            Some(
+                c.parse::<i64>()
+                    .map_err(|_| format!("could not parse \"{token}\""))?,
+            ),
+        ),
+        None => (name.to_owned(), None),
+    };
+
+    // Optional int()/integer()/float() wrapper.
+    let mut e = expr.trim();
+    let mut is_int = false;
+    for (pfx, isi) in [("int(", true), ("integer(", true), ("float(", false)] {
+        if e.len() > pfx.len() && e[..pfx.len()].eq_ignore_ascii_case(pfx) && e.ends_with(')') {
+            e = e[pfx.len()..e.len() - 1].trim();
+            is_int = isi;
+            break;
+        }
+    }
+
+    // `<KIND>(<OPERAND>)`.
+    let (kind, inner) = if let Some(r) = e.strip_prefix("sum(").filter(|_| e.ends_with(')')) {
+        (FuncKind::Sum, &r[..r.len() - 1])
+    } else if let Some(r) = e.strip_prefix("smpl_sum(").filter(|_| e.ends_with(')')) {
+        (FuncKind::SmplSum, &r[..r.len() - 1])
+    } else {
+        return Err(format!(
+            "the expression \"{e}\" is not yet ported (this slice supports \
+             int/float(sum|smpl_sum(INFO/TAG|FMT/TAG)))"
+        ));
+    };
+    let inner = inner.trim();
+    let (operand_info, operand_tag) = if let Some(r) = inner
+        .strip_prefix("INFO/")
+        .or_else(|| inner.strip_prefix("info/"))
+    {
+        (true, r)
+    } else if let Some(r) = inner
+        .strip_prefix("FORMAT/")
+        .or_else(|| inner.strip_prefix("format/"))
+        .or_else(|| inner.strip_prefix("FMT/"))
+        .or_else(|| inner.strip_prefix("fmt/"))
+    {
+        (false, r)
+    } else {
+        return Err(format!(
+            "the operand \"{inner}\" must be INFO/TAG or FMT/TAG in this slice"
+        ));
+    };
+    Ok(Func {
+        dst,
+        info,
+        cnt,
+        is_int,
+        kind,
+        operand_info,
+        operand_tag: operand_tag.to_owned(),
+        raw: token.to_owned(),
+    })
+}
+
+/// Numeric values of an `INFO/<tag>` array (`.`/non-numeric skipped).
+fn info_operand_values(cols: &[&str], tag: &str) -> Vec<f64> {
+    let info = cols.get(7).copied().unwrap_or(".");
+    if info == "." {
+        return Vec::new();
+    }
+    let pfx = format!("{tag}=");
+    for kv in info.split(';') {
+        if let Some(v) = kv.strip_prefix(&pfx) {
+            return v.split(',').filter_map(|x| x.parse::<f64>().ok()).collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Numeric values of `FORMAT/<func.operand_tag>` for sample `si`
+/// (`.`/non-numeric skipped).
+fn sample_operand_values(cols: &[&str], si: usize, func: &Func) -> Vec<f64> {
+    let Some(fmt) = cols.get(8) else {
+        return Vec::new();
+    };
+    let Some(idx) = fmt.split(':').position(|k| k == func.operand_tag) else {
+        return Vec::new();
+    };
+    let Some(col) = cols.get(9 + si) else {
+        return Vec::new();
+    };
+    col.split(':')
+        .nth(idx)
+        .unwrap_or(".")
+        .split(',')
+        .filter_map(|x| x.parse::<f64>().ok())
+        .collect()
+}
+
+/// `sum(...)` for an INFO-result func: scalar over the pop's samples
+/// (FMT operand) or the INFO array. `None` ⇒ no values ⇒ missing.
+fn eval_sum(
+    cols: &[&str],
+    func: &Func,
+    pop_idx: usize,
+    sample_to_pops: &[Vec<usize>],
+) -> Option<f64> {
+    if func.kind != FuncKind::Sum {
+        return None;
+    }
+    if func.operand_info {
+        let v = info_operand_values(cols, &func.operand_tag);
+        return if v.is_empty() {
+            None
+        } else {
+            Some(v.iter().sum())
+        };
+    }
+    let nsmpl = cols.len().saturating_sub(9);
+    let mut acc = 0.0;
+    let mut any = false;
+    for si in 0..nsmpl {
+        if !sample_to_pops
+            .get(si)
+            .is_some_and(|ps| ps.contains(&pop_idx))
+        {
+            continue;
+        }
+        for v in sample_operand_values(cols, si, func) {
+            acc += v;
+            any = true;
+        }
+    }
+    if any { Some(acc) } else { None }
+}
+
+/// `int32_from_double`: bcftools truncates toward zero; a missing value
+/// renders as `.`.
+fn fmt_num(v: Option<f64>, is_int: bool) -> String {
+    match v {
+        None => ".".to_owned(),
+        Some(x) if is_int => (x.trunc() as i64).to_string(),
+        Some(x) => fmt_float(x),
+    }
+}
+
 pub struct Options<'a> {
     /// `-t` comma-separated tag list; `"all"` (the default when `-t` is
     /// omitted) expands to [`ALL_TAGS`].
@@ -220,6 +414,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     // lines are declared even though values only appear with FORMAT/AD
     // (VAF computation itself deferred).
     let mut vaf_hdr = false;
+    let mut funcs: Vec<Func> = Vec::new();
     for t in opts.tags.split(',').filter(|t| !t.is_empty()) {
         if t.eq_ignore_ascii_case("all") {
             for &a in ALL_TAGS {
@@ -230,13 +425,19 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             vaf_hdr = true;
             continue;
         }
+        if t.contains('=') {
+            funcs.push(parse_func(t).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("fill-tags: {e}"))
+            })?);
+            continue;
+        }
         let tag = parse_tag(t)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("fill-tags: {e}")))?;
         if !want.contains(&tag) {
             want.push(tag);
         }
     }
-    if want.is_empty() {
+    if want.is_empty() && funcs.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "fill-tags: empty tag list",
@@ -343,6 +544,33 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
                     "##FORMAT=<ID=VAF1,Number=1,Type=Float,Description=\"The fraction of reads with alternate alleles (nSumALT/nSumAll)\">\n",
                 );
             }
+            // `Added by +fill-tags expression …` headers for the
+            // function tags, unless an identically-defined field
+            // already exists (upstream `update_hdr` check).
+            for func in &funcs {
+                let kw = if func.info { "INFO" } else { "FORMAT" };
+                let number = match func.cnt {
+                    Some(n) => n.to_string(),
+                    None => ".".to_owned(),
+                };
+                let ty = if func.is_int { "Integer" } else { "Float" };
+                for p in &pops {
+                    let id = format!("{}{}", func.dst, p.suffix);
+                    let prefix = format!("##{kw}=<ID={id},Number={number},Type={ty},");
+                    if out.contains(&prefix) {
+                        continue;
+                    }
+                    let in_part = if p.name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" in {}", p.name)
+                    };
+                    let desc = func.raw.replace('"', "\\\"");
+                    out.push_str(&format!(
+                        "##{kw}=<ID={id},Number={number},Type={ty},Description=\"Added by +fill-tags expression {desc}{in_part}\">\n"
+                    ));
+                }
+            }
             // Map each sample column to its pop indices.
             let samples: Vec<&str> = cols.split('\t').skip(9).collect();
             sample_to_pops = samples
@@ -372,6 +600,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
             &pops,
             &sample_to_pops,
             &want,
+            &funcs,
             opts.drop_missing,
             want_vaf,
             want_vaf1,
@@ -401,6 +630,7 @@ fn process_record(
     pops: &[Pop],
     sample_to_pops: &[Vec<usize>],
     want: &[Tag],
+    funcs: &[Func],
     drop_missing: bool,
     want_vaf: bool,
     want_vaf1: bool,
@@ -644,87 +874,122 @@ fn process_record(
         }
     } // end `if let Some(gt_idx)` (genotype-derived INFO tags)
 
+    // INFO function tags: `[int|float](sum(INFO/X | FMT/X))` → a scalar
+    // written per pop (upstream `ftf_filter_expr`, `ftf->info`).
+    for func in funcs.iter().filter(|f| f.info) {
+        for (pi, p) in pops.iter().enumerate() {
+            let v = eval_sum(&f, func, pi, sample_to_pops);
+            set_info(
+                &mut info,
+                &format!("{}{}", func.dst, p.suffix),
+                &fmt_num(v, func.is_int),
+            );
+        }
+    }
+
     f[7] = &info;
 
-    // FORMAT/VAF + VAF1 (upstream `process_vaf_vaf1`): per sample,
-    // `VAF[j] = AD[j+1]/sum(AD)` (Number=A) and `VAF1 = (sum-AD[0])/sum`
-    // (Number=1). Added only when at least one sample has a complete
-    // numeric `FORMAT/AD`; otherwise the columns are omitted.
-    let new_format: String;
-    let new_samples: Vec<String>;
+    // Appended FORMAT columns: `smpl_sum(...)` function tags and
+    // `FORMAT/VAF`+`VAF1`, applied in one pass.
+    let mut add_cols: Vec<(String, Vec<String>)> = Vec::new();
+
+    for func in funcs.iter().filter(|f| !f.info) {
+        // `smpl_sum`: per-sample total (FORMAT result).
+        let vals: Vec<String> = (0..f.len().saturating_sub(9))
+            .map(|si| {
+                let v = sample_operand_values(&f, si, func);
+                if v.is_empty() {
+                    ".".to_owned()
+                } else {
+                    fmt_num(Some(v.iter().sum()), func.is_int)
+                }
+            })
+            .collect();
+        if vals.iter().any(|v| v != ".") {
+            add_cols.push((func.dst.clone(), vals));
+        }
+    }
+
     if (want_vaf || want_vaf1)
         && n_allele > 1
         && let Some(ad_idx) = f[8].split(':').position(|k| k == "AD")
     {
-        {
-            let mut sample_vaf: Vec<(String, String)> = Vec::new();
-            let mut any_valid = false;
-            for col in &f[9..] {
-                let ad = col.split(':').nth(ad_idx).unwrap_or(".");
-                let parsed: Option<Vec<i64>> = if ad == "." || ad.is_empty() {
-                    None
+        let mut sample_vaf: Vec<(String, String)> = Vec::new();
+        let mut any_valid = false;
+        for col in &f[9..] {
+            let ad = col.split(':').nth(ad_idx).unwrap_or(".");
+            let parsed: Option<Vec<i64>> = if ad == "." || ad.is_empty() {
+                None
+            } else {
+                let v: Vec<&str> = ad.split(',').collect();
+                if v.len() == n_allele && v.iter().all(|x| x.parse::<i64>().is_ok()) {
+                    Some(v.iter().map(|x| x.parse().unwrap()).collect())
                 } else {
-                    let v: Vec<&str> = ad.split(',').collect();
-                    if v.len() == n_allele && v.iter().all(|x| x.parse::<i64>().is_ok()) {
-                        Some(v.iter().map(|x| x.parse().unwrap()).collect())
+                    None
+                }
+            };
+            match parsed {
+                Some(ad) => {
+                    any_valid = true;
+                    let sum: i64 = ad.iter().sum();
+                    let vaf = (1..n_allele)
+                        .map(|j| {
+                            if sum != 0 {
+                                fmt_float(ad[j] as f64 / sum as f64)
+                            } else {
+                                "0".to_owned()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let vaf1 = if sum != 0 {
+                        fmt_float((sum - ad[0]) as f64 / sum as f64)
                     } else {
-                        None
-                    }
-                };
-                match parsed {
-                    Some(ad) => {
-                        any_valid = true;
-                        let sum: i64 = ad.iter().sum();
-                        let vaf = (1..n_allele)
-                            .map(|j| {
-                                if sum != 0 {
-                                    fmt_float(ad[j] as f64 / sum as f64)
-                                } else {
-                                    "0".to_owned()
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        let vaf1 = if sum != 0 {
-                            fmt_float((sum - ad[0]) as f64 / sum as f64)
-                        } else {
-                            "0".to_owned()
-                        };
-                        sample_vaf.push((vaf, vaf1));
-                    }
-                    None => sample_vaf.push((".".to_owned(), ".".to_owned())),
+                        "0".to_owned()
+                    };
+                    sample_vaf.push((vaf, vaf1));
                 }
+                None => sample_vaf.push((".".to_owned(), ".".to_owned())),
             }
-            if any_valid {
-                let mut fmt = f[8].to_owned();
-                if want_vaf {
-                    fmt.push_str(":VAF");
-                }
-                if want_vaf1 {
-                    fmt.push_str(":VAF1");
-                }
-                new_format = fmt;
-                new_samples = f[9..]
-                    .iter()
-                    .zip(sample_vaf.iter())
-                    .map(|(col, (vaf, vaf1))| {
-                        let mut s = (*col).to_owned();
-                        if want_vaf {
-                            s.push(':');
-                            s.push_str(vaf);
-                        }
-                        if want_vaf1 {
-                            s.push(':');
-                            s.push_str(vaf1);
-                        }
-                        s
-                    })
-                    .collect();
-                f[8] = &new_format;
-                for (col, ns) in f[9..].iter_mut().zip(new_samples.iter()) {
-                    *col = ns.as_str();
-                }
+        }
+        if any_valid {
+            if want_vaf {
+                add_cols.push((
+                    "VAF".to_owned(),
+                    sample_vaf.iter().map(|(v, _)| v.clone()).collect(),
+                ));
             }
+            if want_vaf1 {
+                add_cols.push((
+                    "VAF1".to_owned(),
+                    sample_vaf.iter().map(|(_, v)| v.clone()).collect(),
+                ));
+            }
+        }
+    }
+
+    let new_format: String;
+    let new_samples: Vec<String>;
+    if !add_cols.is_empty() {
+        let mut fmt = f[8].to_owned();
+        for (name, _) in &add_cols {
+            fmt.push(':');
+            fmt.push_str(name);
+        }
+        new_format = fmt;
+        new_samples = (0..f.len() - 9)
+            .map(|si| {
+                let mut s = f[9 + si].to_owned();
+                for (_, vals) in &add_cols {
+                    s.push(':');
+                    s.push_str(&vals[si]);
+                }
+                s
+            })
+            .collect();
+        f[8] = &new_format;
+        for (col, ns) in f[9..].iter_mut().zip(new_samples.iter()) {
+            *col = ns.as_str();
         }
     }
 
