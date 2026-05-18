@@ -13,13 +13,14 @@
 //! `FORMAT/VAF`+`VAF1` are computed from `FORMAT/AD` (upstream
 //! `process_vaf_vaf1`), independent of `GT`. The `TAG:Num=EXPR`
 //! function engine is partially ported:
-//! `[int|float](sum|smpl_sum(INFO/X|FMT/X))` with per-pop INFO output
-//! and per-sample FORMAT output, plus the `Added by +fill-tags
+//! `[int|float](sum|smpl_sum(INFO/X|FMT/X))` and
+//! `[int](F_PASS|N_PASS(EXPR))` (per-pop, EXPR evaluated per sample via
+//! the shared filter engine), plus the `Added by +fill-tags
 //! expression …` header.
 //!
 //! Deferred (tracked in TODO.md): `END`/`TYPE`, and the remaining
-//! function engine (`ssum`/`fisher`/`binom`/`F_PASS`/`N_PASS`/`phred`,
-//! arithmetic, `[*:i]` subscripts).
+//! function engine (`ssum`/`fisher`/`binom`/`phred`, arithmetic,
+//! `[*:i]` subscripts).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -30,6 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::read::MultiGzDecoder;
 use htslib_rs::format::{self, Compression, Exact};
 
+use crate::filter::{self as bcffilter, EvalContext, Value as FilterValue};
 use crate::vcf_compat::normalize_vcf_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,6 +215,10 @@ enum FuncKind {
     Sum,
     /// `smpl_sum(X)` — per-sample total (a FORMAT result).
     SmplSum,
+    /// `F_PASS(EXPR)` — fraction of (pop) samples where EXPR is true.
+    FPass,
+    /// `N_PASS(EXPR)` — number of (pop) samples where EXPR is true.
+    NPass,
 }
 
 /// A `[INFO/|FORMAT/]DST[:CNT]=[int(|float(]<KIND>(<OPERAND>))` tag,
@@ -225,9 +231,12 @@ struct Func {
     cnt: Option<i64>,
     is_int: bool,
     kind: FuncKind,
-    /// Operand: `true` = `INFO/<tag>`, `false` = `FORMAT/<tag>`.
+    /// Operand: `true` = `INFO/<tag>`, `false` = `FORMAT/<tag>`
+    /// (`Sum`/`SmplSum` only).
     operand_info: bool,
     operand_tag: String,
+    /// The per-sample filter expression (`FPass`/`NPass` only).
+    pass_expr: String,
     /// The original `-t` token (for the `Added by +fill-tags
     /// expression …` header description).
     raw: String,
@@ -274,18 +283,40 @@ fn parse_func(token: &str) -> Result<Func, String> {
         }
     }
 
-    // `<KIND>(<OPERAND>)`.
-    let (kind, inner) = if let Some(r) = e.strip_prefix("sum(").filter(|_| e.ends_with(')')) {
+    // `<KIND>(<INNER>)`.
+    if !e.ends_with(')') {
+        return Err(format!("could not parse the expression \"{e}\""));
+    }
+    let (kind, inner) = if let Some(r) = e.strip_prefix("sum(") {
         (FuncKind::Sum, &r[..r.len() - 1])
-    } else if let Some(r) = e.strip_prefix("smpl_sum(").filter(|_| e.ends_with(')')) {
+    } else if let Some(r) = e.strip_prefix("smpl_sum(") {
         (FuncKind::SmplSum, &r[..r.len() - 1])
+    } else if let Some(r) = e.strip_prefix("F_PASS(") {
+        (FuncKind::FPass, &r[..r.len() - 1])
+    } else if let Some(r) = e.strip_prefix("N_PASS(") {
+        (FuncKind::NPass, &r[..r.len() - 1])
     } else {
         return Err(format!(
             "the expression \"{e}\" is not yet ported (this slice supports \
-             int/float(sum|smpl_sum(INFO/TAG|FMT/TAG)))"
+             int/float(sum|smpl_sum(INFO/TAG|FMT/TAG)) and F_PASS/N_PASS(EXPR))"
         ));
     };
     let inner = inner.trim();
+
+    if matches!(kind, FuncKind::FPass | FuncKind::NPass) {
+        return Ok(Func {
+            dst,
+            info,
+            cnt,
+            is_int,
+            kind,
+            operand_info: false,
+            operand_tag: String::new(),
+            pass_expr: inner.to_owned(),
+            raw: token.to_owned(),
+        });
+    }
+
     let (operand_info, operand_tag) = if let Some(r) = inner
         .strip_prefix("INFO/")
         .or_else(|| inner.strip_prefix("info/"))
@@ -311,8 +342,53 @@ fn parse_func(token: &str) -> Result<Func, String> {
         kind,
         operand_info,
         operand_tag: operand_tag.to_owned(),
+        pass_expr: String::new(),
         raw: token.to_owned(),
     })
+}
+
+/// Evaluate a per-sample filter expression for sample `si` (the
+/// `F_PASS`/`N_PASS` predicate), mirroring the `+setGT -t q` wiring:
+/// a single-sample [`EvalContext`] over that sample's FORMAT values
+/// with record-level fallback.
+fn sample_passes(cols: &[&str], si: usize, expr: &str) -> bool {
+    let fields: Vec<String> = cols.iter().map(|s| (*s).to_owned()).collect();
+    let format_keys: Vec<&str> = fields[8].split(':').collect();
+    let sample = &fields[9 + si];
+    let values: Vec<&str> = sample.split(':').collect();
+    let context = EvalContext::new().with_sample(
+        format_keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let raw = values.get(i).copied().unwrap_or(".");
+                let value = if key.eq_ignore_ascii_case("GT") {
+                    FilterValue::String(raw.to_owned())
+                } else if raw == "." || raw.is_empty() {
+                    FilterValue::Missing
+                } else if let Ok(n) = raw.parse::<f64>() {
+                    FilterValue::Number(n)
+                } else if raw.contains(',') && raw.split(',').all(|v| v.parse::<f64>().is_ok()) {
+                    FilterValue::List(
+                        raw.split(',')
+                            .map(|v| FilterValue::Number(v.parse().unwrap()))
+                            .collect(),
+                    )
+                } else {
+                    FilterValue::String(raw.to_owned())
+                };
+                ((*key).to_owned(), value)
+            })
+            .collect::<Vec<_>>(),
+    );
+    bcffilter::eval_expression_with(expr, &context, |name, sample_index| {
+        if sample_index.is_some() {
+            return None;
+        }
+        crate::commands::filter::record_lookup(name, &fields)
+    })
+    .map(|v| v.truthy())
+    .unwrap_or(false)
 }
 
 /// Numeric values of an `INFO/<tag>` array (`.`/non-numeric skipped).
@@ -878,7 +954,29 @@ fn process_record(
     // written per pop (upstream `ftf_filter_expr`, `ftf->info`).
     for func in funcs.iter().filter(|f| f.info) {
         for (pi, p) in pops.iter().enumerate() {
-            let v = eval_sum(&f, func, pi, sample_to_pops);
+            let v = match func.kind {
+                FuncKind::FPass | FuncKind::NPass => {
+                    let mut npass = 0i64;
+                    let mut nsmpl = 0i64;
+                    for si in 0..f.len().saturating_sub(9) {
+                        if !sample_to_pops.get(si).is_some_and(|ps| ps.contains(&pi)) {
+                            continue;
+                        }
+                        nsmpl += 1;
+                        if sample_passes(&f, si, &func.pass_expr) {
+                            npass += 1;
+                        }
+                    }
+                    if func.kind == FuncKind::NPass {
+                        Some(npass as f64)
+                    } else if nsmpl > 0 {
+                        Some(npass as f64 / nsmpl as f64)
+                    } else {
+                        Some(0.0)
+                    }
+                }
+                _ => eval_sum(&f, func, pi, sample_to_pops),
+            };
             set_info(
                 &mut info,
                 &format!("{}{}", func.dst, p.suffix),
