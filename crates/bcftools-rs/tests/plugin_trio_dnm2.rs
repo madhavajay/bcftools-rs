@@ -129,6 +129,20 @@ fn acm_default_model() {
 }
 
 #[test]
+fn acm_dnm_log_scientific_float_render() {
+    // Small-exponent DNM:log values (e.g. -3.16223e-05) must render in
+    // C `%g` scientific notation, matching htslib `kputd` — test.pl
+    // row 764, the fixture that was blocked only by the query
+    // FORMAT-float renderer.
+    check(
+        "trio-dnm/trio-dnm.6.vcf",
+        &["-p", "proband,father,mother", "--dnm-tag", "DNM:log"],
+        "[\t%DNM]\t[\t%VAF]\t[\t%VA]\n",
+        "trio-dnm/trio-dnm.6.2.out",
+    );
+}
+
+#[test]
 fn acm_many_alts_trim() {
     // > 4 alleles → many_alts_trim keeps REF + 3 best by summed log-QS
     // (test.pl row 767).

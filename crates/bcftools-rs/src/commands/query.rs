@@ -2139,6 +2139,59 @@ fn format_number(value: f64) -> String {
     }
 }
 
+/// C `printf("%g", x)` with the default precision 6, over the
+/// f32-stored value — faithful to htslib `kputd` (kstring.c), which is
+/// what bcftools `query`/`convert` use to render FORMAT/INFO floats.
+/// Scientific notation when the decimal exponent is `< -4` or `>= 6`,
+/// otherwise fixed; trailing zeros (and a bare `.`) trimmed.
+fn format_g6(value: f64) -> String {
+    let x = value as f32 as f64;
+    if x == 0.0 {
+        return if x.is_sign_negative() {
+            "-0".to_owned()
+        } else {
+            "0".to_owned()
+        };
+    }
+    if !x.is_finite() {
+        return if x.is_nan() {
+            "nan".to_owned()
+        } else if x < 0.0 {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
+    }
+    let neg = x < 0.0;
+    let a = x.abs();
+    // Decimal exponent as C `%e` would compute it (avoids log10 rounding).
+    let exp: i32 = format!("{a:e}")
+        .split('e')
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = if !(-4..6).contains(&exp) {
+        let s = format!("{a:.*e}", 5usize);
+        let (m, e) = s.split_once('e').unwrap();
+        let m = if m.contains('.') {
+            m.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            m
+        };
+        let ev: i32 = e.parse().unwrap_or(0);
+        format!("{m}e{}{:02}", if ev < 0 { '-' } else { '+' }, ev.abs())
+    } else {
+        let dec = (5 - exp).max(0) as usize;
+        let s = format!("{a:.dec$}");
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            s
+        }
+    };
+    if neg { format!("-{body}") } else { body }
+}
+
 fn find_function_end(segment: &str, open_idx: usize) -> Option<usize> {
     if segment.as_bytes().get(open_idx).copied() != Some(b'(') {
         return None;
@@ -2761,7 +2814,10 @@ fn format_output_scalar(token: &str, value: &str, sample_index: Option<usize>) -
     if value.contains(['e', 'E'])
         && let Ok(parsed) = value.parse::<f64>()
     {
-        return format_number(parsed);
+        // bcftools renders the BCF float via htslib `kputd` (C `%g`/.6),
+        // which keeps scientific notation for small/large exponents
+        // rather than expanding to fixed-point.
+        return format_g6(parsed);
     }
     if sample_index.is_some()
         && token
