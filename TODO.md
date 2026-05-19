@@ -201,6 +201,19 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-19: `progress/batch-20` started `+trio-dnm2` (the last
+  unported plugin with fixtures) — the `--use-NAIVE` GT-only de-novo
+  model. Ports `seq1`/`seq2`/`seq3` genotype encoding, the
+  autosomal/chrX/chrXX Mendelian-transmission de-novo predicates (the
+  `tprob==0` part of `init_tprob_mprob{,_chrX,_chrXX}`), `set_trio_GT`
+  (incl. >4-allele remap), default GRCh37 chrX regions, PED
+  `-p [1X:|2X:]proband,father,mother`, and `FORMAT/DNM`+`VA` output.
+  Byte-for-byte against `trio-dnm/trio-dnm.9.{1,2}.out` via our own
+  `bcftools query`. **39/41 plugins; only `+vrfs` (mpileup-blocked)
+  and `+color-chrs` (no fixtures) remain unimplemented.** Remaining
+  `+trio-dnm2`: the ACM (default) / `--use-DNG` likelihood models,
+  `--ppl`/`--force-AD`/`--with-pAD`/`--strictly-novel`, non-flag
+  `--dnm-tag`, PED-file, VAF/VA-from-AD.
 - 2026-05-18: `progress/batch-19` finished `+fill-tags` — the last
   fixture `fill-tags.func.1.out`
   (`FMT/AB:1=float(FMT/AD[*:0] / ssum(FMT/AD[*]))`, per-sample
@@ -209,8 +222,10 @@ Latest landed progress:
   emitted (even all-missing, unlike VAF/VAF1), and trailing whitespace
   in the source INFO column is dropped (bcftools re-serializes from
   parsed values). **`+fill-tags` now passes every upstream fixture**
-  (39/41 plugins). Remaining unimplemented plugins: `+trio-dnm3`,
-  `+vrfs`, `+color-chrs`; plus the deferred `gvcfz.2.out`.
+  (38/41 plugins; `+split-vep` + `+fill-tags`, the two heaviest
+  plugins, both COMPLETE). Remaining unimplemented: `+trio-dnm2`
+  (tractable), `+vrfs` (mpileup-blocked), `+color-chrs` (no
+  fixtures); plus the deferred `gvcfz.2.out`.
 - 2026-05-18: `progress/batch-18` ported `bcftools/filter.c`
   `func_fisher` faithfully into `+fill-tags` — the site / per-sample ×
   {1-arg-4-value, 2-arg, 2×Number=R-with-`[:i,j]`-indices,
@@ -1004,50 +1019,64 @@ Latest landed progress:
   37 filter, 2 `+gvcfz`, 5 `+setGT` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
-- Remaining tasks (as of `progress/batch-5`; 37/41 plugins; suite fully
-  green, no `#[ignore]` markers). The easy filter-free plugin slices are
-  exhausted — everything below is a substantial, multi-PR effort. In
-  rough priority order:
+- Remaining tasks (as of `progress/batch-19`, PR #263; **38/41 plugins
+  implemented**; suite fully green, no `#[ignore]` markers). The two
+  heaviest plugins — `+split-vep` and `+fill-tags` — are now COMPLETE,
+  so the plugin set is essentially finished. Final goals, in priority
+  order:
 
-  1. **Engine-level `@file` sample-subset subscript** (next concrete
-     slice). `@` is still a hard lex error in `src/filter.rs`
-     (`lex("@").is_err()` test). `+setGT -t q` already handles
-     `TAG[@file]` *at the plugin level* (strip + per-sample membership;
-     `setGT.{2,3}.out` pass), but a general engine-level form is still
-     needed by `+split-vep` and any subcommand `-i/-e` using
-     `TAG[@file]`. Add: `@`+path lexing, parser for `IDENT[@path]`
-     (sample-subset `FormatIndex` variant), sample-name list
-     resolution, and per-sample eval restricted to the subset — the
-     per-sample `EvalContext` fold carries **no sample identity**
-     today, so sample name/index must be threaded through.
-  2. **`+split-vep` — DONE** (74k — heaviest plugin). Landed across
-     `progress/batch-5..9`: `-c`/`-s`/`-f`/`-t`/`-d`/`-A`/`-H`/`-HH`/
-     `-i`/`-e` + `CSQ`→`BCSQ` auto-detect. **Every upstream fixture
-     `split-vep.{1,1.1,2,2.1,3,3.1,4,5,6,7,7.1,8,9,10,11,12,12.2,
-     12.3,12.4,13,13.1}.out` (all 21) passes.** Only the no-fixture
-     `-g`/`--gene-list` and `-S` custom-severity options are unported.
-  3. **`+fill-tags` — DONE** (1084 LOC, batches 10–19). Every
-     upstream fixture passes: count tags + `-t`/`-S`, `HWE`/`ExcHet`/
-     `F_MISSING`/`all`/`-d`, `FORMAT/VAF`+`VAF1`, the `TAG:Num=EXPR`
+  1. **`+split-vep` — ✅ COMPLETE** (74k C, the single heaviest
+     plugin; batches 5–9, PRs #249–#253). All 21 `split-vep.*.out`
+     fixtures pass. Only the no-fixture `-g`/`--gene-list` and `-S`
+     custom-severity options are unported — nothing to validate
+     against, so this counts as done.
+  2. **`+fill-tags` — ✅ COMPLETE** (45k C; batches 10–19, PRs
+     #254–#263). Every upstream fixture passes — count tags +
+     `-t`/`-S`, `HWE`/`ExcHet`, `F_MISSING`, `all`/`-d`,
+     `FORMAT/VAF`+`VAF1`, `END`/`TYPE`, and the full `TAG:Num=EXPR`
      engine (`int`/`float`/`sum`/`smpl_sum`/`F_PASS`/`N_PASS`/`binom`/
-     `phred`/`fisher` + general per-sample/record expressions),
-     `END`/`TYPE`. `fisher(...)` is a faithful local port of
-     `bcftools/filter.c` `func_fisher`.
-  4. **`+trio-dnm3`** (largest plugin, ~105k; PED-coupled, own
-     `test/trio-dnm3/test.sh` fixture). **`+vrfs`** (mpileup/BAM —
-     `#include mpileup2/mpileup.h`, blocked on the mpileup engine).
-     **`+color-chrs`** (HMM + curses-style output).
-  5. **Deferred rows on landed plugins**: `gvcfz.2.out`
-     (`-g 'PASS:GQ>10; FLT:-'` — 3 RGQ cells, `gq_key`/
-     `bcf_update_alleles` edge on `-a`-collapsed multiallelic reps),
-     (`+setGT` fully complete; `+fill-from-fasta aa.out` and the
-     `+split.1.4` `GT[0]` subscript also already done — were stale
-     deferred notes; `+prune -i/-e` done — `prune.1.5.out` passes;
-     `+remove-overlaps` fully done incl. `min(QUAL)`/`--missing
-     DP` — all `remove-overlaps.*.out` pass; `+prune` `-a count`/
-     `-m count=` cluster mode done — `prune.3.{1,2,3}.out` pass),
-     `+smpl-stats`/`+indel-stats -i/-e` (verify against current code
-     before assuming still blocked).
+     `phred`/`fisher` + general per-sample/record exprs).
+     `fisher(...)` is a faithful local port of `bcftools/filter.c`
+     `func_fisher`.
+  3. **`+trio-dnm2` — IN PROGRESS, the only remaining *tractable*
+     plugin.** `bcftools/plugins/trio-dnm2.c`, ~1860 lines — the
+     single largest plugin (TODO previously mis-named it
+     `+trio-dnm3`; the registered name is `trio-dnm2`). Clear
+     byte-for-byte fixtures `test/trio-dnm/trio-dnm.{1..11}.*.out` via
+     `+trio-dnm2 -p proband,father,mother [flags] | bcftools query`.
+     **`--use-NAIVE` slice DONE** (`progress/batch-20`,
+     `trio-dnm.9.{1,2}.out`): `seq1`/`seq2`/`seq3` encoding, the
+     autosomal/chrX/chrXX de-novo predicates, `set_trio_GT` (incl.
+     >4-allele remap), GRCh37 chrX regions, PED
+     `[1X:|2X:]proband,father,mother`, `FORMAT/DNM`+`VA`. **Still to
+     port (each a slice):** the ACM (default) model
+     `process_trio_ACM` + PL/QS priors/likelihoods
+     (`trio-dnm.{1,2,4,5,6,7,8,10,11}.*.out`), `--use-DNG`
+     (`process_trio_DNG` + DNG priors), `--ppl`, `--force-AD`,
+     `--with-pAD`, `--strictly-novel`, non-flag `--dnm-tag`
+     (`DNM:log`/`phred`/`prob`), PED-file `-P`, VAF/VA from
+     `FORMAT/AD`, `many_alts_trim` for >4 alleles in the likelihood
+     models.
+     (Engine-level `@file` sample-subset subscript, once flagged as
+     the next concrete slice, is **no longer blocking** — `+split-vep`
+     and `+setGT` shipped via plugin-level / query-formatter handling;
+     it is only a nice-to-have for general subcommand
+     `-i/-e TAG[@file]`.)
+  4. **`+vrfs` and `+color-chrs` — out of reach for byte-for-byte
+     parity** (the other two unimplemented plugins). `+vrfs` (38k) is
+     mpileup/BAM-coupled (`+vrfs -a bam.list -f ref` reads BAMs) —
+     infeasible without a ported mpileup engine. `+color-chrs`
+     (561-line HMM phase-colouring) has **no upstream test fixtures**,
+     so it cannot be validated byte-for-byte. Both are
+     deferred/blocked, not part of the achievable plugin goal.
+  5. **Sole deferred fixture on a landed plugin**: `gvcfz.2.out`
+     (`-g 'PASS:GQ>10; FLT:-'`) — 3 `RGQ` cells in the `-a`-collapsed
+     multiallelic `FLT:-` catch-all (`gq_key`/`bcf_update_alleles`
+     edge); unresolved by code-inspection and risks the two passing
+     `gvcfz` fixtures, so it stays deferred. Every other previously
+     "deferred" plugin row has since landed (`+setGT`,
+     `+fill-from-fasta aa.out`, `+split.1.4`, `+prune -i/-e` &
+     cluster mode, `+remove-overlaps min(QUAL)`/`--missing DP`, …).
   6. **Unstarted subcommands** (each a major port): `call`
      (`vcfcall.c`+`mcall.c`), `mpileup` (84k), `csq` (166k; needs
      `gff.rs`), `roh` (HMM ready), `cnv` (HMM+peakfit), `gtcheck`,
@@ -1096,7 +1125,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 39 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (COMPLETE — every upstream fixture) |
+| `plugin` | registry + 39 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (COMPLETE — every upstream fixture), `trio-dnm2` (NAIVE slice) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -1108,10 +1137,25 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
 39 of 41 plugin record-processing implementations done (see Wave F);
-9 remain.
+2 unimplemented (`+vrfs` — mpileup/BAM-blocked; `+color-chrs` — no
+upstream fixtures). `+trio-dnm2` has its NAIVE slice; its ACM/DNG
+likelihood models are the remaining tractable plugin work.
 
 Current whole-project estimate:
 
+- 2026-05-19 (post `+fill-tags` COMPLETE, PR #263 landed; no open
+  PR): the two heaviest plugins are fully ported — `+split-vep`
+  (74k C, all 21 fixtures) and `+fill-tags` (45k C, every fixture
+  incl. a faithful local `func_fisher`). **38/41 plugins
+  implemented; the plugin set is essentially done.** Only 3 plugins
+  remain unimplemented and just one — `+trio-dnm2` (~1860 lines, the
+  single largest; clear byte-for-byte fixtures) — is tractable;
+  `+vrfs` (mpileup/BAM) and `+color-chrs` (no upstream fixtures) are
+  blocked/untestable. Beyond plugins, the remaining work is the
+  unstarted/deepening subcommands (`call`/`mpileup`/`csq`/`roh`/
+  `cnv`/`gtcheck`/`polysomy`, and `merge`/`consensus`/`annotate`/
+  `norm` deepening) and Phase 4/5 parity polishing. 16 PRs landed
+  this run (#249–#263).
 - 2026-05-18 (post `+setGT -n i/p/u`, PR #242 landed; no open PR):
   approximately 53-56% complete toward the full stated goal. Movement
   since the prior estimate adds `+setGT` `-n i`/`-n p`/`-n u` genotype
@@ -1507,13 +1551,15 @@ PASSOC/FASSOC/NASSOC/NOVELAL/NOVELGT), `fixref` matches
 `trio-switch-rate` matches `trio.out` (PED-trio phase-switch rate +
 per-population averages), and `trio-stats` matches `trio-stats.out`/
 `trio-stats.2.out` (Mendelian/DNM/transmitted classification + debug
-dump). The 5 remaining unimplemented plugins and many still-open plugin
-subfeatures are heavier and coupled to shared infra still in progress: the
+dump). The 2 remaining unimplemented plugins (`+vrfs`, `+color-chrs`)
+and `+trio-dnm2`'s ACM/DNG models are heavier and coupled to shared
+infra still in progress:
+the
 bcftools filter engine (`+setGT`, `+split-vep` expressions,
 `remove-overlaps -m 'min(QUAL)'`, `smpl-stats`/`indel-stats`/`prune
 -i/-e`), `hts_drand48` parity (`prune -N rand`), FASTA/reference
 (`+fixref`, `+fill-from-fasta`), PED/trio handling (`+trio-stats`,
-`+mendelian2`, `+trio-dnm3`, `indel-stats -p`), or VCF-rewrite/convert
+`+mendelian2`, `+trio-dnm2`, `indel-stats -p`), or VCF-rewrite/convert
 (`ad-bias -c/-f`). The bcftools **filter engine** (`filter.c`, the
 single largest task — unblocks the most plugins and subcommands) is the
 preferred next pick.
@@ -2063,7 +2109,7 @@ Grouped roughly by complexity / shared dependencies:
       `-i`/`-e`, `%CSQ`/`%BCSQ` raw expansion, `CSQ`→`BCSQ`
       auto-detect. **All 21 `split-vep.*.out` fixtures pass.** Only
       the no-fixture `-g`/`-S` options unported.
-- [ ] **Trio / pedigree** — `+mendelian2` (37k), `+trio-dnm3` (105k — the single largest plugin; has its own `test/trio-dnm3/test.sh` fixture), `+trio-switch-rate`, `+parental-origin`.
+- [~] **Trio / pedigree** — `+mendelian2`, `+trio-switch-rate`, `+parental-origin` are DONE; only `+trio-dnm2` remains (~1860-line `bcftools/plugins/trio-dnm2.c` — the single largest plugin; byte-for-byte fixtures `test/trio-dnm/trio-dnm.{1..11}.*.out`, NOT a separate `test.sh`).
 - [ ] **Sample inference** — `+guess-ploidy`, `+contrast`.
 - [ ] **Misc** — `+color-chrs` (curses-style colored output), `+prune`.
 
@@ -2075,7 +2121,7 @@ For each plugin: at least one `test.pl` case (most are covered by `test_vcf_plug
 - [x] **`##bcftools_*` handling**: where upstream expected outputs include `##bcftools_<cmd>{Version,Command,Date}` lines we cannot reproduce, prefer adding `--no-version` to the test invocation (already used pervasively in `test.pl`). For tests that intentionally exercise the version line, pin the date via env var.
 - [x] **Run progressively**: as each subcommand or plugin lands in Phase 3, enable its `test_*` in CI. Disabled tests should be tracked in `docs/test-status.md` as `not-yet-ported` (NOT just commented out).
 - [x] **Rust integration tests per subcommand**: every implemented subcommand and plugin has its own `crates/bcftools-rs/tests/<name>.rs` (e.g. `tests/view.rs`, `tests/plugin_variant_distance.rs`) covering happy paths, error paths, regions/`-i`/`-e`/`-R`/`-T`/`-s` variants, threaded writes where applicable, and upstream `*.out` fixture parity where a fixture exists. The authoritative per-suite counts live in each command/plugin snapshot bullet (they drift if duplicated here). This item stays done; extend alongside each new slice rather than re-opening it.
-- [ ] **`trio-dnm3` harness**: `bcftools/test/trio-dnm3/test.sh` is shelled out from `test.pl`. Confirm it works against the Rust binary unchanged, or port it to a Rust integration test.
+- [ ] **`trio-dnm2` harness**: the `+trio-dnm2` cases in `test.pl` (lines ~755-772) pipe `+trio-dnm2 -p proband,father,mother [flags] | bcftools query -f'…'` and compare `test/trio-dnm/trio-dnm.{1..11}.*.out`. Mirror this in a Rust integration test (the `check`-pipe pattern used for `+split-vep`/`+fill-tags`).
 - [x] **`csq` and `mpileup` fixtures**: `bcftools/test/csq/` and `bcftools/test/mpileup/` have nested fixture directories. The Rust gate must locate them via the `--path` form `test.pl` already uses.
 
 ## Phase 5: Parity Polishing

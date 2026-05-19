@@ -452,6 +452,10 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut ft_tags: Option<String> = None;
     let mut ft_samples: Option<String> = None;
     let mut ft_drop_missing = false;
+    // trio-dnm2 options.
+    let mut td_pfm: Option<String> = None;
+    let mut td_chrx: Option<String> = None;
+    let mut td_use_naive = false;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -755,6 +759,19 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "-d" | "--drop-missing" if plugin_name.as_deref() == Some("fill-tags") => {
                 ft_drop_missing = true;
+            }
+            // trio-dnm2: -p/--pfm [1X:|2X:]P,F,M, --use-NAIVE, --chrX.
+            "-p" | "--pfm" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_pfm = iter.next().map(|s| s.to_string_lossy().into_owned());
+            }
+            _ if raw.starts_with("--pfm=") && plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_pfm = Some(raw["--pfm=".len()..].to_owned());
+            }
+            "--use-NAIVE" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_use_naive = true;
+            }
+            "--chrX" | "--chrX-list" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_chrx = iter.next().map(|s| s.to_string_lossy().into_owned());
             }
             // getopt-style attached short option: `-f'%POS\t...'`.
             _ if raw.starts_with("-f")
@@ -1638,6 +1655,31 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 tags,
                 samples_file: ft_samples.as_deref().map(Path::new),
                 drop_missing: ft_drop_missing,
+            },
+        )?;
+        write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if plugin.name == "trio-dnm2" {
+        let input = input.unwrap_or_else(|| "-".to_owned());
+        let Some(pfm) = td_pfm.as_deref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "trio-dnm2 requires -p/--pfm proband,father,mother",
+            ));
+        };
+        if !td_use_naive {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "trio-dnm2 in this slice supports only --use-NAIVE (the ACM/DNG likelihood models are not yet ported)",
+            ));
+        }
+        let vcf = crate::commands::plugins::trio_dnm2::run(
+            Path::new(&input),
+            crate::commands::plugins::trio_dnm2::Options {
+                pfm,
+                chrx_build: td_chrx.as_deref(),
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;

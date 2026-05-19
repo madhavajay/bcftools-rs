@@ -38,6 +38,7 @@ pub mod smpl_stats;
 pub mod split;
 pub mod split_vep;
 pub mod tag2tag;
+pub mod trio_dnm2;
 pub mod trio_stats;
 pub mod trio_switch_rate;
 pub mod variant_distance;
