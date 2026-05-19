@@ -1069,16 +1069,23 @@ Latest landed progress:
      (SNV `pn`=0.005/`pns`=0.045, INDEL no-noise),
      `phred2num`/`phred2log`/`log2phred`/`subtract_log`/`sum_log`,
      `--dnm-tag DNM:log` transform, `FORMAT/DNM`+`VA`+`VAF` (from
-     `FORMAT/AD`). **Still to port (each a slice):** `many_alts_trim`
-     for >4 alleles in the likelihood models
-     (`trio-dnm.8.*.out`), chrX/chrXX ACM priors
-     (`init_mf_priors_chrX/chrXX`, full `init_tprob_mprob_chrX/chrXX`),
-     `--use-DNG` (`process_trio_DNG` + DNG priors), `--ppl`,
-     `--force-AD`, `--with-pAD`, `--strictly-novel`, `--dnm-tag`
-     `DNM:phred`/`prob`, PED-file `-P`. (`trio-dnm.6.2.out` is correct
-     ACM numerically; the only diff is our shared `query`
-     FORMAT-float renderer using fixed vs `%g` scientific notation for
-     small exponents — a separate shared-engine concern.)
+     `FORMAT/AD`). **`many_alts_trim` + `--with-pAD` slice DONE**
+     (`progress/batch-22`, `trio-dnm.8.1.out` + `trio-dnm.10.1.out`):
+     `many_alts_trim` (> 4 alleles → keep REF + 3 best by summed
+     log-QS, remap PL/QS via `bcf_alleles2gt`, `many_alts_translate`
+     of `al1`) and `--with-pAD` (FORMAT/QS absent → fake QS from
+     FORMAT/AD assuming BQ=30). **Still to port (each a slice):**
+     chrX/chrXX ACM priors (`init_mf_priors_chrX/chrXX`, full
+     `init_tprob_mprob_chrX/chrXX`), `--use-DNG` (`process_trio_DNG` +
+     DNG priors), `--ppl`, `--force-AD`, `--strictly-novel`,
+     `--dnm-tag` `DNM:phred`/`prob`, PED-file `-P`. **Highest-value
+     remaining unblock = the shared `query` FORMAT-float renderer:**
+     it uses fixed notation where bcftools uses C `%g` (scientific for
+     exponent < −4), which is the *only* gap on the numerically-correct
+     `trio-dnm.{1,6.2,11.1,11.2}.out` ACM fixtures (and matches the
+     `query.30`/`query.31` parity expectations `8e-05`). A careful,
+     dedicated batch (broad shared-engine change — verify no
+     regression on `query.12`/pbinom and the Perl parity suite).
      (Engine-level `@file` sample-subset subscript, once flagged as
      the next concrete slice, is **no longer blocking** — `+split-vep`
      and `+setGT` shipped via plugin-level / query-formatter handling;

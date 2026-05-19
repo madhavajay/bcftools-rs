@@ -127,3 +127,27 @@ fn acm_default_model() {
         "trio-dnm/trio-dnm.7.1.out",
     );
 }
+
+#[test]
+fn acm_many_alts_trim() {
+    // > 4 alleles → many_alts_trim keeps REF + 3 best by summed log-QS
+    // (test.pl row 767).
+    check(
+        "trio-dnm/trio-dnm.8.vcf",
+        &["-p", "proband,father,mother"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.8.1.out",
+    );
+}
+
+#[test]
+fn acm_with_pad() {
+    // FORMAT/QS absent → --with-pAD fakes QS from FORMAT/AD (BQ=30)
+    // (test.pl row 770).
+    check(
+        "trio-dnm/trio-dnm.10.vcf",
+        &["-p", "proband,father,mother", "--with-pAD"],
+        "[\t%DNM][\t%VAF]\n",
+        "trio-dnm/trio-dnm.10.1.out",
+    );
+}

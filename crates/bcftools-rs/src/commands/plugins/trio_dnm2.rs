@@ -12,13 +12,17 @@
 //!   `set_trio_QS_noisy` (SNV/INDEL pnoise), `process_trio_ACM`, the
 //!   `DNM:log` transform + `FORMAT/DNM`(float)+`VA`+`VAF`-from-AD
 //!   (test.pl 758/760/762/766 → `trio-dnm.{4.1,4.2,5.1,7.1}.out`).
+//! - `many_alts_trim`: > 4 alleles → keep REF + 3 best by summed
+//!   log-QS, remap PL/QS, translate `al1` back (test.pl 767 →
+//!   `trio-dnm.8.1.out`).
+//! - `--with-pAD`: FORMAT/QS absent → fake QS from FORMAT/AD (BQ=30)
+//!   (test.pl 770 → `trio-dnm.10.1.out`).
 //!
-//! Deferred (TODO.md): `many_alts_trim` for >4 alleles
-//! (`trio-dnm.8.*`), chrX ACM priors (`init_mf_priors_chrX/chrXX`),
-//! `--use-DNG`, `--ppl`, `--force-AD`, `--with-pAD`,
-//! `--strictly-novel`, `DNM:phred`/`prob`, PED-file `-P`. (Some
-//! small-exponent `DNM:log` fixtures, e.g. `trio-dnm.6.2`, differ only
-//! in our `query`'s float rendering vs C `%g`, not the model.)
+//! Deferred (TODO.md): chrX ACM priors (`init_mf_priors_chrX/chrXX`),
+//! `--use-DNG`, `--ppl`, `--force-AD`, `--strictly-novel`,
+//! `DNM:phred`/`prob`, PED-file `-P`. (Some small-exponent `DNM:log`
+//! fixtures, e.g. `trio-dnm.6.2`, differ only in our `query`'s float
+//! rendering vs C `%g`, not the model.)
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -377,6 +381,51 @@ fn process_trio_acm(
     (log2phred(subtract_log(0.0, max - sum)), al0, al1)
 }
 
+/// htslib `bcf_alleles2gt`: genotype index for unordered allele pair.
+fn bcf_alleles2gt(a: usize, b: usize) -> usize {
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    hi * (hi + 1) / 2 + lo
+}
+
+/// Upstream `many_alts_trim`: when n_allele > 4, keep REF plus the three
+/// best alleles by summed (log-space) QS, remapping PL/QS in place.
+/// Returns the kept-allele index map (`alt_idx`); `al0`/`al1` returned by
+/// `process_trio_acm` index into this map (`many_alts_translate`).
+fn many_alts_trim(nals: usize, pl: &mut [Vec<f64>; 3], qs: &mut [Vec<f64>; 3]) -> Vec<usize> {
+    // alt_tmp[j] = sum over the three trio members of qs[member][j].
+    let mut arr = vec![0.0f64; nals];
+    for member in qs.iter() {
+        for (j, a) in arr.iter_mut().enumerate() {
+            *a += member[j];
+        }
+    }
+    // Insertion sort of indices 1..nals ascending by `arr`; REF (idx 0)
+    // stays first (the upstream `j>1` guard never moves position 0).
+    let mut idx: Vec<usize> = (0..nals).collect();
+    for i in 2..nals {
+        let mut j = i;
+        while j > 1 && arr[idx[j]] < arr[idx[j - 1]] {
+            idx.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    idx.truncate(4);
+    for q in qs.iter_mut() {
+        let trimmed: Vec<f64> = (0..4).map(|j| q[idx[j]]).collect();
+        *q = trimmed;
+    }
+    for p in pl.iter_mut() {
+        let mut tmp = vec![0.0f64; 10];
+        for j in 0..4 {
+            for k in 0..=j {
+                tmp[bcf_alleles2gt(j, k)] = p[bcf_alleles2gt(idx[j], idx[k])];
+            }
+        }
+        *p = tmp;
+    }
+    idx
+}
+
 pub struct Options<'a> {
     /// `-p`/`--pfm` value: `[1X:|2X:]proband,father,mother`.
     pub pfm: &'a str,
@@ -384,6 +433,9 @@ pub struct Options<'a> {
     pub chrx_build: Option<&'a str>,
     /// `true` ⇒ `--use-NAIVE`; `false` ⇒ the default ACM model.
     pub naive: bool,
+    /// `--with-pAD`: when FORMAT/QS is absent, fake it from FORMAT/AD
+    /// (assuming average BQ=30) instead of skipping the record.
+    pub with_pad: bool,
 }
 
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
@@ -467,7 +519,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         }
         let rec = match &priors {
             None => process_record(line, ci_idx, fi_idx, mi_idx, is_male, &ranges),
-            Some(pr) => process_record_acm(line, ci_idx, fi_idx, mi_idx, pr),
+            Some(pr) => process_record_acm(line, ci_idx, fi_idx, mi_idx, pr, opts.with_pad),
         };
         out.push_str(&rec);
         out.push('\n');
@@ -529,6 +581,7 @@ fn process_record_acm(
     fi_idx: usize,
     mi_idx: usize,
     pr: &Priors,
+    with_pad: bool,
 ) -> String {
     let mut f: Vec<&str> = line.split('\t').collect();
     if f.len() < 10 {
@@ -540,7 +593,8 @@ fn process_record_acm(
         1 + f[4].split(',').count()
     };
     // Skip mono-allelic / reference-only sites (upstream `skip_site`).
-    if n_allele == 1 || n_allele > 4 {
+    // n_allele > 4 is handled below by `many_alts_trim`.
+    if n_allele == 1 {
         return line.to_owned();
     }
     let fmt_keys: Vec<&str> = f[8].split(':').collect();
@@ -570,10 +624,19 @@ fn process_record_acm(
             .map(|q| q.iter().map(|&x| x as f64).collect())
             .unwrap_or_default();
     }
-    if qs.iter().any(|q| q.len() != n_allele) {
-        return line.to_owned(); // ACM requires FORMAT/QS
-    }
     let has_ad = ad.iter().all(|a| a.len() == n_allele);
+    if fmt_keys.contains(&"QS") {
+        if qs.iter().any(|q| q.len() != n_allele) {
+            return line.to_owned(); // ACM requires a well-formed FORMAT/QS
+        }
+    } else if with_pad && has_ad {
+        // Upstream: fake QS from AD assuming average BQ=30 (--with-pAD).
+        for j in 0..3 {
+            qs[j] = ad[j].iter().map(|&a| 30.0 * a as f64).collect();
+        }
+    } else {
+        return line.to_owned(); // no QS and no --with-pAD fallback
+    }
 
     // set_trio_QS_noisy (autosomal): SNV pnoise frac=0.005/frac1=0.045,
     // abs=0; INDEL pnoise all-zero. n_ad kept (frac1≠0).
@@ -603,7 +666,17 @@ fn process_record_acm(
             .collect();
     }
 
-    let (score, _al0, al1) = process_trio_acm(pr, n_allele, &pl, &pqs);
+    // many_alts_trim: > 4 alleles → keep REF + 3 best by summed log-QS.
+    let trim_idx = if n_allele > 4 {
+        Some(many_alts_trim(n_allele, &mut pl, &mut pqs))
+    } else {
+        None
+    };
+    let eff_nals = if trim_idx.is_some() { 4 } else { n_allele };
+    let (score, _al0, mut al1) = process_trio_acm(pr, eff_nals, &pl, &pqs);
+    if let Some(idx) = &trim_idx {
+        al1 = idx[al1 as usize] as i32; // many_alts_translate
+    }
     // DNM:log output transform.
     let dnm = if score == f64::INFINITY {
         0.0
