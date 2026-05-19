@@ -1074,10 +1074,15 @@ Latest landed progress:
      `many_alts_trim` (> 4 alleles → keep REF + 3 best by summed
      log-QS, remap PL/QS via `bcf_alleles2gt`, `many_alts_translate`
      of `al1`) and `--with-pAD` (FORMAT/QS absent → fake QS from
-     FORMAT/AD assuming BQ=30). **Still to port (each a slice):**
-     chrX/chrXX ACM priors (`init_mf_priors_chrX/chrXX`, full
-     `init_tprob_mprob_chrX/chrXX`), `--use-DNG` (`process_trio_DNG` +
-     DNG priors), `--ppl`, `--force-AD`, `--strictly-novel`,
+     FORMAT/AD assuming BQ=30). **`--ppl` + `--force-AD` slice DONE**
+     (`progress/batch-24`, `trio-dnm.1.out` via both `trio-dnm.1`
+     (row 755) and `trio-dnm.2 --force-AD` (row 756)): `--ppl`/
+     `--with-pPL` (parents use FORMAT/PL, QS unused — QS no longer
+     required) and `--force-AD` (keep `n_ad` = max AD width when the
+     AD count ≠ `n_allele`, VAF over the first `n_allele`). **Still to
+     port (each a slice):** chrX/chrXX ACM priors
+     (`init_mf_priors_chrX/chrXX`, full `init_tprob_mprob_chrX/chrXX`),
+     `--use-DNG` (`process_trio_DNG` + DNG priors), `--strictly-novel`,
      `--dnm-tag` `DNM:phred`/`prob`, PED-file `-P`. **`query`
      scientific FORMAT-float render slice DONE** (`progress/batch-23`,
      `trio-dnm.6.2.out`): added `format_g6` (faithful htslib `kputd` /

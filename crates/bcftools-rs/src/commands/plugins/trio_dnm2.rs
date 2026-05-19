@@ -17,12 +17,13 @@
 //!   `trio-dnm.8.1.out`).
 //! - `--with-pAD`: FORMAT/QS absent → fake QS from FORMAT/AD (BQ=30)
 //!   (test.pl 770 → `trio-dnm.10.1.out`).
+//! - `--ppl`/`--with-pPL`: parental likelihoods from FORMAT/PL (QS
+//!   unused) and `--force-AD` (tolerate a wrong FORMAT/AD count for
+//!   VAF) (test.pl 755/756 → `trio-dnm.1.out`).
 //!
-//! Deferred (TODO.md): chrX ACM priors (`init_mf_priors_chrX/chrXX`),
-//! `--use-DNG`, `--ppl`, `--force-AD`, `--strictly-novel`,
-//! `DNM:phred`/`prob`, PED-file `-P`. (Some small-exponent `DNM:log`
-//! fixtures, e.g. `trio-dnm.6.2`, differ only in our `query`'s float
-//! rendering vs C `%g`, not the model.)
+//! Deferred (TODO.md): chrX/chrXX ACM priors
+//! (`init_mf_priors_chrX/chrXX`), `--use-DNG`, `--strictly-novel`,
+//! `DNM:phred`/`prob`, PED-file `-P`.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -323,6 +324,7 @@ fn process_trio_acm(
     nals: usize,
     pl: &[Vec<f64>; 3],
     qs: &[Vec<f64>; 3],
+    with_ppl: bool,
 ) -> (f64, i32, i32) {
     let (mut al0, mut al1) = (0i32, 0i32);
     let mut sum = f64::NEG_INFINITY;
@@ -337,11 +339,15 @@ fn process_trio_acm(
                 for fb in 0..=fa {
                     let fals = (1usize << fa) | (1usize << fb);
                     let mut fpl = 0.0;
-                    for i in 0..nals {
-                        if fals & (1 << i) != 0 {
-                            fpl += subtract_log(0.0, qs[0][i]);
-                        } else if cals & (1 << i) != 0 || fa == fb {
-                            fpl += qs[0][i];
+                    if with_ppl {
+                        fpl = pl[0][fi];
+                    } else {
+                        for i in 0..nals {
+                            if fals & (1 << i) != 0 {
+                                fpl += subtract_log(0.0, qs[0][i]);
+                            } else if cals & (1 << i) != 0 || fa == fb {
+                                fpl += qs[0][i];
+                            }
                         }
                     }
                     let mut mi = 0usize;
@@ -349,11 +355,15 @@ fn process_trio_acm(
                         for mb in 0..=ma {
                             let mals = (1usize << ma) | (1usize << mb);
                             let mut mpl = 0.0;
-                            for i in 0..nals {
-                                if mals & (1 << i) != 0 {
-                                    mpl += subtract_log(0.0, qs[1][i]);
-                                } else if cals & (1 << i) != 0 || ma == mb {
-                                    mpl += qs[1][i];
+                            if with_ppl {
+                                mpl = pl[1][mi];
+                            } else {
+                                for i in 0..nals {
+                                    if mals & (1 << i) != 0 {
+                                        mpl += subtract_log(0.0, qs[1][i]);
+                                    } else if cals & (1 << i) != 0 || ma == mb {
+                                        mpl += qs[1][i];
+                                    }
                                 }
                             }
                             let idx = fi * 100 + mi * 10 + ci;
@@ -436,6 +446,12 @@ pub struct Options<'a> {
     /// `--with-pAD`: when FORMAT/QS is absent, fake it from FORMAT/AD
     /// (assuming average BQ=30) instead of skipping the record.
     pub with_pad: bool,
+    /// `--ppl`/`--with-pPL`: use parental FORMAT/PL likelihoods
+    /// directly instead of the QS-derived genotype likelihoods.
+    pub with_ppl: bool,
+    /// `--force-AD`: compute VAF even when the FORMAT/AD field count
+    /// does not match `n_allele`.
+    pub force_ad: bool,
 }
 
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
@@ -519,7 +535,16 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         }
         let rec = match &priors {
             None => process_record(line, ci_idx, fi_idx, mi_idx, is_male, &ranges),
-            Some(pr) => process_record_acm(line, ci_idx, fi_idx, mi_idx, pr, opts.with_pad),
+            Some(pr) => process_record_acm(
+                line,
+                ci_idx,
+                fi_idx,
+                mi_idx,
+                pr,
+                opts.with_pad,
+                opts.with_ppl,
+                opts.force_ad,
+            ),
         };
         out.push_str(&rec);
         out.push('\n');
@@ -575,6 +600,7 @@ fn parse_int_field(cols: &[&str], fmt_keys: &[&str], si: usize, key: &str) -> Op
 
 /// ACM (default) / log-DNM model — upstream `process_record`
 /// (non-naive) for the autosomal case.
+#[allow(clippy::too_many_arguments)]
 fn process_record_acm(
     line: &str,
     ci_idx: usize,
@@ -582,6 +608,8 @@ fn process_record_acm(
     mi_idx: usize,
     pr: &Priors,
     with_pad: bool,
+    with_ppl: bool,
+    force_ad: bool,
 ) -> String {
     let mut f: Vec<&str> = line.split('\t').collect();
     if f.len() < 10 {
@@ -625,18 +653,23 @@ fn process_record_acm(
             .unwrap_or_default();
     }
     let has_ad = ad.iter().all(|a| a.len() == n_allele);
-    if fmt_keys.contains(&"QS") {
+    let qs_ok = if fmt_keys.contains(&"QS") {
         if qs.iter().any(|q| q.len() != n_allele) {
             return line.to_owned(); // ACM requires a well-formed FORMAT/QS
         }
+        true
     } else if with_pad && has_ad {
         // Upstream: fake QS from AD assuming average BQ=30 (--with-pAD).
         for j in 0..3 {
             qs[j] = ad[j].iter().map(|&a| 30.0 * a as f64).collect();
         }
+        true
+    } else if with_ppl {
+        // --ppl: parental likelihoods come from FORMAT/PL; QS unused.
+        false
     } else {
-        return line.to_owned(); // no QS and no --with-pAD fallback
-    }
+        return line.to_owned(); // no QS / --with-pAD / --ppl fallback
+    };
 
     // set_trio_QS_noisy (autosomal): SNV pnoise frac=0.005/frac1=0.045,
     // abs=0; INDEL pnoise all-zero. n_ad kept (frac1≠0).
@@ -647,25 +680,31 @@ fn process_record_acm(
     };
     let (pn_frac, pn_frac1) = if is_indel { (0.0, 0.0) } else { (0.005, 0.045) };
     let mut pqs: [Vec<f64>; 3] = [vec![], vec![], vec![]];
-    for j in 0..3 {
-        let (mut pn, mut pns) = (0.0, 0.0);
-        if (pn_frac != 0.0 || pn_frac1 != 0.0) && j != 2 {
-            let sum_qs: f64 = qs[j].iter().sum();
-            pn = sum_qs * pn_frac;
-            pns = sum_qs * pn_frac1;
+    if qs_ok {
+        for j in 0..3 {
+            let (mut pn, mut pns) = (0.0, 0.0);
+            if (pn_frac != 0.0 || pn_frac1 != 0.0) && j != 2 {
+                let sum_qs: f64 = qs[j].iter().sum();
+                pn = sum_qs * pn_frac;
+                pns = sum_qs * pn_frac1;
+            }
+            pqs[j] = (0..n_allele)
+                .map(|k| {
+                    let val = if has_ad && (ad[0][k] == 0 || ad[1][k] == 0) {
+                        qs[j][k] - pns
+                    } else {
+                        qs[j][k] - pn
+                    };
+                    phred2log(val.max(0.0))
+                })
+                .collect();
         }
-        pqs[j] = (0..n_allele)
-            .map(|k| {
-                let val = if has_ad && (ad[0][k] == 0 || ad[1][k] == 0) {
-                    qs[j][k] - pns
-                } else {
-                    qs[j][k] - pn
-                };
-                phred2log(val.max(0.0))
-            })
-            .collect();
     }
 
+    // many_alts_trim needs QS; a >4-allele site can't be trimmed without it.
+    if n_allele > 4 && !qs_ok {
+        return line.to_owned();
+    }
     // many_alts_trim: > 4 alleles → keep REF + 3 best by summed log-QS.
     let trim_idx = if n_allele > 4 {
         Some(many_alts_trim(n_allele, &mut pl, &mut pqs))
@@ -673,7 +712,7 @@ fn process_record_acm(
         None
     };
     let eff_nals = if trim_idx.is_some() { 4 } else { n_allele };
-    let (score, _al0, mut al1) = process_trio_acm(pr, eff_nals, &pl, &pqs);
+    let (score, _al0, mut al1) = process_trio_acm(pr, eff_nals, &pl, &pqs, with_ppl);
     if let Some(idx) = &trim_idx {
         al1 = idx[al1 as usize] as i32; // many_alts_translate
     }
@@ -685,8 +724,20 @@ fn process_record_acm(
     };
 
     let nsmpl = f.len() - 9;
-    // VAF: round(AD[al1]*100 / sum(AD)) per member, when al1<n_ad.
-    let vaf_set = has_ad && (al1 as usize) < n_allele;
+    // VAF: round(AD[al1]*100 / Σ_{k<n_allele} AD) per member, when
+    // al1 < n_ad. Upstream keeps n_ad even with a wrong AD count under
+    // --force-AD; otherwise a mismatched AD count disables VAF.
+    let ad_present = ad.iter().all(|a| !a.is_empty());
+    let n_ad = if !ad_present {
+        0
+    } else if ad.iter().all(|a| a.len() == n_allele) {
+        n_allele
+    } else if force_ad {
+        ad.iter().map(|a| a.len()).max().unwrap_or(0)
+    } else {
+        0
+    };
+    let vaf_set = n_ad > 0 && (al1 as usize) < n_ad;
     let new_format = if vaf_set {
         format!("{}:DNM:VA:VAF", f[8])
     } else {
@@ -703,8 +754,9 @@ fn process_record_acm(
                     let vaf = adv
                         .map(|a| {
                             let tot: i64 = a.iter().take(n_allele).sum();
+                            let src = a.get(al1 as usize).copied().unwrap_or(0);
                             if tot != 0 {
-                                ((a[al1 as usize] * 100) as f64 / tot as f64).round() as i64
+                                ((src * 100) as f64 / tot as f64).round() as i64
                             } else {
                                 0
                             }
@@ -719,8 +771,9 @@ fn process_record_acm(
                 if let Some(mm) = m {
                     let a = &ad[mm];
                     let tot: i64 = a.iter().take(n_allele).sum();
+                    let src = a.get(al1 as usize).copied().unwrap_or(0);
                     let vaf = if tot != 0 {
-                        ((a[al1 as usize] * 100) as f64 / tot as f64).round() as i64
+                        ((src * 100) as f64 / tot as f64).round() as i64
                     } else {
                         0
                     };

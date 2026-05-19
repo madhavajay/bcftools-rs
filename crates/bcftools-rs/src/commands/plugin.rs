@@ -457,6 +457,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut td_chrx: Option<String> = None;
     let mut td_use_naive = false;
     let mut td_with_pad = false;
+    let mut td_with_ppl = false;
+    let mut td_force_ad = false;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -773,6 +775,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "--with-pAD" if plugin_name.as_deref() == Some("trio-dnm2") => {
                 td_with_pad = true;
+            }
+            "--ppl" | "--with-pPL" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_with_ppl = true;
+            }
+            "--force-AD" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_force_ad = true;
             }
             "--chrX" | "--chrX-list" if plugin_name.as_deref() == Some("trio-dnm2") => {
                 td_chrx = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1680,6 +1688,8 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 chrx_build: td_chrx.as_deref(),
                 naive: td_use_naive,
                 with_pad: td_with_pad,
+                with_ppl: td_with_ppl,
+                force_ad: td_force_ad,
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
