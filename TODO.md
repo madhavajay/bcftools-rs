@@ -1079,11 +1079,20 @@ Latest landed progress:
      (row 755) and `trio-dnm.2 --force-AD` (row 756)): `--ppl`/
      `--with-pPL` (parents use FORMAT/PL, QS unused — QS no longer
      required) and `--force-AD` (keep `n_ad` = max AD width when the
-     AD count ≠ `n_allele`, VAF over the first `n_allele`). **Still to
-     port (each a slice):** chrX/chrXX ACM priors
-     (`init_mf_priors_chrX/chrXX`, full `init_tprob_mprob_chrX/chrXX`),
-     `--use-DNG` (`process_trio_DNG` + DNG priors), `--strictly-novel`,
-     `--dnm-tag` `DNM:phred`/`prob`, PED-file `-P`. **`query`
+     AD count ≠ `n_allele`, VAF over the first `n_allele`).
+     **chrX/chrXX ACM priors + `--strictly-novel` slice DONE**
+     (`progress/batch-25`, `trio-dnm.11.{1,2}.out`):
+     `init_mf_priors_chrX/chrXX`, `init_tprob_mprob_chrX/chrXX`,
+     per-record ploidy → autosomal/chrX/chrXX `init_priors` table
+     selection (`is_chrx` + `is_male`), and `-n`/`--strictly-novel`
+     (the `is_novel` prior variant in `init_tprob_mprob` + the
+     post-loop `subtract_log` score adjustment in `process_trio_ACM`).
+     **Now every tractable `trio-dnm.*` fixture passes**; only
+     **`--use-DNG`** (`process_trio_DNG` + DNG priors `init_DNG_*`;
+     rows 757/759/761/763/765 — `trio-dnm.6.1.out` is the only
+     DNG-exclusive fixture, the rest share the ACM outputs) and the
+     no-fixture `--dnm-tag DNM:phred`/`prob` + PED-file `-P` remain.
+     **`query`
      scientific FORMAT-float render slice DONE** (`progress/batch-23`,
      `trio-dnm.6.2.out`): added `format_g6` (faithful htslib `kputd` /
      C `%g`-precision-6 over the f32 value — scientific when the

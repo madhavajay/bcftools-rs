@@ -20,9 +20,13 @@
 //! - `--ppl`/`--with-pPL`: parental likelihoods from FORMAT/PL (QS
 //!   unused) and `--force-AD` (tolerate a wrong FORMAT/AD count for
 //!   VAF) (test.pl 755/756 → `trio-dnm.1.out`).
+//! - chrX/chrXX ACM priors (`init_mf_priors_chrX/chrXX`,
+//!   `init_tprob_mprob_chrX/chrXX`, per-record ploidy selection) and
+//!   `-n`/`--strictly-novel` (the `is_novel` prior variant + the
+//!   post-loop score adjustment) (test.pl 771/772 →
+//!   `trio-dnm.11.{1,2}.out`).
 //!
-//! Deferred (TODO.md): chrX/chrXX ACM priors
-//! (`init_mf_priors_chrX/chrXX`), `--use-DNG`, `--strictly-novel`,
+//! Deferred (TODO.md): `--use-DNG` (`process_trio_DNG` + DNG priors),
 //! `DNM:phred`/`prob`, PED-file `-P`.
 
 use std::fs::{self, File};
@@ -217,6 +221,67 @@ fn count_unique_alleles(fi: usize, mi: usize, only_alts: bool) -> usize {
     (beg..4).map(|i| als[i] as usize).sum()
 }
 
+/// `count_unique_alleles` over a single genotype index (chrX: mother).
+fn count_unique_alleles_one(gi: usize, only_alts: bool) -> usize {
+    let mut als = [0u8; 4];
+    als[SEQ1[gi]] = 1;
+    als[SEQ2[gi]] = 1;
+    let beg = if only_alts { 1 } else { 0 };
+    (beg..4).map(|i| als[i] as usize).sum()
+}
+
+/// Upstream `init_mf_priors_chrX` (mother-only parent prior).
+fn init_mf_priors_chrx(mi: usize) -> f64 {
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    let nalt_m = count_unique_alleles_one(mi, true);
+    let nref_m = (ma == 0) as i32 + (mb == 0) as i32;
+    let p_homref = 0.999;
+    let p_poly = (1.0 - p_homref) * (1.0 - p_homref);
+    let p_nonref = 1.0 - p_homref - p_poly;
+    if nalt_m >= 2 {
+        p_poly / 3.0
+    } else if nref_m == 2 {
+        p_homref
+    } else if nref_m == 1 {
+        p_nonref * (2.0 / 3.0) * (1.0 / 3.0)
+    } else {
+        p_nonref * (1.0 / 3.0) * (1.0 / 3.0)
+    }
+}
+
+/// Upstream `init_mf_priors_chrXX` (father must be hom in X).
+#[allow(clippy::if_same_then_else)]
+fn init_mf_priors_chrxx(fi: usize, mi: usize) -> f64 {
+    let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    if fa != fb {
+        return 0.0; // father can't be a het
+    }
+    let mut nalt_mf = count_unique_alleles(fi, mi, true) as i32;
+    let mut nref_mf = (fa == 0) as i32 + (fb == 0) as i32 + (ma == 0) as i32 + (mb == 0) as i32;
+    if fa == 0 {
+        nref_mf -= 1;
+    } else {
+        nalt_mf -= 1;
+    }
+    let p_homref = 0.998;
+    let p_poly = (1.0 - p_homref) * (1.0 - p_homref);
+    let p_nonref = 1.0 - p_homref - p_poly;
+    if nalt_mf >= 3 {
+        1e-26
+    } else if nalt_mf >= 2 {
+        p_poly * (1.0 / 9.0) * (1.0 / 3.0)
+    } else if nref_mf == 3 {
+        p_homref
+    } else if nref_mf == 2 {
+        p_nonref * (3.0 / 7.0) * (1.0 / 3.0)
+    } else if nref_mf == 1 {
+        p_nonref * (3.0 / 7.0) * (1.0 / 3.0)
+    } else {
+        p_nonref * (1.0 / 7.0) * (1.0 / 3.0)
+    }
+}
+
 /// Upstream `init_mf_priors` (autosomal parent-genotype prior). The
 /// distinct `nref_mf` arms intentionally mirror upstream's separate
 /// (commented) cases even where the value coincides.
@@ -250,7 +315,13 @@ fn init_mf_priors(fi: usize, mi: usize) -> f64 {
 
 /// Upstream `init_tprob_mprob` (autosomal): `(tprob, mprob,
 /// denovo_allele)`. NAIVE uses only `tprob==0`; ACM needs all three.
-fn init_tprob_mprob(fi: usize, mi: usize, ci: usize, mrate: f64) -> (f64, f64, i32) {
+fn init_tprob_mprob(
+    fi: usize,
+    mi: usize,
+    ci: usize,
+    mrate: f64,
+    strictly_novel: bool,
+) -> (f64, f64, i32) {
     let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
     let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
     let (ca, cb) = (SEQ1[ci], SEQ2[ci]);
@@ -259,9 +330,18 @@ fn init_tprob_mprob(fi: usize, mi: usize, ci: usize, mrate: f64) -> (f64, f64, i
     } else {
         cb
     } as i32;
-    // Non-`--strictly-novel` is_novel (ACM default).
-    let is_novel = !(((ca == fa || ca == fb) && (cb == ma || cb == mb))
-        || ((ca == ma || ca == mb) && (cb == fa || cb == fb)));
+    let is_novel = if strictly_novel {
+        // Only a genuinely novel allele counts; never the reference.
+        let mut nv = (ca != fa && ca != fb && ca != ma && ca != mb)
+            || (cb != fa && cb != fb && cb != ma && cb != mb);
+        if nv && allele == 0 {
+            nv = false;
+        }
+        nv
+    } else {
+        !(((ca == fa || ca == fb) && (cb == ma || cb == mb))
+            || ((ca == ma || ca == mb) && (cb == fa || cb == fb)))
+    };
     if !is_novel {
         let tprob = if fa == fb && ma == mb {
             1.0
@@ -285,22 +365,101 @@ fn init_tprob_mprob(fi: usize, mi: usize, ci: usize, mrate: f64) -> (f64, f64, i
     }
 }
 
-/// Autosomal priors tables (`init_priors`).
+/// Upstream `init_tprob_mprob_chrX` (male proband on chrX).
+fn init_tprob_mprob_chrx(fi: usize, mi: usize, ci: usize, mrate: f64) -> (f64, f64, i32) {
+    let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    let (ca, cb) = (SEQ1[ci], SEQ2[ci]);
+    let allele = if ca != ma && ca != mb { ca } else { cb } as i32;
+    if ca != cb {
+        // A male cannot be het in X (but can be mosaic).
+        let is_novel = (ca != fa && ca != fb && ca != ma && ca != mb)
+            || (cb != fa && cb != fb && cb != ma && cb != mb);
+        if is_novel {
+            (0.0, mrate, allele)
+        } else {
+            (0.0, 0.0, allele)
+        }
+    } else if ca == ma || ca == mb {
+        let tprob = if ma == mb { 1.0 } else { 0.5 };
+        (tprob, 1.0 - mrate, allele)
+    } else {
+        (0.0, mrate, allele) // de novo
+    }
+}
+
+/// Upstream `init_tprob_mprob_chrXX` (female proband on chrX).
+fn init_tprob_mprob_chrxx(
+    fi: usize,
+    mi: usize,
+    ci: usize,
+    mrate: f64,
+    strictly_novel: bool,
+) -> (f64, f64, i32) {
+    let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    let (ca, cb) = (SEQ1[ci], SEQ2[ci]);
+    if fa != fb {
+        // Genotype error (father het in X) → fall back to autosomal.
+        return init_tprob_mprob(fi, mi, ci, mrate, strictly_novel);
+    }
+    let allele = if ca != fa && ca != fb && ca != ma && ca != mb {
+        ca
+    } else {
+        cb
+    } as i32;
+    if (ca == fa && (cb == ma || cb == mb)) || (cb == fa && (ca == ma || ca == mb)) {
+        let tprob = if ma == mb { 1.0 } else { 0.5 };
+        (tprob, 1.0 - mrate, allele)
+    } else {
+        let mprob = if (ca == fa || (ca == ma || ca == mb)) || (cb == fa || (cb == ma || cb == mb))
+        {
+            mrate
+        } else {
+            mrate * mrate
+        };
+        (0.0, mprob, allele)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PriorKind {
+    Autosomal,
+    ChrX,
+    ChrXX,
+}
+
+/// `init_priors` tables for one inheritance model.
 struct Priors {
     pprob: Vec<f64>,   // [fi*100 + mi*10 + ci]
     denovo: Vec<bool>, //  log(gt_prior*mprob*(tprob==0?1:tprob))
     dnv_allele: Vec<i32>,
 }
 
-fn init_priors_autosomal(mrate: f64) -> Priors {
+/// The three `init_priors` tables, selected per record by ploidy.
+struct PriorSet {
+    autosomal: Priors,
+    chrx: Priors,
+    chrxx: Priors,
+}
+
+fn build_priors(kind: PriorKind, mrate: f64, strictly_novel: bool) -> Priors {
     let mut pprob = vec![0.0f64; 1000];
     let mut denovo = vec![false; 1000];
     let mut dnv_allele = vec![0i32; 1000];
     for fi in 0..10 {
         for mi in 0..10 {
-            let gt_prior = init_mf_priors(fi, mi);
+            let gt_prior = match kind {
+                PriorKind::Autosomal => init_mf_priors(fi, mi),
+                PriorKind::ChrX => init_mf_priors_chrx(mi),
+                PriorKind::ChrXX => init_mf_priors_chrxx(fi, mi),
+            };
             for ci in 0..10 {
-                let (tprob, mprob, allele) = init_tprob_mprob(fi, mi, ci, mrate);
+                let (tprob, mprob, allele) = match kind {
+                    PriorKind::Autosomal => init_tprob_mprob(fi, mi, ci, mrate, strictly_novel),
+                    PriorKind::ChrX => init_tprob_mprob_chrx(fi, mi, ci, mrate),
+                    PriorKind::ChrXX => init_tprob_mprob_chrxx(fi, mi, ci, mrate, strictly_novel),
+                };
                 let idx = fi * 100 + mi * 10 + ci;
                 denovo[idx] = tprob == 0.0;
                 dnv_allele[idx] = allele;
@@ -315,6 +474,14 @@ fn init_priors_autosomal(mrate: f64) -> Priors {
     }
 }
 
+fn build_prior_set(mrate: f64, strictly_novel: bool) -> PriorSet {
+    PriorSet {
+        autosomal: build_priors(PriorKind::Autosomal, mrate, strictly_novel),
+        chrx: build_priors(PriorKind::ChrX, mrate, strictly_novel),
+        chrxx: build_priors(PriorKind::ChrXX, mrate, strictly_novel),
+    }
+}
+
 /// Upstream `process_trio_ACM`: returns the DNM phred-ish score and
 /// sets `(al0, al1)`. `pl`/`qs` are the per-member log-prob arrays
 /// (`[father, mother, child]`).
@@ -325,6 +492,7 @@ fn process_trio_acm(
     pl: &[Vec<f64>; 3],
     qs: &[Vec<f64>; 3],
     with_ppl: bool,
+    strictly_novel: bool,
 ) -> (f64, i32, i32) {
     let (mut al0, mut al1) = (0i32, 0i32);
     let mut sum = f64::NEG_INFINITY;
@@ -386,6 +554,24 @@ fn process_trio_acm(
                 }
             }
             ci += 1;
+        }
+    }
+    if strictly_novel {
+        // Downplay de-novo calls with the allele already seen in the
+        // parents (qs is log-space; nonzero ⇒ allele has support).
+        let ial = al1 as usize;
+        let qm = qs[1].get(ial).copied().unwrap_or(0.0);
+        let qf = qs[0].get(ial).copied().unwrap_or(0.0);
+        if qm + qf != 0.0 {
+            let mut tmp = 0.0;
+            if qm != 0.0 {
+                tmp += subtract_log(0.0, qm);
+            }
+            if qf != 0.0 {
+                tmp += subtract_log(0.0, qf);
+            }
+            sum = sum_log(sum, tmp);
+            max += tmp;
         }
     }
     (log2phred(subtract_log(0.0, max - sum)), al0, al1)
@@ -452,6 +638,9 @@ pub struct Options<'a> {
     /// `--force-AD`: compute VAF even when the FORMAT/AD field count
     /// does not match `n_allele`.
     pub force_ad: bool,
+    /// `-n`/`--strictly-novel`: only score genuinely novel alleles
+    /// (changes the `is_novel` prior + a post-loop score adjustment).
+    pub strictly_novel: bool,
 }
 
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
@@ -478,7 +667,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let priors = if opts.naive {
         None
     } else {
-        Some(init_priors_autosomal(1e-8))
+        Some(build_prior_set(1e-8, opts.strictly_novel))
     };
     let mut out = String::with_capacity(text.len() + 1024);
     // Sample-column indices (0-based within sample columns).
@@ -535,15 +724,18 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
         }
         let rec = match &priors {
             None => process_record(line, ci_idx, fi_idx, mi_idx, is_male, &ranges),
-            Some(pr) => process_record_acm(
+            Some(ps) => process_record_acm(
                 line,
                 ci_idx,
                 fi_idx,
                 mi_idx,
-                pr,
+                ps,
+                is_male,
+                &ranges,
                 opts.with_pad,
                 opts.with_ppl,
                 opts.force_ad,
+                opts.strictly_novel,
             ),
         };
         out.push_str(&rec);
@@ -599,22 +791,37 @@ fn parse_int_field(cols: &[&str], fmt_keys: &[&str], si: usize, key: &str) -> Op
 }
 
 /// ACM (default) / log-DNM model — upstream `process_record`
-/// (non-naive) for the autosomal case.
+/// (non-naive). Selects autosomal/chrX/chrXX priors per record.
 #[allow(clippy::too_many_arguments)]
 fn process_record_acm(
     line: &str,
     ci_idx: usize,
     fi_idx: usize,
     mi_idx: usize,
-    pr: &Priors,
+    ps: &PriorSet,
+    is_male: bool,
+    ranges: &[(i64, i64)],
     with_pad: bool,
     with_ppl: bool,
     force_ad: bool,
+    strictly_novel: bool,
 ) -> String {
     let mut f: Vec<&str> = line.split('\t').collect();
     if f.len() < 10 {
         return line.to_owned();
     }
+    // Ploidy → which init_priors table (upstream priors / priors_X /
+    // priors_XX selection in process_record).
+    let pos: i64 = f[1].parse().unwrap_or(0);
+    let reflen = f[3].len() as i64;
+    let chrx = is_chrx(f[0], pos, reflen, ranges);
+    let pr = if !chrx {
+        &ps.autosomal
+    } else if is_male {
+        &ps.chrx
+    } else {
+        &ps.chrxx
+    };
     let n_allele = if f[4] == "." {
         1
     } else {
@@ -712,7 +919,8 @@ fn process_record_acm(
         None
     };
     let eff_nals = if trim_idx.is_some() { 4 } else { n_allele };
-    let (score, _al0, mut al1) = process_trio_acm(pr, eff_nals, &pl, &pqs, with_ppl);
+    let (score, _al0, mut al1) =
+        process_trio_acm(pr, eff_nals, &pl, &pqs, with_ppl, strictly_novel);
     if let Some(idx) = &trim_idx {
         al1 = idx[al1 as usize] as i32; // many_alts_translate
     }

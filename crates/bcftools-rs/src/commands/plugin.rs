@@ -459,6 +459,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
     let mut td_with_pad = false;
     let mut td_with_ppl = false;
     let mut td_force_ad = false;
+    let mut td_strictly_novel = false;
     // frameshifts options.
     let mut frameshifts_exons: Option<String> = None;
     // fill-from-fasta options.
@@ -781,6 +782,9 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
             }
             "--force-AD" if plugin_name.as_deref() == Some("trio-dnm2") => {
                 td_force_ad = true;
+            }
+            "-n" | "--strictly-novel" if plugin_name.as_deref() == Some("trio-dnm2") => {
+                td_strictly_novel = true;
             }
             "--chrX" | "--chrX-list" if plugin_name.as_deref() == Some("trio-dnm2") => {
                 td_chrx = iter.next().map(|s| s.to_string_lossy().into_owned());
@@ -1690,6 +1694,7 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 with_pad: td_with_pad,
                 with_ppl: td_with_ppl,
                 force_ad: td_force_ad,
+                strictly_novel: td_strictly_novel,
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;

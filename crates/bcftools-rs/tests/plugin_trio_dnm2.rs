@@ -192,6 +192,29 @@ fn acm_many_alts_trim() {
 }
 
 #[test]
+fn acm_chrx_priors() {
+    // chrX/chrXX ACM priors via -p 1X: (male proband), test.pl row 771.
+    check(
+        "trio-dnm/trio-dnm.11.vcf",
+        &["-p", "1X:proband,father,mother"],
+        "%CHROM:%POS  DNM=[%DNM ]\tAD=[%AD ]\tQS=[%QS ]\tVAF=[%VAF ]\tVA=[%VA ]",
+        "trio-dnm/trio-dnm.11.1.out",
+    );
+}
+
+#[test]
+fn acm_strictly_novel() {
+    // chrX priors + --strictly-novel (is_novel prior variant + the
+    // post-loop score adjustment), test.pl row 772.
+    check(
+        "trio-dnm/trio-dnm.11.vcf",
+        &["-p", "1X:proband,father,mother", "--strictly-novel"],
+        "%CHROM:%POS  DNM=[%DNM ]\tAD=[%AD ]\tQS=[%QS ]\tVAF=[%VAF ]\tVA=[%VA ]",
+        "trio-dnm/trio-dnm.11.2.out",
+    );
+}
+
+#[test]
 fn acm_with_pad() {
     // FORMAT/QS absent → --with-pAD fakes QS from FORMAT/AD (BQ=30)
     // (test.pl row 770).
