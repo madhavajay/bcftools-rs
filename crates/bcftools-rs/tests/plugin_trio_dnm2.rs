@@ -129,6 +129,43 @@ fn acm_default_model() {
 }
 
 #[test]
+fn acm_with_ppl() {
+    // --ppl: parental likelihoods from FORMAT/PL (no FORMAT/QS),
+    // test.pl row 755.
+    check(
+        "trio-dnm/trio-dnm.1.vcf",
+        &[
+            "-p",
+            "proband,father,mother",
+            "--ppl",
+            "--dnm-tag",
+            "DNM:log",
+        ],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.1.out",
+    );
+}
+
+#[test]
+fn acm_with_ppl_force_ad() {
+    // --ppl with a wrong FORMAT/AD count tolerated by --force-AD;
+    // same expected output as trio-dnm.1 (test.pl row 756).
+    check(
+        "trio-dnm/trio-dnm.2.vcf",
+        &[
+            "-p",
+            "proband,father,mother",
+            "--ppl",
+            "--dnm-tag",
+            "DNM:log",
+            "--force-AD",
+        ],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.1.out",
+    );
+}
+
+#[test]
 fn acm_dnm_log_scientific_float_render() {
     // Small-exponent DNM:log values (e.g. -3.16223e-05) must render in
     // C `%g` scientific notation, matching htslib `kputd` — test.pl
