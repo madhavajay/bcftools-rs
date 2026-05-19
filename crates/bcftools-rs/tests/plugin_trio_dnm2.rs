@@ -192,6 +192,43 @@ fn acm_many_alts_trim() {
 }
 
 #[test]
+fn dng_model() {
+    // --use-DNG: the original DenovoGear PL-only model + init_DNG_*
+    // priors. test.pl rows 757/759/761/765 share the ACM outputs;
+    // row 763 (trio-dnm.6.1.out) is the DNG-exclusive fixture.
+    check(
+        "trio-dnm/trio-dnm.6.vcf",
+        &[
+            "-p",
+            "proband,father,mother",
+            "--use-DNG",
+            "--dnm-tag",
+            "DNM:log",
+        ],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.6.1.out",
+    );
+    check(
+        "trio-dnm/trio-dnm.4.vcf",
+        &["-p", "proband,father,mother", "--use-DNG"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.4.1.out",
+    );
+    check(
+        "trio-dnm/trio-dnm.5.vcf",
+        &[
+            "-p",
+            "proband,father,mother",
+            "--use-DNG",
+            "--dnm-tag",
+            "DNM:log",
+        ],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.5.1.out",
+    );
+}
+
+#[test]
 fn acm_chrx_priors() {
     // chrX/chrXX ACM priors via -p 1X: (male proband), test.pl row 771.
     check(
