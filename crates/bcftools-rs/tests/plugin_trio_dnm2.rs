@@ -34,27 +34,22 @@ fn ensure_binary_built() {
     assert!(status.success(), "failed to build bcftools-rs-cli");
 }
 
-/// `+trio-dnm2 <in> -- -p <pfm> --use-NAIVE | bcftools query -f<fmt>`.
-fn check(pfm: &str, fmt: &str, expected_fixture: &str) {
+/// `+trio-dnm2 <in> -- <plugin_args> | bcftools query -f<fmt>`.
+fn check(input_fixture: &str, plugin_args: &[&str], fmt: &str, expected_fixture: &str) {
     ensure_binary_built();
-    let input = fixture_path("trio-dnm/trio-dnm.9.vcf");
+    let input = fixture_path(input_fixture);
     let expected = std::fs::read_to_string(fixture_path(expected_fixture)).unwrap();
 
+    let mut args: Vec<&str> = vec!["+trio-dnm2", input.to_str().unwrap(), "--"];
+    args.extend_from_slice(plugin_args);
     let plugin = Command::new(bin_path())
-        .args([
-            "+trio-dnm2",
-            input.to_str().unwrap(),
-            "--",
-            "-p",
-            pfm,
-            "--use-NAIVE",
-        ])
+        .args(&args)
         .output()
         .expect("spawn +trio-dnm2");
     assert_eq!(
         plugin.status.code(),
         Some(0),
-        "+trio-dnm2 -p {pfm} failed: {}",
+        "{args:?} failed: {}",
         String::from_utf8_lossy(&plugin.stderr)
     );
 
@@ -79,14 +74,15 @@ fn check(pfm: &str, fmt: &str, expected_fixture: &str) {
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
         expected,
-        "mismatch for -p {pfm}"
+        "mismatch for {args:?}"
     );
 }
 
 #[test]
 fn naive_male_proband_chrx() {
     check(
-        "1X:proband,father,mother",
+        "trio-dnm/trio-dnm.9.vcf",
+        &["-p", "1X:proband,father,mother", "--use-NAIVE"],
         "[\t%DNM]\n",
         "trio-dnm/trio-dnm.9.1.out",
     );
@@ -95,8 +91,39 @@ fn naive_male_proband_chrx() {
 #[test]
 fn naive_female_proband_chrxx() {
     check(
-        "2X:proband,father,mother",
+        "trio-dnm/trio-dnm.9.vcf",
+        &["-p", "2X:proband,father,mother", "--use-NAIVE"],
         "[\t%DNM]\n",
         "trio-dnm/trio-dnm.9.2.out",
+    );
+}
+
+#[test]
+fn acm_default_model() {
+    // The default ACM likelihood model (DNM:log), validated through
+    // our own `bcftools query` (test.pl rows 758, 760, 762, 766).
+    check(
+        "trio-dnm/trio-dnm.4.vcf",
+        &["-p", "proband,father,mother"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.4.1.out",
+    );
+    check(
+        "trio-dnm/trio-dnm.4.vcf",
+        &["-p", "proband,father,mother", "--dnm-tag", "DNM:log"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.4.2.out",
+    );
+    check(
+        "trio-dnm/trio-dnm.5.vcf",
+        &["-p", "proband,father,mother", "--dnm-tag", "DNM:log"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.5.1.out",
+    );
+    check(
+        "trio-dnm/trio-dnm.7.vcf",
+        &["-p", "proband,father,mother", "--dnm-tag", "DNM:log"],
+        "[\t%DNM]\t[\t%VAF]\n",
+        "trio-dnm/trio-dnm.7.1.out",
     );
 }

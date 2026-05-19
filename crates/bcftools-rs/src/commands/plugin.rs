@@ -1669,17 +1669,12 @@ fn run(argv: &[OsString]) -> io::Result<ExitCode> {
                 "trio-dnm2 requires -p/--pfm proband,father,mother",
             ));
         };
-        if !td_use_naive {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "trio-dnm2 in this slice supports only --use-NAIVE (the ACM/DNG likelihood models are not yet ported)",
-            ));
-        }
         let vcf = crate::commands::plugins::trio_dnm2::run(
             Path::new(&input),
             crate::commands::plugins::trio_dnm2::Options {
                 pfm,
                 chrx_build: td_chrx.as_deref(),
+                naive: td_use_naive,
             },
         )?;
         write_plugin_output(vcf.as_bytes(), output.as_deref(), output_kind)?;
