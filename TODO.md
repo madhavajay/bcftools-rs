@@ -1111,11 +1111,18 @@ Latest landed progress:
      (the only `trio-dnm.*` fixture that was float-render-only);
      `trio-dnm.{1,11.1,11.2}.out` turned out to *also* need
      `--ppl` / chrX-chrXX ACM priors / `--strictly-novel`, not just
-     the renderer. **Follow-up (separate riskier batch):** route
-     *non-scientific* numeric FORMAT/INFO floats through `kputd` too
-     (so a stored `0.00008` renders `8e-05`) to win the
-     `query.30`/`query.31` Perl-parity fixtures — needs the full Perl
-     parity suite as the regression guard.
+     the renderer. **Float-renderer follow-up DONE**
+     (`progress/batch-27`, `query.30.out`/`query.31.out`): `query`
+     now parses `##INFO=`/`##FORMAT=` `Type=Float` IDs into a
+     `FieldTypes` map threaded through `TextRecord`, and
+     `format_output_scalar` routes a header-declared Float field's
+     value through `format_g6` (htslib `kputd`) so a stored `0.00008`
+     renders `8e-05`. Scoped to Float-typed INFO/FORMAT fields only
+     (Integer/String/Flag and core columns keep their text form, so
+     an Integer `1000000` is never turned into `1e+06`). Local
+     `test_vcf_query` parity slice 259→**262** passed, 81→**78**
+     failed (net +3, **zero regressions**); `cargo test --workspace`
+     fully green.
      (Engine-level `@file` sample-subset subscript, once flagged as
      the next concrete slice, is **no longer blocking** — `+split-vep`
      and `+setGT` shipped via plugin-level / query-formatter handling;

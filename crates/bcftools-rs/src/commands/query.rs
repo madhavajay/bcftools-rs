@@ -381,8 +381,10 @@ pub(crate) fn query_format_text<W: Write>(
         .map(QueryFilter::from_spec)
         .transpose()?;
     let mut wrote_header = false;
+    let mut field_types = FieldTypes::default();
     for line in text.lines() {
         if line.starts_with("##") {
+            field_types.ingest_header_line(line);
             continue;
         }
         if line.starts_with("#CHROM\t") {
@@ -410,7 +412,7 @@ pub(crate) fn query_format_text<W: Write>(
         {
             continue;
         }
-        let record = TextRecord::parse(line, &samples, &sample_indices);
+        let record = TextRecord::parse(line, &samples, &sample_indices, &field_types);
         if let Some(filter) = &query_filter
             && !filter.matches(&record)?
         {
@@ -1430,18 +1432,79 @@ fn query_sample_indices(
 }
 
 #[derive(Debug)]
+/// INFO/FORMAT field IDs declared `Type=Float` in the VCF header.
+/// bcftools renders these via htslib `kputd` (C `%g`/.6); other types
+/// (Integer/String/Flag) and the core columns keep their text form.
+#[derive(Default)]
+struct FieldTypes {
+    info_float: std::collections::HashSet<String>,
+    format_float: std::collections::HashSet<String>,
+}
+
+impl FieldTypes {
+    /// Pull the `KEY=` value out of a header meta line, stopping at the
+    /// next `,` or `>`. `ID`/`Type` values are simple identifiers, so
+    /// this stays correct even though `Description=` may hold commas.
+    fn attr<'b>(line: &'b str, key: &str) -> Option<&'b str> {
+        let i = line.find(key)?;
+        let rest = &line[i + key.len()..];
+        let end = rest.find([',', '>']).unwrap_or(rest.len());
+        Some(rest[..end].trim_matches('"'))
+    }
+
+    fn ingest_header_line(&mut self, line: &str) {
+        let set = if let Some(rest) = line.strip_prefix("##INFO=<") {
+            (Self::attr(rest, "Type=") == Some("Float")).then_some((&mut self.info_float, rest))
+        } else if let Some(rest) = line.strip_prefix("##FORMAT=<") {
+            (Self::attr(rest, "Type=") == Some("Float")).then_some((&mut self.format_float, rest))
+        } else {
+            None
+        };
+        if let Some((set, rest)) = set
+            && let Some(id) = Self::attr(rest, "ID=")
+        {
+            set.insert(id.to_owned());
+        }
+    }
+
+    /// Is `token` (`INFO/X`, `FMT/X`, `FORMAT/X`, or a bare key in a
+    /// sample/INFO context) a header-declared `Type=Float` field?
+    fn is_float(&self, token: &str, sample_index: Option<usize>) -> bool {
+        if let Some(k) = token.strip_prefix("INFO/") {
+            return self.info_float.contains(k);
+        }
+        if let Some(k) = token
+            .strip_prefix("FMT/")
+            .or_else(|| token.strip_prefix("FORMAT/"))
+        {
+            return self.format_float.contains(k);
+        }
+        if sample_index.is_some() && self.format_float.contains(token) {
+            return true;
+        }
+        self.info_float.contains(token)
+    }
+}
+
 struct TextRecord<'a> {
     fields: Vec<&'a str>,
     samples: &'a [String],
     sample_indices: &'a [usize],
+    field_types: &'a FieldTypes,
 }
 
 impl<'a> TextRecord<'a> {
-    fn parse(line: &'a str, samples: &'a [String], sample_indices: &'a [usize]) -> Self {
+    fn parse(
+        line: &'a str,
+        samples: &'a [String],
+        sample_indices: &'a [usize],
+        field_types: &'a FieldTypes,
+    ) -> Self {
         Self {
             fields: line.split('\t').collect(),
             samples,
             sample_indices,
+            field_types,
         }
     }
 
@@ -2800,23 +2863,39 @@ fn render_token_for_output(
         return value
             .split(',')
             .nth(index)
-            .map(|value| format_output_scalar(token, value, sample_index))
+            .map(|value| format_output_scalar(token, value, sample_index, record))
             .unwrap_or_else(|| ".".into());
     }
     value
         .split(',')
-        .map(|value| format_output_scalar(token, value, sample_index))
+        .map(|value| format_output_scalar(token, value, sample_index, record))
         .collect::<Vec<_>>()
         .join(",")
 }
 
-fn format_output_scalar(token: &str, value: &str, sample_index: Option<usize>) -> String {
+fn format_output_scalar(
+    token: &str,
+    value: &str,
+    sample_index: Option<usize>,
+    record: &TextRecord<'_>,
+) -> String {
+    // A header-declared Type=Float INFO/FORMAT field is rendered by
+    // bcftools via htslib `kputd` (C `%g`/.6) over the f32 value —
+    // e.g. a stored `0.00008` prints as `8e-05`. Only Float-typed
+    // fields take this path; Integer/String/Flag and the core columns
+    // keep their text form.
+    if value != "."
+        && record.field_types.is_float(token, sample_index)
+        && let Ok(parsed) = value.parse::<f64>()
+        && parsed.is_finite()
+    {
+        return format_g6(parsed);
+    }
     if value.contains(['e', 'E'])
         && let Ok(parsed) = value.parse::<f64>()
     {
-        // bcftools renders the BCF float via htslib `kputd` (C `%g`/.6),
-        // which keeps scientific notation for small/large exponents
-        // rather than expanding to fixed-point.
+        // Fallback for untyped scientific text (e.g. plugin transient
+        // output whose header type may be unavailable here).
         return format_g6(parsed);
     }
     if sample_index.is_some()
