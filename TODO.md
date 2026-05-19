@@ -1032,11 +1032,28 @@ Latest landed progress:
   37 filter, 2 `+gvcfz`, 5 `+setGT` integration tests).
 - Current code slice in flight: none; pick the next focused local-only item
   from the queue below.
-- Remaining tasks (as of `progress/batch-19`, PR #263; **38/41 plugins
-  implemented**; suite fully green, no `#[ignore]` markers). The two
-  heaviest plugins — `+split-vep` and `+fill-tags` — are now COMPLETE,
-  so the plugin set is essentially finished. Final goals, in priority
-  order:
+- **STATUS (as of PR #271, `main` `0551e1a`): the plugin-porting goal
+  is DONE.** Every bcftools plugin that has upstream `test.pl`
+  fixtures is implemented and passes **byte-for-byte** (39/41
+  registered plugins; suite fully green, no `#[ignore]` markers). The
+  three heaviest — `+split-vep`, `+fill-tags`, `+trio-dnm2` — are all
+  COMPLETE, and the shared `query` float renderer now matches htslib
+  `kputd`. **The only plugin work left is intentionally unfinished
+  because it cannot be verified or run:**
+  - `+color-chrs` — portable, but has **no upstream test fixtures**,
+    so a port could not be validated byte-for-byte.
+  - `+vrfs` — has a fixture but is **infeasible**: it reads BAMs
+    through an mpileup engine that does not exist in this pure-Rust
+    port.
+  - `gvcfz.2.out` — a single deferred fixture: one multi-group
+    `FLT:-` / `RGQ` edge unresolved by code inspection; guessing
+    risks the two passing `gvcfz` fixtures.
+  - `+trio-dnm2 --dnm-tag DNM:phred`/`prob` and PED-file `-P` — no
+    `test.pl` row exercises them, so no byte-for-byte check exists.
+
+  Nothing tractable-and-testable remains in the plugin set. The
+  per-plugin detail and the broader subcommand roadmap (a separate,
+  much larger effort) follow, in priority order:
 
   1. **`+split-vep` — ✅ COMPLETE** (74k C, the single heaviest
      plugin; batches 5–9, PRs #249–#253). All 21 `split-vep.*.out`
@@ -1203,13 +1220,18 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `bgzip` (helper) | Perl harness | `commands/bgzip.rs` — staged bgzip/tabix for `test.pl` |
 
 39 of 41 plugin record-processing implementations done (see Wave F);
-2 unimplemented (`+vrfs` — mpileup/BAM-blocked; `+color-chrs` — no
-upstream fixtures). `+trio-dnm2` is **COMPLETE** — every upstream
-`trio-dnm.*` fixture (NAIVE + ACM + many_alts_trim + `--with-pAD` +
+**every plugin with upstream fixtures passes byte-for-byte.**
+`+split-vep`, `+fill-tags`, and `+trio-dnm2` are all **COMPLETE**
+(`+trio-dnm2` = NAIVE + ACM + many_alts_trim + `--with-pAD` +
 `--ppl`/`--force-AD` + chrX/chrXX priors + `--strictly-novel` +
-`--use-DNG`) passes. No tractable plugin work remains; only `+vrfs`
-(infeasible without a ported mpileup engine) and `+color-chrs` (no
-upstream fixtures, untestable) are out of reach.
+`--use-DNG`, every `trio-dnm.*` fixture), and the shared `query`
+renderer now matches htslib `kputd` for `Type=Float` fields
+(`query.30`/`query.31`). The only plugin items left are unverifiable
+or infeasible — there is nothing tractable-and-testable to do:
+`+vrfs` (needs a ported mpileup engine — infeasible), `+color-chrs`
+(no upstream fixtures — can't validate byte-for-byte), `gvcfz.2.out`
+(one unresolved deferred `FLT:-`/`RGQ` edge), and the no-fixture
+`+trio-dnm2 --dnm-tag DNM:phred`/`prob` + PED `-P`.
 
 Current whole-project estimate:
 
