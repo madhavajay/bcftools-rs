@@ -201,6 +201,19 @@ stack landed 2026-05-15 generated cascading `TODO.md`/`docs/test-status.md`/
 
 Latest landed progress:
 
+- 2026-05-19: `progress/batch-21` added the `+trio-dnm2` **ACM**
+  (default) likelihood model for the autosomal ≤4-allele case — a
+  faithful port of `init_mf_priors`/`init_tprob_mprob`/`init_priors`,
+  the log-space helpers (`subtract_log`/`sum_log`/`phred2*`/
+  `log2phred`), `set_trio_PL` (normalised log-probs),
+  `set_trio_QS_noisy` (SNV/INDEL pnoise), `process_trio_ACM`, and the
+  `DNM:log` transform + `FORMAT/DNM`(float)/`VA`/`VAF`-from-AD.
+  Byte-for-byte against `trio-dnm/trio-dnm.{4.1,4.2,5.1,7.1}.out` via
+  our own `bcftools query` (test.pl 758/760/762/766). Deferred:
+  `many_alts_trim` (>4 alleles, `trio-dnm.8.*`), chrX ACM priors,
+  `--use-DNG`/`--ppl`/`--force-AD`/`--with-pAD`/`--strictly-novel`,
+  `DNM:phred`/`prob` (`trio-dnm.6.2` differs only in our `query`'s
+  float rendering vs C `%g`, not the model).
 - 2026-05-19: `progress/batch-20` started `+trio-dnm2` (the last
   unported plugin with fixtures) — the `--use-NAIVE` GT-only de-novo
   model. Ports `seq1`/`seq2`/`seq3` genotype encoding, the
@@ -1048,15 +1061,24 @@ Latest landed progress:
      `trio-dnm.9.{1,2}.out`): `seq1`/`seq2`/`seq3` encoding, the
      autosomal/chrX/chrXX de-novo predicates, `set_trio_GT` (incl.
      >4-allele remap), GRCh37 chrX regions, PED
-     `[1X:|2X:]proband,father,mother`, `FORMAT/DNM`+`VA`. **Still to
-     port (each a slice):** the ACM (default) model
-     `process_trio_ACM` + PL/QS priors/likelihoods
-     (`trio-dnm.{1,2,4,5,6,7,8,10,11}.*.out`), `--use-DNG`
-     (`process_trio_DNG` + DNG priors), `--ppl`, `--force-AD`,
-     `--with-pAD`, `--strictly-novel`, non-flag `--dnm-tag`
-     (`DNM:log`/`phred`/`prob`), PED-file `-P`, VAF/VA from
-     `FORMAT/AD`, `many_alts_trim` for >4 alleles in the likelihood
-     models.
+     `[1X:|2X:]proband,father,mother`, `FORMAT/DNM`+`VA`. **ACM
+     (default) core slice DONE** (`progress/batch-21`,
+     `trio-dnm.{4.1,4.2,5.1,7.1}.out`): `process_trio_ACM` log-space
+     model + `init_mf_priors`/`init_tprob_mprob`/`init_priors`
+     (autosomal), `set_trio_PL` normalization, `set_trio_QS_noisy`
+     (SNV `pn`=0.005/`pns`=0.045, INDEL no-noise),
+     `phred2num`/`phred2log`/`log2phred`/`subtract_log`/`sum_log`,
+     `--dnm-tag DNM:log` transform, `FORMAT/DNM`+`VA`+`VAF` (from
+     `FORMAT/AD`). **Still to port (each a slice):** `many_alts_trim`
+     for >4 alleles in the likelihood models
+     (`trio-dnm.8.*.out`), chrX/chrXX ACM priors
+     (`init_mf_priors_chrX/chrXX`, full `init_tprob_mprob_chrX/chrXX`),
+     `--use-DNG` (`process_trio_DNG` + DNG priors), `--ppl`,
+     `--force-AD`, `--with-pAD`, `--strictly-novel`, `--dnm-tag`
+     `DNM:phred`/`prob`, PED-file `-P`. (`trio-dnm.6.2.out` is correct
+     ACM numerically; the only diff is our shared `query`
+     FORMAT-float renderer using fixed vs `%g` scientific notation for
+     small exponents — a separate shared-engine concern.)
      (Engine-level `@file` sample-subset subscript, once flagged as
      the next concrete slice, is **no longer blocking** — `+split-vep`
      and `+setGT` shipped via plugin-level / query-formatter handling;
