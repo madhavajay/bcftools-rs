@@ -1078,14 +1078,24 @@ Latest landed progress:
      chrX/chrXX ACM priors (`init_mf_priors_chrX/chrXX`, full
      `init_tprob_mprob_chrX/chrXX`), `--use-DNG` (`process_trio_DNG` +
      DNG priors), `--ppl`, `--force-AD`, `--strictly-novel`,
-     `--dnm-tag` `DNM:phred`/`prob`, PED-file `-P`. **Highest-value
-     remaining unblock = the shared `query` FORMAT-float renderer:**
-     it uses fixed notation where bcftools uses C `%g` (scientific for
-     exponent < −4), which is the *only* gap on the numerically-correct
-     `trio-dnm.{1,6.2,11.1,11.2}.out` ACM fixtures (and matches the
-     `query.30`/`query.31` parity expectations `8e-05`). A careful,
-     dedicated batch (broad shared-engine change — verify no
-     regression on `query.12`/pbinom and the Perl parity suite).
+     `--dnm-tag` `DNM:phred`/`prob`, PED-file `-P`. **`query`
+     scientific FORMAT-float render slice DONE** (`progress/batch-23`,
+     `trio-dnm.6.2.out`): added `format_g6` (faithful htslib `kputd` /
+     C `%g`-precision-6 over the f32 value — scientific when the
+     decimal exponent is `< -4` or `>= 6`) and routed
+     `format_output_scalar`'s already-scientific branch through it
+     instead of expanding to fixed-point. This is strictly safe
+     (`format_g6` ≡ the old `format_number` for in-range values,
+     differing only where bcftools genuinely emits scientific) — no
+     regression (`query.12`/pbinom green). It fixed `trio-dnm.6.2.out`
+     (the only `trio-dnm.*` fixture that was float-render-only);
+     `trio-dnm.{1,11.1,11.2}.out` turned out to *also* need
+     `--ppl` / chrX-chrXX ACM priors / `--strictly-novel`, not just
+     the renderer. **Follow-up (separate riskier batch):** route
+     *non-scientific* numeric FORMAT/INFO floats through `kputd` too
+     (so a stored `0.00008` renders `8e-05`) to win the
+     `query.30`/`query.31` Perl-parity fixtures — needs the full Perl
+     parity suite as the regression guard.
      (Engine-level `@file` sample-subset subscript, once flagged as
      the next concrete slice, is **no longer blocking** — `+split-vep`
      and `+setGT` shipped via plugin-level / query-formatter handling;
