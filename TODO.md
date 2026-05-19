@@ -1051,12 +1051,13 @@ Latest landed progress:
      `phred`/`fisher` + general per-sample/record exprs).
      `fisher(...)` is a faithful local port of `bcftools/filter.c`
      `func_fisher`.
-  3. **`+trio-dnm2` — IN PROGRESS, the only remaining *tractable*
-     plugin.** `bcftools/plugins/trio-dnm2.c`, ~1860 lines — the
-     single largest plugin (TODO previously mis-named it
-     `+trio-dnm3`; the registered name is `trio-dnm2`). Clear
-     byte-for-byte fixtures `test/trio-dnm/trio-dnm.{1..11}.*.out` via
-     `+trio-dnm2 -p proband,father,mother [flags] | bcftools query`.
+  3. **`+trio-dnm2` — ✅ COMPLETE (every upstream fixture).**
+     `bcftools/plugins/trio-dnm2.c`, ~1860 lines — the single largest
+     plugin (TODO previously mis-named it `+trio-dnm3`; the registered
+     name is `trio-dnm2`). All byte-for-byte fixtures
+     `test/trio-dnm/trio-dnm.{1..11}.*.out` (test.pl rows 755–772)
+     pass via `+trio-dnm2 -p proband,father,mother [flags] | bcftools
+     query`.
      **`--use-NAIVE` slice DONE** (`progress/batch-20`,
      `trio-dnm.9.{1,2}.out`): `seq1`/`seq2`/`seq3` encoding, the
      autosomal/chrX/chrXX de-novo predicates, `set_trio_GT` (incl.
@@ -1087,11 +1088,16 @@ Latest landed progress:
      selection (`is_chrx` + `is_male`), and `-n`/`--strictly-novel`
      (the `is_novel` prior variant in `init_tprob_mprob` + the
      post-loop `subtract_log` score adjustment in `process_trio_ACM`).
-     **Now every tractable `trio-dnm.*` fixture passes**; only
-     **`--use-DNG`** (`process_trio_DNG` + DNG priors `init_DNG_*`;
-     rows 757/759/761/763/765 — `trio-dnm.6.1.out` is the only
-     DNG-exclusive fixture, the rest share the ACM outputs) and the
-     no-fixture `--dnm-tag DNM:phred`/`prob` + PED-file `-P` remain.
+     **`--use-DNG` slice DONE** (`progress/batch-26`,
+     `trio-dnm.6.1.out` + shared `trio-dnm.{4.1,4.2,5.1,7.1}.out`):
+     `init_dng_mf_priors`/`init_dng_tprob_mprob` (the original
+     DenovoGear priors, bugs included) via a `PriorKind::Dng` table
+     (no ploidy split); DNG reuses `process_trio_ACM` with PL-only
+     parental likelihoods and no strictly-novel adjustment.
+     **✅ `+trio-dnm2` now passes EVERY upstream `trio-dnm.*`
+     fixture** (rows 755–772). Only the no-fixture
+     `--dnm-tag DNM:phred`/`prob` and PED-file `-P` are unported
+     (untestable byte-for-byte) — the plugin is effectively complete.
      **`query`
      scientific FORMAT-float render slice DONE** (`progress/batch-23`,
      `trio-dnm.6.2.out`): added `format_g6` (faithful htslib `kputd` /
@@ -1178,7 +1184,7 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 | `merge` | first slice | `commands/merge.rs` — same-site only |
 | `mpileup` | not started | dispatched to `unsupported` |
 | `norm` | first slice | `commands/norm.rs` — `-d`/`--rm-dup`, include-gated duplicate removal, narrow `-c s`, narrow `-m -` split, narrow `-m +both` join |
-| `plugin` | registry + 39 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (COMPLETE — every upstream fixture), `trio-dnm2` (NAIVE slice) |
+| `plugin` | registry + 39 impls | `commands/plugin.rs` registry of 41 names; `commands/plugins/` implements `counts`, `missing2ref`, `fill-AN-AC`, `allele-length`, `variant-distance`, `check-ploidy`, `tag2tag`, `add-variantkey`, `variantkey-hex`, `remove-overlaps`, `af-dist`, `smpl-stats`, `indel-stats`, `ad-bias`, `prune`, `dosage`, `guess-ploidy`, `contrast`, `fixref`, `trio-switch-rate`, `trio-stats`, `mendelian2`, `parental-origin`, `fixploidy`, `GTsubset`, `GTisec`, `fill-from-fasta`, `scatter`, `split`, `isecGT`, `frameshifts`, `check-sparsity`, `impute-info`, `vcf2table`, `gvcfz`, `setGT`, `split-vep`, `fill-tags` (COMPLETE — every upstream fixture), `trio-dnm2` (COMPLETE — every upstream fixture) |
 | `query` | broad slice | `commands/query.rs` |
 | `reheader` | broad slice | `commands/reheader.rs` |
 | `roh` | not started | dispatched to `unsupported`; HMM kernel ready |
@@ -1191,8 +1197,12 @@ Subcommand coverage at a glance (CLI dispatcher state on `main`):
 
 39 of 41 plugin record-processing implementations done (see Wave F);
 2 unimplemented (`+vrfs` — mpileup/BAM-blocked; `+color-chrs` — no
-upstream fixtures). `+trio-dnm2` has its NAIVE slice; its ACM/DNG
-likelihood models are the remaining tractable plugin work.
+upstream fixtures). `+trio-dnm2` is **COMPLETE** — every upstream
+`trio-dnm.*` fixture (NAIVE + ACM + many_alts_trim + `--with-pAD` +
+`--ppl`/`--force-AD` + chrX/chrXX priors + `--strictly-novel` +
+`--use-DNG`) passes. No tractable plugin work remains; only `+vrfs`
+(infeasible without a ported mpileup engine) and `+color-chrs` (no
+upstream fixtures, untestable) are out of reach.
 
 Current whole-project estimate:
 

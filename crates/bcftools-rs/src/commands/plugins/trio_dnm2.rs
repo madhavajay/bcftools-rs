@@ -25,9 +25,14 @@
 //!   `-n`/`--strictly-novel` (the `is_novel` prior variant + the
 //!   post-loop score adjustment) (test.pl 771/772 →
 //!   `trio-dnm.11.{1,2}.out`).
+//! - `--use-DNG`: the original DenovoGear PL-only model
+//!   (`init_DNG_mf_priors`/`init_DNG_tprob_mprob`, no ploidy split)
+//!   (test.pl 757/759/761/763/765 → `trio-dnm.6.1.out` + the shared
+//!   `trio-dnm.{4.1,4.2,5.1,7.1}.out`).
 //!
-//! Deferred (TODO.md): `--use-DNG` (`process_trio_DNG` + DNG priors),
-//! `DNM:phred`/`prob`, PED-file `-P`.
+//! Every upstream `trio-dnm.*` fixture passes. Only the no-fixture
+//! `--dnm-tag DNM:phred`/`prob` and PED-file `-P` are unported
+//! (untestable byte-for-byte).
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -230,6 +235,121 @@ fn count_unique_alleles_one(gi: usize, only_alts: bool) -> usize {
     (beg..4).map(|i| als[i] as usize).sum()
 }
 
+/// `count_unique_alleles` over three genotype indices (DNG trio).
+fn count_unique_alleles3(fi: usize, mi: usize, ci: usize, only_alts: bool) -> usize {
+    let mut als = [0u8; 4];
+    for gi in [fi, mi, ci] {
+        als[SEQ1[gi]] = 1;
+        als[SEQ2[gi]] = 1;
+    }
+    let beg = if only_alts { 1 } else { 0 };
+    (beg..4).map(|i| als[i] as usize).sum()
+}
+
+/// Upstream `init_DNG_mf_priors` (the original DenovoGear parent prior,
+/// bugs included; depends on the child genotype too).
+fn init_dng_mf_priors(fi: usize, mi: usize, ci: usize) -> f64 {
+    let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    let nals_mf = count_unique_alleles(fi, mi, false);
+    let nals_mfc = count_unique_alleles3(fi, mi, ci, false);
+    let nref_mf = (fa == 0) as i32 + (fb == 0) as i32 + (ma == 0) as i32 + (mb == 0) as i32;
+    if nals_mfc > 3 {
+        1e-26
+    } else if nals_mf >= 3 {
+        0.002 * 0.002 / 414.0
+    } else if nals_mfc == 3 {
+        1e-3 * 1e-3
+    } else if nref_mf == 4 {
+        0.995 * 0.998
+    } else if nref_mf == 3 {
+        0.995 * 0.002 * (3.0 / 5.0) * (4.0 / 5.0) * 0.5
+    } else if nref_mf == 2 && fa == fb && ma == mb {
+        0.995 * 0.002 * (2.0 / 5.0) * (1.0 / 5.0) * 0.5
+    } else if nref_mf == 2 {
+        0.995 * 0.002 * (2.0 / 5.0) * (2.0 / 5.0)
+    } else if nref_mf == 1 {
+        0.995 * 0.002 * (2.0 / 5.0) * (2.0 / 5.0) * 0.5
+    } else if nref_mf == 0 && nals_mf == 1 {
+        0.995 * 0.002 * (3.0 / 5.0) * (1.0 / 5.0)
+    } else if nref_mf == 0 && nals_mf == 2 {
+        0.002 * 0.002 / 414.0
+    } else {
+        0.0 // unreachable for valid genotype indices (upstream errors)
+    }
+}
+
+/// Upstream `init_DNG_tprob_mprob`: `(tprob, mprob, denovo_allele)`.
+/// The distinct `else if` arms mirror upstream's separate cases even
+/// where the resulting `(tprob, mprob)` coincides.
+#[allow(clippy::if_same_then_else)]
+fn init_dng_tprob_mprob(fi: usize, mi: usize, ci: usize, mrate: f64) -> (f64, f64, i32) {
+    let (fa, fb) = (SEQ1[fi], SEQ2[fi]);
+    let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
+    let (ca, cb) = (SEQ1[ci], SEQ2[ci]);
+    let nals_mfc = count_unique_alleles3(fi, mi, ci, false);
+    let mut tprob = 1.0;
+    let mut mprob = 1.0 - mrate;
+    let allele = if ca != fa && ca != fb && ca != ma && ca != mb {
+        ca
+    } else {
+        cb
+    } as i32;
+    if nals_mfc == 4 {
+        tprob = 0.0;
+    } else if nals_mfc == 3 {
+        if ((ca == fa || ca == fb) && (cb == ma || cb == mb))
+            || ((cb == fa || cb == fb) && (ca == ma || ca == mb))
+        {
+            tprob = if ca == cb {
+                0.25
+            } else if fa == fb || ma == mb {
+                0.5
+            } else {
+                0.25
+            };
+        } else {
+            mprob = if ca != fa
+                && ca != fb
+                && ca != ma
+                && ca != mb
+                && cb != fa
+                && cb != fb
+                && cb != ma
+                && cb != mb
+            {
+                mrate * mrate
+            } else {
+                mrate
+            };
+            tprob = 0.0;
+        }
+    } else if nals_mfc == 2 {
+        if fa != fb && ma != mb {
+            tprob = 0.25;
+        } else if fa == fb && ma == mb {
+            if fa == ma && ca == cb {
+                tprob = 0.0;
+                mprob = mrate * mrate;
+            } else if fa == ma {
+                tprob = 0.0;
+                mprob = mrate;
+            } else if ca == cb {
+                tprob = 0.0;
+                mprob = mrate;
+            }
+            // else: tprob stays 1 (upstream has no else here)
+        } else if ca == cb && ((fa == fb && fa != ca) || (ma == mb && ma != ca)) {
+            tprob = 0.0;
+            mprob = mrate;
+        } else {
+            tprob = 0.5;
+        }
+    }
+    // nals_mfc == 1 → tprob 1, mprob 1-mrate (unchanged)
+    (tprob, mprob, allele)
+}
+
 /// Upstream `init_mf_priors_chrX` (mother-only parent prior).
 fn init_mf_priors_chrx(mi: usize) -> f64 {
     let (ma, mb) = (SEQ1[mi], SEQ2[mi]);
@@ -427,6 +547,7 @@ enum PriorKind {
     Autosomal,
     ChrX,
     ChrXX,
+    Dng,
 }
 
 /// `init_priors` tables for one inheritance model.
@@ -449,16 +570,19 @@ fn build_priors(kind: PriorKind, mrate: f64, strictly_novel: bool) -> Priors {
     let mut dnv_allele = vec![0i32; 1000];
     for fi in 0..10 {
         for mi in 0..10 {
-            let gt_prior = match kind {
-                PriorKind::Autosomal => init_mf_priors(fi, mi),
-                PriorKind::ChrX => init_mf_priors_chrx(mi),
-                PriorKind::ChrXX => init_mf_priors_chrxx(fi, mi),
-            };
             for ci in 0..10 {
+                // gt_prior is per (fi,mi) except for DNG (also per ci).
+                let gt_prior = match kind {
+                    PriorKind::Autosomal => init_mf_priors(fi, mi),
+                    PriorKind::ChrX => init_mf_priors_chrx(mi),
+                    PriorKind::ChrXX => init_mf_priors_chrxx(fi, mi),
+                    PriorKind::Dng => init_dng_mf_priors(fi, mi, ci),
+                };
                 let (tprob, mprob, allele) = match kind {
                     PriorKind::Autosomal => init_tprob_mprob(fi, mi, ci, mrate, strictly_novel),
                     PriorKind::ChrX => init_tprob_mprob_chrx(fi, mi, ci, mrate),
                     PriorKind::ChrXX => init_tprob_mprob_chrxx(fi, mi, ci, mrate, strictly_novel),
+                    PriorKind::Dng => init_dng_tprob_mprob(fi, mi, ci, mrate),
                 };
                 let idx = fi * 100 + mi * 10 + ci;
                 denovo[idx] = tprob == 0.0;
@@ -474,7 +598,15 @@ fn build_priors(kind: PriorKind, mrate: f64, strictly_novel: bool) -> Priors {
     }
 }
 
-fn build_prior_set(mrate: f64, strictly_novel: bool) -> PriorSet {
+fn build_prior_set(mrate: f64, strictly_novel: bool, use_dng: bool) -> PriorSet {
+    if use_dng {
+        // DNG ignores ploidy: one prior table for every record.
+        return PriorSet {
+            autosomal: build_priors(PriorKind::Dng, mrate, strictly_novel),
+            chrx: build_priors(PriorKind::Dng, mrate, strictly_novel),
+            chrxx: build_priors(PriorKind::Dng, mrate, strictly_novel),
+        };
+    }
     PriorSet {
         autosomal: build_priors(PriorKind::Autosomal, mrate, strictly_novel),
         chrx: build_priors(PriorKind::ChrX, mrate, strictly_novel),
@@ -641,6 +773,9 @@ pub struct Options<'a> {
     /// `-n`/`--strictly-novel`: only score genuinely novel alleles
     /// (changes the `is_novel` prior + a post-loop score adjustment).
     pub strictly_novel: bool,
+    /// `--use-DNG`: the original DenovoGear model (PL-only likelihood
+    /// + `init_DNG_*` priors, no ploidy split).
+    pub use_dng: bool,
 }
 
 pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
@@ -667,7 +802,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
     let priors = if opts.naive {
         None
     } else {
-        Some(build_prior_set(1e-8, opts.strictly_novel))
+        Some(build_prior_set(1e-8, opts.strictly_novel, opts.use_dng))
     };
     let mut out = String::with_capacity(text.len() + 1024);
     // Sample-column indices (0-based within sample columns).
@@ -736,6 +871,7 @@ pub fn run(input: &Path, opts: Options<'_>) -> io::Result<String> {
                 opts.with_ppl,
                 opts.force_ad,
                 opts.strictly_novel,
+                opts.use_dng,
             ),
         };
         out.push_str(&rec);
@@ -805,6 +941,7 @@ fn process_record_acm(
     with_ppl: bool,
     force_ad: bool,
     strictly_novel: bool,
+    use_dng: bool,
 ) -> String {
     let mut f: Vec<&str> = line.split('\t').collect();
     if f.len() < 10 {
@@ -871,8 +1008,9 @@ fn process_record_acm(
             qs[j] = ad[j].iter().map(|&a| 30.0 * a as f64).collect();
         }
         true
-    } else if with_ppl {
-        // --ppl: parental likelihoods come from FORMAT/PL; QS unused.
+    } else if with_ppl || use_dng {
+        // --ppl / --use-DNG: likelihoods come from FORMAT/PL; QS unused
+        // (unless a >4-allele site needs it for many_alts_trim).
         false
     } else {
         return line.to_owned(); // no QS / --with-pAD / --ppl fallback
@@ -919,8 +1057,14 @@ fn process_record_acm(
         None
     };
     let eff_nals = if trim_idx.is_some() { 4 } else { n_allele };
-    let (score, _al0, mut al1) =
-        process_trio_acm(pr, eff_nals, &pl, &pqs, with_ppl, strictly_novel);
+    let (score, _al0, mut al1) = process_trio_acm(
+        pr,
+        eff_nals,
+        &pl,
+        &pqs,
+        with_ppl || use_dng,
+        strictly_novel && !use_dng,
+    );
     if let Some(idx) = &trim_idx {
         al1 = idx[al1 as usize] as i32; // many_alts_translate
     }
